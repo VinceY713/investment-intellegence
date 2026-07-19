@@ -326,10 +326,42 @@ function buildPie(factorWeights) {
   return wrap;
 }
 
+/* -------------------------------------------------------------------------
+   行情获取：股票代码 → 市场前缀 / 名称 + 最新价
+   浏览器同源请求 /api/quote（由服务器 Nginx 代理新浪财经，规避 CORS 与 Referer）
+   ------------------------------------------------------------------------- */
+function detectMarket(code) {
+  code = String(code || '').trim();
+  if (/^6/.test(code)) return 'sh';                       // 沪市（600/601/603/605/688…）
+  if (/^(4|8)/.test(code) || /^920/.test(code)) return 'bj'; // 北交所
+  return 'sz';                                            // 深市（000/002/003/300…）
+}
+
+async function fetchQuote(rawCode) {
+  const code = String(rawCode || '').trim();
+  if (!/^\d{5,6}$/.test(code)) throw new Error('请输入 5–6 位数字代码');
+  const full = detectMarket(code) + code;
+  const res = await fetch('/api/quote?code=' + encodeURIComponent(full), { cache: 'no-store' });
+  if (!res.ok) throw new Error('接口返回 ' + res.status);
+  const buf = await res.arrayBuffer();
+  let text;
+  try { text = new TextDecoder('gbk').decode(buf); }
+  catch (e) { text = new TextDecoder('utf-8').decode(buf); }
+  const m = text.match(/"([^"]*)"/);
+  if (!m || !m[1]) throw new Error('无数据（代码可能有误或已休市）');
+  const parts = m[1].split(',');            // 新浪：0名称 1今开 2昨收 3当前价
+  const name = parts[0];
+  let price = parseFloat(parts[3]);
+  if (!(price > 0)) price = parseFloat(parts[2]); // 休市/未开盘时退回昨收
+  if (!name || !isFinite(price)) throw new Error('解析失败');
+  return { name, price };
+}
+
 /* =========================================================================
    视图：持仓管理 Positions
    ========================================================================= */
 VIEWS.positions = function (app) {
+  const totalAssets = num(STATE.portfolio.totalAssets, 0);
   app.appendChild(el(`
     <div class="view-head">
       <h2>持仓管理</h2>
@@ -340,43 +372,110 @@ VIEWS.positions = function (app) {
   // 添加表单
   const form = el(`<div class="card"><h3>添加 / 编辑持仓</h3></div>`);
   form.appendChild(el(`
-    <div class="grid grid-2">
+    <p class="hint">输入股票代码可自动获取名称与最新价；填「持股数量」后，占比按
+      <code class="formula">持股市值 ÷ 总资产</code> 自动计算，浮盈亏按成本价与现价自动算。
+      当前总资产 <strong>${fmtMoney(totalAssets)}</strong>（在「设置」修改）。</p>
+    <div class="grid grid-3">
+      <div class="field"><label>股票代码（A股）</label>
+        <div class="row" style="gap:6px">
+          <input id="np-code" placeholder="如 002518" style="flex:1"/>
+          <button class="btn secondary" id="np-fetch" style="flex:0 0 auto">获取</button>
+        </div>
+        <p class="inline-note" id="np-code-note">自动识别沪/深/京</p>
+      </div>
       <div class="field"><label>名称</label><input id="np-name" placeholder="如 科士达"/></div>
       <div class="field"><label>底层因子标签</label>
         <select id="np-factor">${FACTORS.map(f=>`<option>${f}</option>`).join('')}</select>
       </div>
     </div>
     <div class="grid grid-3">
-      <div class="field"><label>持仓占比 %</label><input id="np-weight" type="number" step="0.1" placeholder="6"/></div>
-      <div class="field"><label>浮盈亏 %</label><input id="np-pnl" type="number" step="0.1" placeholder="12"/></div>
-      <div class="field"><label>趋势状态</label>
-        <select id="np-trend">${TRENDS.map((t,i)=>`<option ${i===2?'selected':''}>${t}</option>`).join('')}</select>
-      </div>
-    </div>
-    <div class="grid grid-3">
-      <div class="field"><label>预估最大跌幅 %</label><input id="np-maxdrop" type="number" step="1" placeholder="40"/></div>
+      <div class="field"><label>持股数量（股）</label><input id="np-shares" type="number" step="100" placeholder="1000"/></div>
       <div class="field"><label>成本价</label><input id="np-cost" type="number" step="0.01" placeholder="20.0"/></div>
       <div class="field"><label>当前价</label><input id="np-price" type="number" step="0.01" placeholder="22.4"/></div>
     </div>
+    <div class="grid grid-3">
+      <div class="field"><label>预估最大跌幅 %</label><input id="np-maxdrop" type="number" step="1" placeholder="40"/></div>
+      <div class="field"><label>趋势状态</label>
+        <select id="np-trend">${TRENDS.map((t,i)=>`<option ${i===2?'selected':''}>${t}</option>`).join('')}</select>
+      </div>
+      <div class="field"><label>占比 %（自动，可手填覆盖）</label><input id="np-weight" type="number" step="0.1" placeholder="留空则按数量自动算"/></div>
+    </div>
+    <div class="alert blue" id="np-calc"><span class="icon">🧮</span><div id="np-calc-text">填入持股数量与现价后，这里自动显示市值 / 占比 / 浮盈亏。</div></div>
     <button class="btn" id="np-add">＋ 添加持仓</button>
     <input type="hidden" id="np-edit-id"/>
+    <input type="hidden" id="np-pnl"/>
   `));
   app.appendChild(form);
 
-  form.querySelector('#np-add').onclick = () => {
-    const name = form.querySelector('#np-name').value.trim();
+  const $ = sel => form.querySelector(sel);
+
+  // 实时计算：市值 / 占比 / 浮盈亏
+  function recalc() {
+    const shares = num($('#np-shares').value);
+    const price = num($('#np-price').value);
+    const cost = num($('#np-cost').value);
+    const value = (shares > 0 && price > 0) ? shares * price : 0;
+    let weight = null, pnl = null;
+    if (value > 0 && totalAssets > 0) {
+      weight = value / totalAssets * 100;
+      $('#np-weight').value = weight.toFixed(2);   // 自动回填占比
+    }
+    if (cost > 0 && price > 0) pnl = (price - cost) / cost * 100;
+    $('#np-pnl').value = (pnl != null) ? pnl.toFixed(2) : '';
+
+    const wShown = (weight != null) ? weight : num($('#np-weight').value);
+    const parts = [];
+    parts.push(value > 0 ? `市值 <strong>${fmtMoney(value)}</strong>` : '市值 —');
+    parts.push(`占比 <strong>${wShown ? wShown.toFixed(2) + '%' : '—'}</strong>`);
+    parts.push(pnl != null
+      ? `浮盈亏 <strong style="color:${pnl>=0?'var(--green)':'var(--red)'}">${pnl>=0?'+':''}${pnl.toFixed(2)}%</strong>`
+      : '浮盈亏 —');
+    if (totalAssets <= 0) parts.push('<span style="color:var(--amber)">（未设总资产，去「设置」填写后才能自动算占比）</span>');
+    $('#np-calc-text').innerHTML = parts.join(' &nbsp;·&nbsp; ');
+  }
+  ['#np-shares', '#np-price', '#np-cost', '#np-weight'].forEach(s => $(s).addEventListener('input', recalc));
+
+  // 「获取」：按代码拉取名称与最新价
+  $('#np-fetch').onclick = async () => {
+    const note = $('#np-code-note');
+    const code = $('#np-code').value.trim();
+    note.textContent = '获取中…'; note.style.color = 'var(--muted)';
+    try {
+      const q = await fetchQuote(code);
+      if (!$('#np-name').value.trim()) $('#np-name').value = q.name;
+      $('#np-price').value = q.price;
+      note.textContent = `✓ ${q.name}  现价 ${q.price}`; note.style.color = 'var(--green)';
+      recalc();
+    } catch (e) {
+      note.innerHTML = `⚠️ 自动获取失败（${escapeHtml(e.message)}）——请手动填写名称与现价`;
+      note.style.color = 'var(--amber)';
+    }
+  };
+
+  $('#np-add').onclick = () => {
+    const name = $('#np-name').value.trim();
     if (!name) { alert('请填写名称'); return; }
-    const editId = form.querySelector('#np-edit-id').value;
+    const editId = $('#np-edit-id').value;
+    const shares = num($('#np-shares').value);
+    const price = num($('#np-price').value);
+    const cost = num($('#np-cost').value);
+    // 优先按 数量×现价÷总资产 算占比；无数量时用手填占比
+    let weight = (shares > 0 && price > 0 && totalAssets > 0)
+      ? shares * price / totalAssets * 100
+      : num($('#np-weight').value);
+    const pnl = (cost > 0 && price > 0) ? (price - cost) / cost * 100 : num($('#np-pnl').value);
     const pos = {
       id: editId || uid(),
       name,
-      factor: form.querySelector('#np-factor').value,
-      weight: num(form.querySelector('#np-weight').value),
-      pnl: num(form.querySelector('#np-pnl').value),
-      trend: form.querySelector('#np-trend').value,
-      maxDrop: num(form.querySelector('#np-maxdrop').value),
-      cost: num(form.querySelector('#np-cost').value),
-      price: num(form.querySelector('#np-price').value),
+      code: $('#np-code').value.trim(),
+      factor: $('#np-factor').value,
+      shares,
+      weight: +weight.toFixed(4),
+      pnl: +Number(pnl || 0).toFixed(4),
+      trend: $('#np-trend').value,
+      maxDrop: num($('#np-maxdrop').value),
+      cost,
+      price,
     };
     if (editId) {
       const i = STATE.positions.findIndex(p => p.id === editId);
@@ -395,13 +494,16 @@ VIEWS.positions = function (app) {
   } else {
     const totalWeight = STATE.positions.reduce((a, p) => a + num(p.weight), 0);
     const scroll = el('<div class="table-scroll"></div>');
+    const totalValue = totalAssets > 0 ? totalWeight / 100 * totalAssets : 0;
     const rows = STATE.positions.map(p => {
       const ddc = Calc.drawdownContribution(num(p.weight), num(p.maxDrop));
       const pnlColor = num(p.pnl) >= 0 ? 'var(--green)' : 'var(--red)';
+      const value = totalAssets > 0 ? num(p.weight) / 100 * totalAssets : 0;
       return `<tr>
-        <td>${escapeHtml(p.name)}</td>
+        <td>${escapeHtml(p.name)}${p.code?`<br><span class="inline-note">${escapeHtml(p.code)}</span>`:''}</td>
         <td><span class="tag-chip">${escapeHtml(p.factor)}</span></td>
         <td class="num">${fmtPct(num(p.weight),1)}</td>
+        <td class="num">${value>0?fmtMoney(value):'—'}</td>
         <td class="num" style="color:${pnlColor}">${num(p.pnl)>=0?'+':''}${fmtPct(num(p.pnl),1)}</td>
         <td>${escapeHtml(p.trend||'—')}</td>
         <td class="num">${fmtPct(num(p.maxDrop),0)}</td>
@@ -415,12 +517,13 @@ VIEWS.positions = function (app) {
     scroll.appendChild(el(`
       <table>
         <thead><tr>
-          <th>名称</th><th>因子</th><th class="num">占比</th><th class="num">浮盈亏</th>
+          <th>名称</th><th>因子</th><th class="num">占比</th><th class="num">金额</th><th class="num">浮盈亏</th>
           <th>趋势</th><th class="num">最大跌幅</th><th class="num">回撤贡献</th><th></th>
         </tr></thead>
         <tbody>${rows}
           <tr class="total-row">
             <td>合计</td><td></td><td class="num">${fmtPct(totalWeight,1)}</td>
+            <td class="num">${totalValue>0?fmtMoney(totalValue):'—'}</td>
             <td></td><td></td><td></td>
             <td class="num">${fmtPct(STATE.positions.reduce((a,p)=>a+Calc.drawdownContribution(num(p.weight),num(p.maxDrop)),0),2)}</td><td></td>
           </tr>
@@ -437,8 +540,10 @@ VIEWS.positions = function (app) {
     scroll.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => {
       const p = STATE.positions.find(x => x.id === b.dataset.edit);
       if (!p) return;
+      form.querySelector('#np-code').value = p.code || '';
       form.querySelector('#np-name').value = p.name;
       form.querySelector('#np-factor').value = p.factor;
+      form.querySelector('#np-shares').value = p.shares != null ? p.shares : '';
       form.querySelector('#np-weight').value = p.weight;
       form.querySelector('#np-pnl').value = p.pnl;
       form.querySelector('#np-trend').value = p.trend;
@@ -447,6 +552,7 @@ VIEWS.positions = function (app) {
       form.querySelector('#np-price').value = p.price;
       form.querySelector('#np-edit-id').value = p.id;
       form.querySelector('#np-add').textContent = '✓ 保存修改';
+      recalc();
       window.scrollTo({ top: 0, behavior: 'smooth' });
     });
   }
