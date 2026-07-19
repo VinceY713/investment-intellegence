@@ -32,7 +32,7 @@ jobs:
           username: ${{ secrets.ECS_USERNAME }}
           key: ${{ secrets.ECS_SSH_KEY }}
           port: ${{ secrets.ECS_PORT || '22' }}
-          source: "index.html,styles.css,app.js,README.md"
+          source: "index.html,styles.css,app.js,README.md,deploy/snapshot-cron.py"
           target: "/var/www/investment-intelligence"
           overwrite: true
 
@@ -60,11 +60,24 @@ jobs:
             echo "proxy_set_header Authorization \"Bearer ${DEEPSEEK_API_KEY:-MISSING}\";" | sudo tee /etc/nginx/ai_key.conf >/dev/null
             sudo chmod 600 /etc/nginx/ai_key.conf
 
-            # 1c) 快照云端存储目录（Nginx WebDAV：PUT 写入 / GET 读取 单文件 JSON）
-            #     store/api/snapshots 为数据文件；store/tmp 为 PUT 临时目录（须与目标同一文件系统）
+            # 1c) 云端存储目录（Nginx WebDAV：PUT 写入 / GET 读取 单文件 JSON）
+            #     store/api/state 为整份数据；store/tmp 为 PUT 临时目录（须与目标同一文件系统）
             sudo mkdir -p /var/lib/investment-intelligence/store/api /var/lib/investment-intelligence/store/tmp
             sudo chown -R www-data:www-data /var/lib/investment-intelligence
             sudo chmod -R 775 /var/lib/investment-intelligence
+
+            # 1d) 安装每日快照定时任务（北京时间 22:00 / 23:00 / 23:30，三次互为冗余）
+            #     纯前端页面只在浏览器打开时记录快照；此脚本在服务器端定时直接读写云端数据文件，
+            #     即使当天没打开网页也能抓到当日（尤其傍晚公布的基金净值）快照。
+            sudo cp /var/www/investment-intelligence/deploy/snapshot-cron.py /usr/local/bin/ii-snapshot.py
+            sudo chmod 755 /usr/local/bin/ii-snapshot.py
+            # 用 printf 逐行写 /etc/cron.d（避免 YAML 缩进给 cron 行带来前导空格）
+            # CRON_TZ=Asia/Shanghai 让 cron 按北京时间触发，无需改服务器时区
+            CRONLINE='/usr/bin/python3 /usr/local/bin/ii-snapshot.py >> /var/log/ii-snapshot.log 2>&1'
+            printf 'CRON_TZ=Asia/Shanghai\n0 22 * * * root %s\n0 23 * * * root %s\n30 23 * * * root %s\n' "$CRONLINE" "$CRONLINE" "$CRONLINE" | sudo tee /etc/cron.d/ii-snapshot >/dev/null
+            sudo chmod 644 /etc/cron.d/ii-snapshot
+            sudo touch /var/log/ii-snapshot.log
+            echo "已安装每日快照定时任务（22:00/23:00/23:30 北京时间）"
 
             # 2) 写站点配置（含 Basic Auth 密码门）
             sudo tee /etc/nginx/conf.d/investment-intelligence.conf >/dev/null <<'NGINXCONF'
