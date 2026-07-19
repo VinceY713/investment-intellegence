@@ -925,24 +925,32 @@ function assetFetchable(a) {
 }
 
 async function refreshOneAsset(a, fx) {
-  let px = null, dayPct = null, prevPx = null;
+  let px = null, dayPct = null;
   if (a.category === '基金') {
-    const f = await fetchFund(a.code); px = f.nav; dayPct = f.dayPct; prevPx = f.prevNav;
+    const f = await fetchFund(a.code); px = f.nav; dayPct = f.dayPct;
   } else {
-    const q = await fetchQuote(a.code); px = q.price; dayPct = q.changePct; prevPx = q.prevClose;
+    const q = await fetchQuote(a.code); px = q.price; dayPct = q.changePct;
   }
   if (!(px > 0)) throw new Error('价格无效');
-  // 首次校准份额：以「昨收/昨日净值」为基准（把已存金额视为昨日收盘市值），
-  // 这样首次刷新即体现当日涨跌；无昨收时退回用现价校准（首日不跳变）。
-  if (!(a.shares > 0)) a.shares = a.amount / (prevPx > 0 ? prevPx : px);
+  // 首次校准份额：一律用「现价」反推（份额 = 金额 ÷ 现价），首次刷新金额不跳变、
+  // 不依赖易错的昨收字段，从根本上避免坏行情把持仓算错（当日涨跌只作展示，见 dayPct）。
+  const firstCalib = !(a.shares > 0);
+  if (firstCalib) a.shares = a.amount / px;
   const oldVal = num(a.amount);
   const newVal = a.shares * px;
+  // 展示用当日涨跌：过滤明显异常值（|涨跌| > 30% 视为字段解析异常，不展示）
+  const dayOk = dayPct != null && isFinite(dayPct) && Math.abs(dayPct) <= 30 ? dayPct : null;
+  // 安全阀：已建仓持仓若单次估值变动 > 40%，判为行情异常，只更新展示涨跌、不改金额/盈亏。
+  if (!firstCalib && oldVal > 0 && Math.abs(newVal - oldVal) / oldVal > 0.4) {
+    a.lastPx = px; if (dayOk != null) a.dayPct = dayOk; a.pxDate = todayStr();
+    return false;
+  }
   const deltaCny = (newVal - oldVal) * (a.currency === 'USD' ? fx : 1);
   a.amount = Math.round(newVal * 100) / 100;
   a.cny = Math.round(assetCny(a, fx));
   if (a.pnl != null) a.pnl = Math.round((num(a.pnl) + deltaCny) * 100) / 100;
   a.lastPx = px;
-  if (dayPct != null) a.dayPct = dayPct;
+  if (dayOk != null) a.dayPct = dayOk;
   a.pxDate = todayStr();
   return true;
 }
@@ -950,14 +958,14 @@ async function refreshOneAsset(a, fx) {
 async function refreshAllQuotes() {
   const fx = currentFx();
   const targets = (STATE.assets || []).filter(assetFetchable);
-  let updated = 0, failed = 0;
+  let updated = 0, failed = 0, skipped = 0;
   for (const a of targets) {
-    try { await refreshOneAsset(a, fx); updated++; }
+    try { const ok = await refreshOneAsset(a, fx); if (ok) updated++; else skipped++; }
     catch (e) { failed++; }
   }
   STATE.lastQuoteRefresh = Date.now();
   saveState();
-  return { updated, failed, total: targets.length };
+  return { updated, failed, skipped, total: targets.length };
 }
 
 // 打开页面自动刷新：有可刷新资产且距上次 > 15 分钟才请求，避免频繁打扰

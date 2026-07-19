@@ -188,20 +188,30 @@ def refresh_asset(a, fx):
         px, prev, day = fetch_quote(a['code'])
     if px <= 0:
         raise ValueError('bad price')
-    if not num(a.get('shares')) > 0:
-        base = prev if (prev and prev > 0) else px
-        a['shares'] = num(a.get('amount')) / base
+    # 首次校准份额一律用现价（份额 = 金额 ÷ 现价），首次不跳变、不依赖易错的昨收字段
+    first_calib = not num(a.get('shares')) > 0
+    if first_calib:
+        a['shares'] = num(a.get('amount')) / px
     old = num(a.get('amount'))
     new = num(a['shares']) * px
+    day_ok = day if (day is not None and abs(day) <= 30) else None   # 过滤异常涨跌字段
+    # 安全阀：已建仓持仓若单次估值变动 > 40%，判为行情异常，只更新展示涨跌、不改金额/盈亏
+    if (not first_calib) and old > 0 and abs(new - old) / old > 0.4:
+        a['lastPx'] = px
+        if day_ok is not None:
+            a['dayPct'] = day_ok
+        a['pxDate'] = today_str()
+        return False
     delta_cny = (new - old) * (fx if a.get('currency') == 'USD' else 1)
     a['amount'] = round(new, 2)
     a['cny'] = round(asset_cny(a, fx))
     if a.get('pnl') is not None:
         a['pnl'] = round(num(a.get('pnl')) + delta_cny, 2)
     a['lastPx'] = px
-    if day is not None:
-        a['dayPct'] = day
+    if day_ok is not None:
+        a['dayPct'] = day_ok
     a['pxDate'] = today_str()
+    return True
 
 
 def make_snapshot(state, date):
@@ -248,12 +258,16 @@ def main():
     fx = current_fx(state)
     ok = 0
     fail = 0
+    skip = 0
     for a in assets:
         if not asset_fetchable(a):
             continue
         try:
-            refresh_asset(a, fx)
-            ok += 1
+            if refresh_asset(a, fx):
+                ok += 1
+            else:
+                skip += 1
+                print('  skip %s(%s): 行情异常，保留原值' % (a.get('name'), a.get('code')))
         except Exception as e:
             fail += 1
             print('  refresh %s(%s) failed: %s' % (a.get('name'), a.get('code'), e))
@@ -280,8 +294,8 @@ def main():
     except Exception:
         pass
 
-    print('[%s] snapshot %s ok, refreshed %d, failed %d, total %s'
-          % (time.strftime('%F %T'), date, ok, fail, snap['total']))
+    print('[%s] snapshot %s ok, refreshed %d, skipped %d, failed %d, total %s'
+          % (time.strftime('%F %T'), date, ok, skip, fail, snap['total']))
     return 0
 
 
