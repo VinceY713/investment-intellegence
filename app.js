@@ -337,24 +337,53 @@ function detectMarket(code) {
   return 'sz';                                            // 深市（000/002/003/300…）
 }
 
+async function getQuoteText(url) {
+  const res = await fetch(url, { cache: 'no-store' });
+  if (!res.ok) throw new Error('接口返回 ' + res.status);
+  const buf = await res.arrayBuffer();
+  try { return new TextDecoder('gbk').decode(buf); }   // 行情源为 GBK 编码
+  catch (e) { return new TextDecoder('utf-8').decode(buf); }
+}
+
+// 腾讯：v_sz002518="51~科士达~002518~现价~昨收~今开~…";
+function parseTencent(text) {
+  const m = text.match(/"([^"]*)"/);
+  if (!m || !m[1]) throw new Error('无数据');
+  const p = m[1].split('~');
+  const name = p[1];
+  let price = parseFloat(p[3]);
+  if (!(price > 0)) price = parseFloat(p[4]);         // 休市回退昨收
+  if (!name || !isFinite(price)) throw new Error('解析失败');
+  return { name, price };
+}
+
+// 新浪：var hq_str_sz002518="科士达,今开,昨收,现价,…";
+function parseSina(text) {
+  const m = text.match(/"([^"]*)"/);
+  if (!m || !m[1]) throw new Error('无数据');
+  const p = m[1].split(',');
+  const name = p[0];
+  let price = parseFloat(p[3]);
+  if (!(price > 0)) price = parseFloat(p[2]);
+  if (!name || !isFinite(price)) throw new Error('解析失败');
+  return { name, price };
+}
+
 async function fetchQuote(rawCode) {
   const code = String(rawCode || '').trim();
   if (!/^\d{5,6}$/.test(code)) throw new Error('请输入 5–6 位数字代码');
   const full = detectMarket(code) + code;
-  const res = await fetch('/api/quote?code=' + encodeURIComponent(full), { cache: 'no-store' });
-  if (!res.ok) throw new Error('接口返回 ' + res.status);
-  const buf = await res.arrayBuffer();
-  let text;
-  try { text = new TextDecoder('gbk').decode(buf); }
-  catch (e) { text = new TextDecoder('utf-8').decode(buf); }
-  const m = text.match(/"([^"]*)"/);
-  if (!m || !m[1]) throw new Error('无数据（代码可能有误或已休市）');
-  const parts = m[1].split(',');            // 新浪：0名称 1今开 2昨收 3当前价
-  const name = parts[0];
-  let price = parseFloat(parts[3]);
-  if (!(price > 0)) price = parseFloat(parts[2]); // 休市/未开盘时退回昨收
-  if (!name || !isFinite(price)) throw new Error('解析失败');
-  return { name, price };
+  const q = encodeURIComponent(full);
+  // 先腾讯，失败再退回新浪
+  try {
+    return parseTencent(await getQuoteText('/api/quote?code=' + q));
+  } catch (e1) {
+    try {
+      return parseSina(await getQuoteText('/api/quote_sina?code=' + q));
+    } catch (e2) {
+      throw new Error('腾讯/新浪均失败（代码可能有误或已休市）');
+    }
+  }
 }
 
 /* =========================================================================

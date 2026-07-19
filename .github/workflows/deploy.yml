@@ -73,8 +73,19 @@ jobs:
                     expires -1;
                 }
 
-                # 行情代理：浏览器同源 /api/quote?code=sh600000 → 新浪财经（规避 CORS/Referer）
+                # 行情代理（主）：浏览器同源 /api/quote?code=sh600000 → 腾讯行情
                 location = /api/quote {
+                    proxy_pass https://qt.gtimg.cn/q=$arg_code;
+                    proxy_set_header Host qt.gtimg.cn;
+                    proxy_set_header User-Agent "Mozilla/5.0";
+                    proxy_ssl_server_name on;
+                    proxy_ssl_name qt.gtimg.cn;
+                    resolver 119.29.29.29 223.5.5.5 valid=300s;
+                    resolver_timeout 5s;
+                    add_header Cache-Control "no-store";
+                }
+                # 行情代理（备）：新浪财经（腾讯失败时前端自动回退到这里）
+                location = /api/quote_sina {
                     proxy_pass https://hq.sinajs.cn/list=$arg_code;
                     proxy_set_header Host hq.sinajs.cn;
                     proxy_set_header Referer https://finance.sina.com.cn;
