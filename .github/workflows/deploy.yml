@@ -1,0 +1,50 @@
+name: Deploy to Aliyun ECS
+
+# 触发条件：推送到 main / master 时自动部署；也可在 Actions 页手动运行
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'index.html'
+      - 'styles.css'
+      - 'app.js'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch: {}
+
+# 避免并发部署互相覆盖
+concurrency:
+  group: deploy-ecs
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Copy static files to ECS (SCP)
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.ECS_HOST }}
+          username: ${{ secrets.ECS_USERNAME }}
+          key: ${{ secrets.ECS_SSH_KEY }}
+          port: ${{ secrets.ECS_PORT || '22' }}
+          source: "index.html,styles.css,app.js,README.md"
+          target: "/var/www/investment-intelligence"
+          overwrite: true
+
+      - name: Test config & reload Nginx (SSH)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.ECS_HOST }}
+          username: ${{ secrets.ECS_USERNAME }}
+          key: ${{ secrets.ECS_SSH_KEY }}
+          port: ${{ secrets.ECS_PORT || '22' }}
+          script: |
+            set -e
+            echo "已部署文件："
+            ls -la /var/www/investment-intelligence
+            sudo nginx -t
+            sudo systemctl reload nginx
+            echo "✅ 部署完成，Nginx 已重载"
