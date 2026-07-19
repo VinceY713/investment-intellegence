@@ -34,17 +34,55 @@ jobs:
           target: "/var/www/investment-intelligence"
           overwrite: true
 
-      - name: Test config & reload Nginx (SSH)
+      - name: Configure password gate, nginx & reload (SSH)
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          APP_PASSWORD: ${{ secrets.APP_PASSWORD }}
         with:
           host: ${{ secrets.ECS_HOST }}
           username: ${{ secrets.ECS_USERNAME }}
           key: ${{ secrets.ECS_SSH_KEY }}
           port: ${{ secrets.ECS_PORT || '22' }}
+          envs: APP_PASSWORD
           script: |
             set -e
+            # 1) 用 APP_PASSWORD 生成访问口令文件（用户名固定为 admin）
+            if [ -z "$APP_PASSWORD" ]; then
+              echo "❌ 未配置 GitHub Secret：APP_PASSWORD"; exit 1
+            fi
+            echo "admin:$(openssl passwd -apr1 "$APP_PASSWORD")" | sudo tee /etc/nginx/.htpasswd >/dev/null
+            sudo chmod 644 /etc/nginx/.htpasswd
+
+            # 2) 写站点配置（含 Basic Auth 密码门）
+            sudo tee /etc/nginx/conf.d/investment-intelligence.conf >/dev/null <<'NGINXCONF'
+            server {
+                listen 80;
+                listen [::]:80;
+                server_name _;
+                root /var/www/investment-intelligence;
+                index index.html;
+
+                # 进入网页前的密码验证（用户名 admin，密码来自 APP_PASSWORD）
+                auth_basic "请输入访问密码";
+                auth_basic_user_file /etc/nginx/.htpasswd;
+
+                location / { try_files $uri $uri/ /index.html; }
+
+                location ~* \.(?:html|css|js)$ {
+                    add_header Cache-Control "no-store, must-revalidate";
+                    expires -1;
+                }
+
+                gzip on;
+                gzip_types text/plain text/css application/javascript;
+                gzip_min_length 1024;
+            }
+            NGINXCONF
+
+            # 3) 移除默认站点、校验、重载
+            sudo rm -f /etc/nginx/sites-enabled/default
             echo "已部署文件："
             ls -la /var/www/investment-intelligence
             sudo nginx -t
             sudo systemctl reload nginx
-            echo "✅ 部署完成，Nginx 已重载"
+            echo "✅ 部署完成，已启用密码访问（用户名 admin）"

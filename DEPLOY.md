@@ -63,6 +63,12 @@ ssh-copy-id -i ./ecs_deploy_key.pub root@<你的ECS公网IP>
 | `ECS_USERNAME` | `root`（或你的部署用户名） | 必填 |
 | `ECS_SSH_KEY` | **私钥 `ecs_deploy_key` 的完整内容** | 必填，整段贴入（含 `-----BEGIN...`/`-----END...`）|
 | `ECS_PORT` | SSH 端口 | 可选，默认 `22` |
+| `APP_PASSWORD` | 访问网页的密码 | 必填，打开网站需输入（用户名固定 `admin`）|
+
+> **访问密码门**：部署时会用 `APP_PASSWORD` 在服务器生成 Nginx Basic Auth 口令文件，
+> 打开网站会先弹出登录框——**用户名 `admin`**，密码即 `APP_PASSWORD`。改密码只需改这个
+> Secret 再重跑一次部署。注意：未启用 HTTPS 时 Basic Auth 密码是明文传输，若数据敏感，
+> 建议绑定域名后用 Certbot 开 HTTPS（见文末）。
 
 > ⚠️ 私钥是敏感信息，只贴到 GitHub Secrets（加密存储），**不要**提交进仓库。
 
