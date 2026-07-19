@@ -146,6 +146,18 @@ function assetCny(a, fx) {
   return num(a.amount != null ? a.amount : a.cny);
 }
 
+// 总资产：有投资组合明细时，实时按各资产（美元折中间价）求和；否则用手填值兜底。
+// 资产会随时变化，所以总资产以「投资组合」明细为准，自动汇总，不再依赖静态存值。
+function portfolioTotal() {
+  const assets = (STATE && STATE.assets) || [];
+  if (assets.length) {
+    const fx = currentFx();
+    const sum = assets.reduce((s, a) => s + assetCny(a, fx), 0);
+    if (sum > 0) return Math.round(sum);
+  }
+  return num(STATE.portfolio && STATE.portfolio.totalAssets, 0);
+}
+
 // 年化利率：理财/存款 —— 美元 3%，人民币按实际（从名称/备注的“x%”解析，默认按类别兜底）
 function annualRateOf(a) {
   if (a.annualRate != null) return num(a.annualRate);
@@ -582,7 +594,7 @@ async function fetchQuote(rawCode) {
    视图：持仓管理 Positions
    ========================================================================= */
 VIEWS.positions = function (app) {
-  const totalAssets = num(STATE.portfolio.totalAssets, 0);
+  const totalAssets = portfolioTotal();
   app.appendChild(el(`
     <div class="view-head">
       <h2>持仓管理</h2>
@@ -595,7 +607,7 @@ VIEWS.positions = function (app) {
   form.appendChild(el(`
     <p class="hint">输入股票代码可自动获取名称与最新价；填「持股数量」后，占比按
       <code class="formula">持股市值 ÷ 总资产</code> 自动计算，浮盈亏按成本价与现价自动算。
-      当前总资产 <strong>${fmtMoney(totalAssets)}</strong>（在「设置」修改）。</p>
+      当前总资产 <strong>${fmtMoney(totalAssets)}</strong>（由「投资组合」明细自动汇总，随资产变动实时更新）。</p>
     <div class="grid grid-3">
       <div class="field"><label>股票代码（A股）</label>
         <div class="row" style="gap:6px">
@@ -1083,12 +1095,12 @@ VIEWS.drawdown = function (app) {
   // 理论上限：把整块回撤预算分配给该股时的最大占比 = threshold / maxDrop
   const detail = el('<div class="card" style="margin-top:16px"><h3>逐股回撤贡献与理论上限</h3><p class="hint">该股占比 × 该股最大跌幅 ≤ 分配到的回撤预算</p></div>');
   const scroll = el('<div class="table-scroll"></div>');
-  const rows = positions.map(p => {
+  const rows = positions.map((p, i) => {
     const w = num(p.weight), md = num(p.maxDrop);
     const contrib = Calc.drawdownContribution(w, md);
     const cap = md > 0 ? (threshold / md) * 100 : Infinity; // 单股独占预算时的上限占比
     const over = w > cap;
-    return `<tr>
+    return `<tr data-ddrow="${i}" style="cursor:pointer">
       <td>${escapeHtml(p.name)}</td>
       <td class="num">${fmtPct(w,1)}</td>
       <td class="num">${fmtPct(md,0)}</td>
@@ -1104,19 +1116,30 @@ VIEWS.drawdown = function (app) {
     <th class="num">回撤贡献</th><th class="num">理论上限*</th><th>判定</th>
   </tr></thead><tbody>${rows}</tbody></table>`));
   detail.appendChild(scroll);
-  detail.appendChild(el(`<p class="inline-note">*理论上限 = 回撤阈值 ÷ 该股最大跌幅（即该股独占全部回撤预算时的占比）。多股共享预算时应更保守。</p>`));
+  detail.appendChild(el(`<p class="inline-note">*理论上限 = 回撤阈值 ÷ 该股最大跌幅（即该股独占全部回撤预算时的占比）。多股共享预算时应更保守。<strong>点表格任意一行查看该股的回撤解读。</strong></p>`));
 
-  // 示例句式输出
-  const worst = positions.slice().sort((a,b)=>Calc.drawdownContribution(num(b.weight),num(b.maxDrop))-Calc.drawdownContribution(num(a.weight),num(a.maxDrop)))[0];
-  if (worst) {
-    const w = num(worst.weight), md = num(worst.maxDrop);
+  // 点哪只显示哪只（默认回撤贡献最大的一只）
+  const summaryBox = el('<div id="dd-summary" style="margin-top:12px"></div>');
+  detail.appendChild(summaryBox);
+  const setDdSummary = (p) => {
+    const w = num(p.weight), md = num(p.maxDrop);
     const contrib = Calc.drawdownContribution(w, md);
     const cap = md > 0 ? (threshold / md) * 100 : Infinity;
     const over = w > cap;
-    detail.appendChild(el(`<div class="alert ${over?'red':'green'}" style="margin-top:12px"><span class="icon">${over?icon('xmark'):icon('check')}</span><div>
-      ${escapeHtml(worst.name)}当前占 ${fmtPct(w,1)}，最大跌幅 ${fmtPct(md,0)}，对组合的回撤贡献 ${fmtPct(contrib,2)}，
-      ${over?`超出预算，建议降至 ${fmtPct(cap,1)} 以内。`:`在预算内。`}
-    </div></div>`));
+    summaryBox.innerHTML = `<div class="alert ${over?'red':'green'}"><span class="icon">${over?icon('xmark'):icon('check')}</span><div>
+      <strong>${escapeHtml(p.name)}</strong>当前占 ${fmtPct(w,1)}，最大跌幅 ${fmtPct(md,0)}，对组合的回撤贡献 ${fmtPct(contrib,2)}，
+      ${over?`超出预算，建议降至 ${fmtPct(cap,1)} 以内。`:`在预算内。`}</div></div>`;
+  };
+  if (positions.length) {
+    const worstIdx = positions
+      .map((p, i) => [i, Calc.drawdownContribution(num(p.weight), num(p.maxDrop))])
+      .sort((a, b) => b[1] - a[1])[0][0];
+    const highlight = (tr) => { scroll.querySelectorAll('[data-ddrow]').forEach(x => x.style.background = ''); if (tr) tr.style.background = 'rgba(10,132,255,0.08)'; };
+    setDdSummary(positions[worstIdx]);
+    scroll.querySelectorAll('[data-ddrow]').forEach(tr => tr.onclick = () => {
+      highlight(tr); setDdSummary(positions[+tr.dataset.ddrow]);
+    });
+    highlight(scroll.querySelector(`[data-ddrow="${worstIdx}"]`));
   }
   app.appendChild(detail);
 };
@@ -1136,8 +1159,8 @@ VIEWS.stoploss = function (app) {
   const card = el('<div class="card"></div>');
   card.appendChild(el(`
     <div class="grid grid-2">
-      <div class="field"><label>总资产</label>
-        <input id="sl-total" type="number" step="1000" value="${STATE.portfolio.totalAssets||1000000}"/></div>
+      <div class="field"><label>总资产（自动汇总）</label>
+        <input id="sl-total" type="number" step="1000" value="${portfolioTotal()||1000000}"/></div>
       <div class="field"><label>单笔可接受最大亏损（占总资产）</label>
         <div class="suffix-input"><input id="sl-risk" type="number" step="0.5" value="${s.perTradeRisk}"/><span>%</span></div></div>
     </div>
@@ -1217,10 +1240,11 @@ VIEWS.rules = function (app) {
       <div class="field"><label>当前占比 %</label><input id="r-cur" type="number" step="0.1" placeholder="8"/></div>
     </div>
     <div class="grid grid-3">
-      <div class="field"><label>本次加仓占比 %</label><input id="r-add" type="number" step="0.1" placeholder="3"/></div>
-      <div class="field"><label>本次加仓金额（可选）</label><input id="r-addamt" type="number" step="100" placeholder="用于正金字塔校验"/></div>
-      <div class="field"><label>上次加仓金额（可选）</label><input id="r-lastamt" type="number" step="100" placeholder="上一批买入额"/></div>
+      <div class="field"><label>本次加仓金额（元）<span class="req">*</span></label><input id="r-addamt" type="number" step="1000" placeholder="如 50000"/></div>
+      <div class="field"><label>本次加仓占比 %（自动）</label><input id="r-add" type="number" step="0.1" placeholder="按金额÷总资产自动算，也可手填"/></div>
+      <div class="field"><label>上次加仓金额（可选）</label><input id="r-lastamt" type="number" step="1000" placeholder="正金字塔校验用"/></div>
     </div>
+    <p class="inline-note">加仓以<strong>金额</strong>为准：占比 = 加仓金额 ÷ 总资产（当前 ${fmtMoney(portfolioTotal())}）自动计算。</p>
     <div class="field"><label>该标的因子（用于集中度校验）</label>
       <select id="r-factor">${FACTORS.map(f=>`<option>${f}</option>`).join('')}</select></div>
     <button class="btn danger" id="r-check">${icon('search')} 运行铁律校验</button>
@@ -1237,6 +1261,15 @@ VIEWS.rules = function (app) {
     card.querySelector('#r-cur').value = p.weight;
     card.querySelector('#r-factor').value = p.factor;
   };
+
+  // 加仓金额 → 自动算占比（金额优先，符合操作习惯）
+  card.querySelector('#r-addamt').addEventListener('input', (e) => {
+    const amt = num(e.target.value);
+    const tot = portfolioTotal();
+    const addField = card.querySelector('#r-add');
+    if (amt > 0 && tot > 0) addField.value = (amt / tot * 100).toFixed(2);
+    else if (!amt) addField.value = '';
+  });
 
   // 铁律表
   const rulesRef = el(`<div class="card" style="margin-top:16px"><h3>七条铁律</h3>
@@ -1258,15 +1291,26 @@ VIEWS.rules = function (app) {
     const pnl = num(card.querySelector('#r-pnl').value);
     const trend = card.querySelector('#r-trend').value;
     const cur = num(card.querySelector('#r-cur').value);
-    const add = num(card.querySelector('#r-add').value);
     const addAmt = num(card.querySelector('#r-addamt').value);
     const lastAmt = num(card.querySelector('#r-lastamt').value);
     const factor = card.querySelector('#r-factor').value;
     const selId = card.querySelector('#r-pos').value;
+    const tot = portfolioTotal();
+
+    // 金额优先：有加仓金额则由金额÷总资产算占比；否则回退到手填占比
+    let add = num(card.querySelector('#r-add').value);
+    if (addAmt > 0 && tot > 0) add = addAmt / tot * 100;
 
     if (add <= 0) {
-      box.appendChild(el(`<div class="alert amber"><span class="icon">${icon('warn')}</span><div>请填写本次加仓占比（> 0）。</div></div>`));
+      box.appendChild(el(`<div class="alert amber"><span class="icon">${icon('warn')}</span><div>请填写本次加仓金额（元），或直接手填加仓占比 %。</div></div>`));
       return;
+    }
+
+    // 回显：金额 → 自动占比（让用户确认按金额算出的比例）
+    if (addAmt > 0 && tot > 0) {
+      box.appendChild(el(`<div class="alert" style="margin-bottom:10px"><span class="icon">${icon('info')}</span><div>
+        本次加仓 <strong>${fmtMoney(addAmt)}</strong> ÷ 总资产 ${fmtMoney(tot)} = 加仓占比 <strong>${fmtPct(add,2)}</strong>（加仓后该股 ${fmtPct(cur+add,2)}）。
+      </div></div>`));
     }
 
     const violations = [];
@@ -1413,7 +1457,7 @@ VIEWS.planner = function (app) {
   } else if (gainers.length === 0) {
     lock.appendChild(el(`<div class="alert blue"><span class="icon">${icon('moon')}</span><div>当前没有浮盈达到 +${s.profitLockThreshold}% 的标的，无需隔离。</div></div>`));
   } else {
-    const totalAssets = STATE.portfolio.totalAssets || 1000000;
+    const totalAssets = portfolioTotal() || 1000000;
     const scroll = el('<div class="table-scroll"></div>');
     const rows = gainers.map(p => {
       const w = num(p.weight);
@@ -1475,8 +1519,9 @@ VIEWS.settings = function (app) {
         <input id="st-lock" type="number" step="5" value="${s.profitLockThreshold}"/></div>
       <div class="field"><label>最大回撤阈值 %（默认 15）</label>
         <input id="st-dd" type="number" step="1" value="${s.maxDrawdown}"/></div>
-      <div class="field"><label>总资产</label>
-        <input id="st-total" type="number" step="1000" value="${STATE.portfolio.totalAssets||1000000}"/></div>
+      <div class="field"><label>总资产${(STATE.assets||[]).length ? '（由投资组合自动汇总）' : ''}</label>
+        <input id="st-total" type="number" step="1000" value="${portfolioTotal()||1000000}" ${(STATE.assets||[]).length ? 'readonly style="background:rgba(120,120,128,0.08);color:var(--muted)"' : ''}/>
+        ${(STATE.assets||[]).length ? '<p class="inline-note">总资产 = 「投资组合」各资产按当日中间价折算后自动求和，随你在投资组合里增删/修改资产实时变化，无需手填。</p>' : ''}</div>
       <div class="field"><label>美元/人民币中间价</label>
         <input id="st-fx" type="number" step="0.0001" value="${currentFx()}"/>
         <p class="inline-note">美元资产与美元利息按此汇率折人民币；「投资组合」页可一键按中间价自动更新。</p></div>
@@ -1495,7 +1540,8 @@ VIEWS.settings = function (app) {
     s.perTradeRisk = num(card.querySelector('#st-risk').value, 2);
     s.profitLockThreshold = num(card.querySelector('#st-lock').value, 30);
     s.maxDrawdown = num(card.querySelector('#st-dd').value, 15);
-    STATE.portfolio.totalAssets = num(card.querySelector('#st-total').value, 1000000);
+    // 有投资组合明细时总资产自动汇总，不用手填值覆盖；无明细时才用手填兜底
+    if (!(STATE.assets || []).length) STATE.portfolio.totalAssets = num(card.querySelector('#st-total').value, 1000000);
     STATE.portfolio.fxRate = num(card.querySelector('#st-fx').value, FX_DEFAULT) || FX_DEFAULT;
     saveState();
     alert('设置已保存');
