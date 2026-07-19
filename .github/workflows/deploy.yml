@@ -38,7 +38,7 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         env:
           APP_PASSWORD: ${{ secrets.APP_PASSWORD }}
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API }}
         with:
           host: ${{ secrets.ECS_HOST }}
           username: ${{ secrets.ECS_USERNAME }}

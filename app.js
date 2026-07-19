@@ -1535,7 +1535,7 @@ async function aiReview(summaryText, box, btn) {
   } catch (e) {
     box.innerHTML = `<div class="alert amber"><span class="icon">${icon('warn')}</span><div>
       <strong>AI 点评暂不可用</strong>：${escapeHtml(e.message)}<br>
-      请检查：① 已在 GitHub 配置 <code class="formula">DEEPSEEK_API_KEY</code> 并重新部署；
+      请检查：① 已在 GitHub 配置 <code class="formula">DEEPSEEK_API</code> 并重新部署；
       ② 服务器能访问 api.deepseek.com；③ 模型串 <code class="formula">${AI_MODEL}</code> 正确。
       下方本地量化诊断不受影响。</div></div>`;
   } finally {
