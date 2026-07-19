@@ -773,7 +773,8 @@ async function getQuoteText(url) {
 }
 
 // 腾讯：v_sz002518="51~科士达~002518~现价~昨收~今开~…";
-function parseTencent(text) {
+function parseTencent(text, opts) {
+  opts = opts || {};
   const m = text.match(/"([^"]*)"/);
   if (!m || !m[1]) throw new Error('无数据');
   const p = m[1].split('~');
@@ -781,19 +782,37 @@ function parseTencent(text) {
   let price = parseFloat(p[3]);
   if (!(price > 0)) price = parseFloat(p[4]);         // 休市回退昨收
   if (!name || !isFinite(price)) throw new Error('解析失败');
-  return { name, price };
+  let changePct = null, prevClose = null;
+  if (opts.us) {
+    changePct = parseFloat(p[5]);                     // 美股：p[5]=涨跌幅%
+    if (isFinite(changePct)) prevClose = price / (1 + changePct / 100);
+  } else {
+    prevClose = parseFloat(p[4]);                     // A股/ETF：p[4]=昨收
+    if (prevClose > 0) changePct = (price - prevClose) / prevClose * 100;
+  }
+  return { name, price, changePct: isFinite(changePct) ? changePct : null, prevClose: prevClose > 0 ? prevClose : null };
 }
 
-// 新浪：var hq_str_sz002518="科士达,今开,昨收,现价,…";
-function parseSina(text) {
+// 新浪：var hq_str_sz002518="科士达,今开,昨收,现价,…"；美股 gb_：var hq_str_gb_tcom="名称,现价,涨跌幅,…"
+function parseSina(text, opts) {
+  opts = opts || {};
   const m = text.match(/"([^"]*)"/);
   if (!m || !m[1]) throw new Error('无数据');
   const p = m[1].split(',');
   const name = p[0];
-  let price = parseFloat(p[3]);
-  if (!(price > 0)) price = parseFloat(p[2]);
+  let price, changePct = null, prevClose = null;
+  if (opts.us) {
+    price = parseFloat(p[1]);                         // 美股：p[1]=现价, p[2]=涨跌幅%
+    changePct = parseFloat(p[2]);
+    if (isFinite(changePct)) prevClose = price / (1 + changePct / 100);
+  } else {
+    price = parseFloat(p[3]);
+    prevClose = parseFloat(p[2]);                     // 昨收
+    if (!(price > 0)) price = prevClose;
+    if (prevClose > 0) changePct = (price - prevClose) / prevClose * 100;
+  }
   if (!name || !isFinite(price)) throw new Error('解析失败');
-  return { name, price };
+  return { name, price, changePct: isFinite(changePct) ? changePct : null, prevClose: prevClose > 0 ? prevClose : null };
 }
 
 async function fetchQuote(rawCode) {
@@ -803,10 +822,10 @@ async function fetchQuote(rawCode) {
   if (isUsCode(code)) {
     const sym = code.toUpperCase().replace(/\s+/g, '');
     try {
-      return parseTencent(await getQuoteText('/api/quote?code=' + encodeURIComponent('us' + sym)));
+      return parseTencent(await getQuoteText('/api/quote?code=' + encodeURIComponent('us' + sym)), { us: true });
     } catch (e1) {
       try {
-        return parseSina(await getQuoteText('/api/quote_sina?code=' + encodeURIComponent('gb_' + sym.toLowerCase())));
+        return parseSina(await getQuoteText('/api/quote_sina?code=' + encodeURIComponent('gb_' + sym.toLowerCase())), { us: true });
       } catch (e2) {
         throw new Error('美股行情获取失败（代码可能有误或已休市），可手动填名称与现价');
       }
@@ -827,6 +846,80 @@ async function fetchQuote(rawCode) {
       throw new Error('腾讯/新浪均失败（代码可能有误或已休市）');
     }
   }
+}
+
+/* -------------------------------------------------------------------------
+   公募基金净值：天天基金实时估值（服务器 /api/fund 代理 fundgz.1234567.com.cn）
+   返回 jsonpgz({fundcode,name,dwjz昨日净值,gsz估算净值,gszzl估算涨跌%,gztime})
+   ------------------------------------------------------------------------- */
+async function fetchFund(code) {
+  const res = await fetch('/api/fund?code=' + encodeURIComponent(code), { cache: 'no-store' });
+  if (!res.ok) throw new Error('基金接口 ' + res.status);
+  const text = await res.text();
+  const m = text.match(/jsonpgz\(\s*(\{[\s\S]*?\})\s*\)/);
+  if (!m) throw new Error('无估值数据');
+  const o = JSON.parse(m[1]);
+  const nav = parseFloat(o.gsz || o.dwjz);            // 估算净值优先，无则确认净值
+  const prevNav = parseFloat(o.dwjz);                 // 昨日确认净值（作份额校准基准）
+  const dayPct = parseFloat(o.gszzl);
+  if (!(nav > 0)) throw new Error('净值缺失');
+  return { name: o.name, nav, prevNav: prevNav > 0 ? prevNav : null, dayPct: isFinite(dayPct) ? dayPct : null, navDate: o.gztime || o.jzrq || '' };
+}
+
+/* -------------------------------------------------------------------------
+   一键刷新组合估值：公募基金走天天基金，股票/ETF/美股走行情源。
+   份额模型：首次刷新用「金额 ÷ 现价/净值」反推份额并存下；之后价值 = 份额 × 最新价，
+   浮盈亏随价值等额变动（Δ浮盈亏 = Δ市值），避免多天重复计算。
+   ------------------------------------------------------------------------- */
+function assetFetchable(a) {
+  if (!a || !a.code) return false;
+  if (a.category === '基金') return /^\d{6}$/.test(a.code);
+  if (a.category === 'A股股票' || a.category === '美股股票') return isUsCode(a.code) || /^\d{5,6}$/.test(a.code);
+  return false;
+}
+
+async function refreshOneAsset(a, fx) {
+  let px = null, dayPct = null, prevPx = null;
+  if (a.category === '基金') {
+    const f = await fetchFund(a.code); px = f.nav; dayPct = f.dayPct; prevPx = f.prevNav;
+  } else {
+    const q = await fetchQuote(a.code); px = q.price; dayPct = q.changePct; prevPx = q.prevClose;
+  }
+  if (!(px > 0)) throw new Error('价格无效');
+  // 首次校准份额：以「昨收/昨日净值」为基准（把已存金额视为昨日收盘市值），
+  // 这样首次刷新即体现当日涨跌；无昨收时退回用现价校准（首日不跳变）。
+  if (!(a.shares > 0)) a.shares = a.amount / (prevPx > 0 ? prevPx : px);
+  const oldVal = num(a.amount);
+  const newVal = a.shares * px;
+  const deltaCny = (newVal - oldVal) * (a.currency === 'USD' ? fx : 1);
+  a.amount = Math.round(newVal * 100) / 100;
+  a.cny = Math.round(assetCny(a, fx));
+  if (a.pnl != null) a.pnl = Math.round((num(a.pnl) + deltaCny) * 100) / 100;
+  a.lastPx = px;
+  if (dayPct != null) a.dayPct = dayPct;
+  a.pxDate = todayStr();
+  return true;
+}
+
+async function refreshAllQuotes() {
+  const fx = currentFx();
+  const targets = (STATE.assets || []).filter(assetFetchable);
+  let updated = 0, failed = 0;
+  for (const a of targets) {
+    try { await refreshOneAsset(a, fx); updated++; }
+    catch (e) { failed++; }
+  }
+  STATE.lastQuoteRefresh = Date.now();
+  saveState();
+  return { updated, failed, total: targets.length };
+}
+
+// 打开页面自动刷新：有可刷新资产且距上次 > 15 分钟才请求，避免频繁打扰
+async function autoRefreshQuotes() {
+  if (!(STATE.assets || []).some(assetFetchable)) return false;
+  const last = STATE.lastQuoteRefresh || 0;
+  if (Date.now() - last < 15 * 60 * 1000) return false;
+  try { await refreshAllQuotes(); return true; } catch (e) { return false; }
 }
 
 /* =========================================================================
@@ -2157,8 +2250,16 @@ VIEWS.portfolio = function (app) {
   app.appendChild(catCard);
 
   // 持仓明细（按大类排序；收益列：理财/存款年化利息，其它浮盈亏；可增删改）
-  const holdCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('coins')} 全部持仓（${assets.length}）</h3>
-    <p class="hint">组合会随时间变化——可随时在下方「管理资产」增删改。按大类排序：股票 → 基金 → 理财 → 黄金 → 现金。</p></div>`);
+  const fetchableCount = assets.filter(assetFetchable).length;
+  const lastRef = STATE.lastQuoteRefresh ? new Date(STATE.lastQuoteRefresh) : null;
+  const lastRefStr = lastRef ? `${String(lastRef.getMonth()+1).padStart(2,'0')}-${String(lastRef.getDate()).padStart(2,'0')} ${String(lastRef.getHours()).padStart(2,'0')}:${String(lastRef.getMinutes()).padStart(2,'0')}` : '尚未刷新';
+  const holdCard = el(`<div class="card" style="margin-top:16px">
+    <div class="card-head-row">
+      <h3 style="margin:0">${icon('coins')} 全部持仓（${assets.length}）</h3>
+      ${fetchableCount ? `<button class="btn secondary small" id="pf-refresh" style="flex:0 0 auto">${icon('refresh')} 一键刷新估值</button>` : ''}
+    </div>
+    <p class="hint">组合会随时间变化——可随时在下方「管理资产」增删改。按大类排序：股票 → 基金 → 理财 → 黄金 → 现金。
+      ${fetchableCount ? `<br>其中 <strong>${fetchableCount}</strong> 只基金/股票可自动更新（打开页面自动刷新，最近 <span id="pf-lastref">${lastRefStr}</span>）。理财为银行自有产品无公开接口，请手动维护。` : ''}</p></div>`);
   const sorted = assets.slice().sort((a, b) => classRank(a.category) - classRank(b.category) || cnyOf(b) - cnyOf(a));
   const hrows = sorted.map(a => {
     const v = cnyOf(a);
@@ -2169,23 +2270,42 @@ VIEWS.portfolio = function (app) {
     } else if (inc.value != null) {
       incCell = `<span style="color:${inc.value>=0?'var(--green-ink)':'var(--red-ink)'}">${inc.value>=0?'+':''}${fmtMoney(inc.value)}</span>`;
     } else { incCell = '—'; }
+    let dayCell = '—';
+    if (a.dayPct != null && isFinite(a.dayPct)) {
+      const up = a.dayPct >= 0;
+      dayCell = `<span class="pill ${up?'green':'red'}">${up?'+':''}${fmtPct(a.dayPct,2)}</span>`;
+    } else if (assetFetchable(a)) {
+      dayCell = '<span class="inline-note">待刷新</span>';
+    }
     return `<tr>
       <td>${escapeHtml(a.name)}${a.code?`<br><span class="inline-note">${escapeHtml(a.code)}</span>`:''}</td>
       <td><span class="tag-chip">${escapeHtml(a.category)}</span></td>
       <td>${a.currency}</td>
       <td class="num">${fmtMoney(v)}</td>
       <td class="num">${fmtPct(pct(v),1)}</td>
+      <td class="num">${dayCell}</td>
       <td class="num">${incCell}</td>
       <td class="num"><button class="btn secondary small" data-aedit="${a.id}">${icon('pencil')}</button>
         <button class="btn danger small" data-adel="${a.id}">${icon('trash')}</button></td>
     </tr>`;
   }).join('');
   const holdScroll = el(`<div class="table-scroll"><table>
-    <thead><tr><th>名称</th><th>类别</th><th>币种</th><th class="num">折合人民币</th><th class="num">占比</th><th class="num">收益/利息</th><th></th></tr></thead>
+    <thead><tr><th>名称</th><th>类别</th><th>币种</th><th class="num">折合人民币</th><th class="num">占比</th><th class="num">今日</th><th class="num">收益/利息</th><th></th></tr></thead>
     <tbody>${hrows}</tbody></table></div>`);
   holdCard.appendChild(holdScroll);
-  holdCard.appendChild(el(`<p class="inline-note">收益列：理财/存款显示<strong>年化利息</strong>（美元按 3%、人民币按实际利率，美元金额按当日中间价 ${fx.toFixed(4)} 折人民币）；股票/基金/黄金显示<strong>浮盈亏</strong>。</p>`));
+  holdCard.appendChild(el(`<p class="inline-note">「今日」为基金估算涨跌 / 股票当日涨跌；收益列：理财/存款显示<strong>年化利息</strong>（美元按 3%、人民币按实际利率，美元金额按当日中间价 ${fx.toFixed(4)} 折人民币），股票/基金/黄金显示<strong>浮盈亏</strong>。</p>`));
   app.appendChild(holdCard);
+  const refBtn = holdCard.querySelector('#pf-refresh');
+  if (refBtn) refBtn.onclick = async () => {
+    const old = refBtn.innerHTML; refBtn.disabled = true; refBtn.innerHTML = icon('refresh', 'spin') + ' 刷新中…';
+    const r = await refreshAllQuotes();
+    recordDailySnapshot();
+    syncCloudSnapshots({});           // 值变了，顺带更新云端今日快照
+    render();
+    // render 会重建视图；给个短暂提示
+    const note = holdCard.querySelector('#pf-lastref');
+    if (note) note.textContent = `刚刚（更新 ${r.updated}/${r.total}${r.failed?`，${r.failed} 失败`:''}）`;
+  };
 
   // 管理资产：新增 / 编辑
   const mgmt = el(`<div class="card" style="margin-top:16px"><h3>${icon('pencil')} 管理资产（可随时增删改）</h3></div>`);
@@ -2370,5 +2490,9 @@ if (themeBtn) {
 }
 render();
 
-// 异步与云端同步快照（拉取历史 → 合并 → 回写）；完成后如在趋势页则刷新
-syncCloudSnapshots({ onstatus: () => { if (currentView === 'trends') render(); } });
+// 启动后台任务：先自动刷新基金/股票估值 → 重记今日快照 → 同步云端
+(async () => {
+  const refreshed = await autoRefreshQuotes();     // 打开页面自动更新涨跌（15 分钟节流）
+  if (refreshed) { recordDailySnapshot(); if (currentView === 'portfolio' || currentView === 'trends') render(); }
+  await syncCloudSnapshots({ onstatus: () => { if (currentView === 'trends') render(); } });
+})();
