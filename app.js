@@ -98,7 +98,7 @@ const SEED_ASSETS = [
   { platform: '招商银行 理财', category: '理财(QDII)', name: '工银天天鑫全球添益固收类QDII美元', code: 'GYD3203A', currency: 'USD', amount: 64264.55, fx: 6.78, cny: 435713.65, pnl: 1047.88, note: '每日可申赎' },
   { platform: '招商银行 理财', category: '理财(QDII)', name: '招银美元增利海外优选370天1号', code: '108996A', currency: 'USD', amount: 40539.13, fx: 6.78, cny: 274855.30, pnl: 144.13, note: '2027-06-03可赎' },
   { platform: '招商银行 黄金', category: '黄金', name: '招行黄金账户', code: '', currency: 'CNY', amount: 211720.68, fx: 1, cny: 211720.68, pnl: -44636.44 },
-  { platform: '招商银行 存款', category: '人民币现金', name: '定期存款(年利率1.4%)', code: '', currency: 'CNY', amount: 135000, fx: 1, cny: 135000, note: '定期' },
+  { platform: '招商银行 存款', category: '定期存款', name: '定期存款(年利率1.4%)', code: '', currency: 'CNY', amount: 135000, fx: 1, cny: 135000, annualRate: 0.014, note: '定期' },
   { platform: '招商银行 活钱', category: '人民币现金', name: '活期存款', code: '', currency: 'CNY', amount: 89667.9, fx: 1, cny: 89667.9 },
   { platform: '招商银行 活钱', category: '人民币现金', name: '朝朝宝(货币基金)', code: '', currency: 'CNY', amount: 93849.54, fx: 1, cny: 93849.54 },
   { platform: '招商银行 基金', category: '基金', name: '易方达中证红利低波ETF联接A', code: '020602', currency: 'CNY', amount: 231127.28, fx: 1, cny: 231127.28, pnl: -986.90 },
@@ -139,26 +139,37 @@ function bigClassOf(cat) {
 const FX_DEFAULT = 6.78;
 function currentFx() { return num(STATE.portfolio && STATE.portfolio.fxRate, FX_DEFAULT) || FX_DEFAULT; }
 
-// 资产按当日汇率折算人民币（美元资产用当前中间价，人民币资产原值）
+// 资产按当日汇率折算人民币（美元资产用当前中间价，人民币资产按原币金额）
 function assetCny(a, fx) {
   fx = fx || currentFx();
   if (a.currency === 'USD') return num(a.amount) * fx;
-  return num(a.cny != null ? a.cny : a.amount);
+  return num(a.amount != null ? a.amount : a.cny);
 }
 
-// 年化利率：理财/存款 —— 美元 3%，人民币按实际（从名称/备注解析，默认活期近似）
+// 年化利率：理财/存款 —— 美元 3%，人民币按实际（从名称/备注的“x%”解析，默认按类别兜底）
 function annualRateOf(a) {
   if (a.annualRate != null) return num(a.annualRate);
   const cat = a.category, cur = a.currency, text = (a.name || '') + (a.note || '');
-  if (cat === '理财(QDII)') return cur === 'USD' ? 0.03 : 0.03;
-  if (cat === '定期存款') {
+  const pctM = text.match(/([\d.]+)\s*%/);
+  if (cat === '理财(QDII)') return cur === 'USD' ? 0.03 : (pctM ? parseFloat(pctM[1]) / 100 : 0.03);
+  if (cat === '定期存款' || /定期/.test(text)) {
     if (cur === 'USD') return 0.03;
-    const m = text.match(/([\d.]+)\s*%/); return m ? parseFloat(m[1]) / 100 : 0.014;
+    return pctM ? parseFloat(pctM[1]) / 100 : 0.014;
   }
   if (/货币基金|朝朝宝/.test(a.name || '')) return 0.015;   // 货基年化约 1.5%
-  if (cur === 'USD' && cat === '香港账户现金' && /定期/.test(text)) return 0.03;
+  if (cur === 'USD' && /理财/.test(text)) return 0.03;
   return 0;
 }
+
+// 大类排序：股票 → 基金 → 理财 → 黄金 → 现金
+function classRank(cat) {
+  if (cat === 'A股股票' || cat === '美股股票') return 1;
+  if (cat === '基金') return 2;
+  if (cat === '理财(QDII)' || cat === '定期存款') return 3;
+  if (cat === '黄金') return 4;
+  return 5;
+}
+const ASSET_CATEGORIES = ['A股股票', '美股股票', '基金', '理财(QDII)', '定期存款', '黄金', '人民币现金', '香港账户现金', '外汇'];
 
 // 收益：理财/存款 → 年化利息（美元按当日中间价折人民币）；其它 → 浮盈亏
 function assetIncome(a, fx) {
@@ -1692,10 +1703,11 @@ VIEWS.portfolio = function (app) {
   allocCard.appendChild(buildPie(normalize(byBig)));
   app.appendChild(allocCard);
 
-  // 明细表：按类别
+  // 明细表：按类别（按大类排序：股票→基金→理财→黄金→现金）
   const catCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('list')} 按类别明细</h3></div>`);
-  const catRows = Object.entries(byCat).sort((a, b) => b[1] - a[1]).map(([c, v]) =>
-    `<tr><td>${escapeHtml(c)}</td><td class="num">${fmtMoney(v)}</td><td class="num">${fmtPct(pct(v),1)}</td></tr>`).join('');
+  const catRows = Object.entries(byCat)
+    .sort((a, b) => classRank(a[0]) - classRank(b[0]) || b[1] - a[1])
+    .map(([c, v]) => `<tr><td>${escapeHtml(c)}</td><td class="num">${fmtMoney(v)}</td><td class="num">${fmtPct(pct(v),1)}</td></tr>`).join('');
   catCard.appendChild(el(`<div class="table-scroll"><table>
     <thead><tr><th>类别</th><th class="num">金额</th><th class="num">占比</th></tr></thead>
     <tbody>${catRows}
@@ -1704,9 +1716,11 @@ VIEWS.portfolio = function (app) {
     </tbody></table></div>`));
   app.appendChild(catCard);
 
-  // 持仓明细（收益列：理财/存款显示年化利息，其它显示浮盈亏）
-  const holdCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('coins')} 全部持仓（${assets.length}）</h3></div>`);
-  const hrows = assets.slice().sort((a, b) => cnyOf(b) - cnyOf(a)).map(a => {
+  // 持仓明细（按大类排序；收益列：理财/存款年化利息，其它浮盈亏；可增删改）
+  const holdCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('coins')} 全部持仓（${assets.length}）</h3>
+    <p class="hint">组合会随时间变化——可随时在下方「管理资产」增删改。按大类排序：股票 → 基金 → 理财 → 黄金 → 现金。</p></div>`);
+  const sorted = assets.slice().sort((a, b) => classRank(a.category) - classRank(b.category) || cnyOf(b) - cnyOf(a));
+  const hrows = sorted.map(a => {
     const v = cnyOf(a);
     const inc = assetIncome(a, fx);
     let incCell;
@@ -1722,13 +1736,84 @@ VIEWS.portfolio = function (app) {
       <td class="num">${fmtMoney(v)}</td>
       <td class="num">${fmtPct(pct(v),1)}</td>
       <td class="num">${incCell}</td>
+      <td class="num"><button class="btn secondary small" data-aedit="${a.id}">${icon('pencil')}</button>
+        <button class="btn danger small" data-adel="${a.id}">${icon('trash')}</button></td>
     </tr>`;
   }).join('');
-  holdCard.appendChild(el(`<div class="table-scroll"><table>
-    <thead><tr><th>名称</th><th>类别</th><th>币种</th><th class="num">折合人民币</th><th class="num">占比</th><th class="num">收益/利息</th></tr></thead>
-    <tbody>${hrows}</tbody></table></div>`));
+  const holdScroll = el(`<div class="table-scroll"><table>
+    <thead><tr><th>名称</th><th>类别</th><th>币种</th><th class="num">折合人民币</th><th class="num">占比</th><th class="num">收益/利息</th><th></th></tr></thead>
+    <tbody>${hrows}</tbody></table></div>`);
+  holdCard.appendChild(holdScroll);
   holdCard.appendChild(el(`<p class="inline-note">收益列：理财/存款显示<strong>年化利息</strong>（美元按 3%、人民币按实际利率，美元金额按当日中间价 ${fx.toFixed(4)} 折人民币）；股票/基金/黄金显示<strong>浮盈亏</strong>。</p>`));
   app.appendChild(holdCard);
+
+  // 管理资产：新增 / 编辑
+  const mgmt = el(`<div class="card" style="margin-top:16px"><h3>${icon('pencil')} 管理资产（可随时增删改）</h3></div>`);
+  mgmt.appendChild(el(`
+    <div class="grid grid-3">
+      <div class="field"><label>名称 <span class="req">*</span></label><input id="af-name" placeholder="如 招行黄金账户"/></div>
+      <div class="field"><label>类别</label><select id="af-cat">${ASSET_CATEGORIES.map(c=>`<option>${c}</option>`).join('')}</select></div>
+      <div class="field"><label>币种</label><select id="af-cur"><option>CNY</option><option>USD</option></select></div>
+    </div>
+    <div class="grid grid-3">
+      <div class="field"><label>金额（原币） <span class="req">*</span></label><input id="af-amount" type="number" step="0.01" placeholder="按币种填原币金额"/></div>
+      <div class="field"><label>年利率 %（理财/存款，留空自动）</label><input id="af-rate" type="number" step="0.01" placeholder="美元自动3%/人民币按实际"/></div>
+      <div class="field"><label>浮盈亏 ¥（股票/基金/黄金，可选）</label><input id="af-pnl" type="number" step="1" placeholder="如 -44636"/></div>
+    </div>
+    <div class="grid grid-3">
+      <div class="field"><label>代码（可选）</label><input id="af-code" placeholder="如 002518"/></div>
+      <div class="field"><label>平台/账户（可选）</label><input id="af-platform" placeholder="如 招商银行 基金"/></div>
+      <div class="field"><label>备注（可选）</label><input id="af-note"/></div>
+    </div>
+    <button class="btn" id="af-add">${icon('plus')} 添加资产</button>
+    <input type="hidden" id="af-edit"/>
+  `));
+  app.appendChild(mgmt);
+  const $a = sel => mgmt.querySelector(sel);
+
+  $a('#af-add').onclick = () => {
+    const name = $a('#af-name').value.trim();
+    if (!name) { alert('请填写名称'); return; }
+    const cur = $a('#af-cur').value;
+    const amount = num($a('#af-amount').value);
+    const cat = $a('#af-cat').value;
+    const rateStr = $a('#af-rate').value.trim();
+    const pnlStr = $a('#af-pnl').value.trim();
+    const editId = $a('#af-edit').value;
+    const asset = {
+      id: editId || uid(), name, code: $a('#af-code').value.trim(),
+      platform: $a('#af-platform').value.trim(), category: cat, currency: cur,
+      amount, cny: cur === 'CNY' ? amount : amount * currentFx(),
+      note: $a('#af-note').value.trim(),
+    };
+    if (rateStr !== '') asset.annualRate = num(rateStr) / 100;
+    if (pnlStr !== '') asset.pnl = num(pnlStr);
+    if (editId) {
+      const i = STATE.assets.findIndex(x => x.id === editId);
+      if (i >= 0) STATE.assets[i] = asset;
+    } else { STATE.assets.push(asset); }
+    saveState(); render();
+  };
+  holdScroll.querySelectorAll('[data-adel]').forEach(b => b.onclick = () => {
+    if (!confirm('删除这笔资产？')) return;
+    STATE.assets = STATE.assets.filter(x => x.id !== b.dataset.adel);
+    saveState(); render();
+  });
+  holdScroll.querySelectorAll('[data-aedit]').forEach(b => b.onclick = () => {
+    const a = STATE.assets.find(x => x.id === b.dataset.aedit); if (!a) return;
+    $a('#af-name').value = a.name || '';
+    $a('#af-cat').value = a.category || 'A股股票';
+    $a('#af-cur').value = a.currency || 'CNY';
+    $a('#af-amount').value = a.amount != null ? a.amount : '';
+    $a('#af-rate').value = a.annualRate != null ? (a.annualRate * 100) : '';
+    $a('#af-pnl').value = a.pnl != null ? a.pnl : '';
+    $a('#af-code').value = a.code || '';
+    $a('#af-platform').value = a.platform || '';
+    $a('#af-note').value = a.note || '';
+    $a('#af-edit').value = a.id;
+    $a('#af-add').innerHTML = icon('check') + ' 保存修改';
+    mgmt.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
 
   // AI 深度点评
   const aiCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('sparkles')} AI 深度点评</h3>
