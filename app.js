@@ -39,7 +39,7 @@ const FACTOR_COLORS = [
    AI 组合诊断（DeepSeek，经服务器 /api/ai-review 代理，密钥不出前端）
    ------------------------------------------------------------------------- */
 const AI_ENDPOINT = '/api/ai-review';
-const AI_MODEL = 'deepseek-chat';   // DeepSeek 对话模型；如你的账号是别的模型串，改这里即可
+const AI_MODEL = 'deepseek-v4-pro';   // DeepSeek 模型串；如账号支持的名称不同，改这里即可
 
 /* -------------------------------------------------------------------------
    SF 风格图标（内联 SVG，无 emoji）
