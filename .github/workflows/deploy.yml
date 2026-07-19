@@ -102,6 +102,21 @@ jobs:
                     add_header Cache-Control "no-store";
                 }
 
+                # 汇率代理：/api/fxrate → 中国货币网人民币汇率中间价（每日）
+                location = /api/fxrate {
+                    proxy_pass https://www.chinamoney.com.cn/r/cms/www/chinamoney/data/fx/ccpr.json;
+                    proxy_set_header Host www.chinamoney.com.cn;
+                    proxy_set_header Referer https://www.chinamoney.com.cn/chinese/bkccpr/;
+                    proxy_set_header User-Agent "Mozilla/5.0";
+                    proxy_ssl_server_name on;
+                    proxy_ssl_name www.chinamoney.com.cn;
+                    resolver 119.29.29.29 223.5.5.5 valid=300s;
+                    resolver_timeout 5s;
+                    proxy_connect_timeout 10s;
+                    proxy_read_timeout 15s;
+                    add_header Cache-Control "no-store";
+                }
+
                 # AI 代理：浏览器同源 POST /api/ai-review → DeepSeek（密钥由服务器 include 注入）
                 location = /api/ai-review {
                     proxy_pass https://api.deepseek.com/chat/completions;

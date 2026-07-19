@@ -133,6 +133,73 @@ function bigClassOf(cat) {
   return '其它';
 }
 
+/* -------------------------------------------------------------------------
+   汇率（美元/人民币，每日按中间价更新）+ 理财/存款年化利息
+   ------------------------------------------------------------------------- */
+const FX_DEFAULT = 6.78;
+function currentFx() { return num(STATE.portfolio && STATE.portfolio.fxRate, FX_DEFAULT) || FX_DEFAULT; }
+
+// 资产按当日汇率折算人民币（美元资产用当前中间价，人民币资产原值）
+function assetCny(a, fx) {
+  fx = fx || currentFx();
+  if (a.currency === 'USD') return num(a.amount) * fx;
+  return num(a.cny != null ? a.cny : a.amount);
+}
+
+// 年化利率：理财/存款 —— 美元 3%，人民币按实际（从名称/备注解析，默认活期近似）
+function annualRateOf(a) {
+  if (a.annualRate != null) return num(a.annualRate);
+  const cat = a.category, cur = a.currency, text = (a.name || '') + (a.note || '');
+  if (cat === '理财(QDII)') return cur === 'USD' ? 0.03 : 0.03;
+  if (cat === '定期存款') {
+    if (cur === 'USD') return 0.03;
+    const m = text.match(/([\d.]+)\s*%/); return m ? parseFloat(m[1]) / 100 : 0.014;
+  }
+  if (/货币基金|朝朝宝/.test(a.name || '')) return 0.015;   // 货基年化约 1.5%
+  if (cur === 'USD' && cat === '香港账户现金' && /定期/.test(text)) return 0.03;
+  return 0;
+}
+
+// 收益：理财/存款 → 年化利息（美元按当日中间价折人民币）；其它 → 浮盈亏
+function assetIncome(a, fx) {
+  fx = fx || currentFx();
+  const rate = annualRateOf(a);
+  if (rate > 0) {
+    const cny = num(a.amount) * rate * (a.currency === 'USD' ? fx : 1);
+    return { value: cny, kind: 'interest', rate };
+  }
+  return { value: a.pnl != null ? num(a.pnl) : null, kind: 'pnl' };
+}
+
+// 尝试从中国货币网获取美元/人民币中间价（经服务器 /api/fxrate 代理）；失败则用手动/默认值
+async function fetchCentralParity() {
+  const res = await fetch('/api/fxrate', { cache: 'no-store' });
+  if (!res.ok) throw new Error('接口返回 ' + res.status);
+  const text = await res.text();
+  let data; try { data = JSON.parse(text); } catch (e) { data = null; }
+  // 尽力从返回结构里找出“美元/人民币”的中间价
+  let rate = null, date = '';
+  const scan = (obj) => {
+    if (!obj || rate) return;
+    if (Array.isArray(obj)) { obj.forEach(scan); return; }
+    if (typeof obj === 'object') {
+      const name = JSON.stringify(obj.vrtEername || obj.ccprName || obj.foreignCName || obj.currency || '');
+      if (/美元|USD/i.test(name)) {
+        const p = parseFloat(obj.price || obj.ccpr || obj.value);
+        if (p > 5 && p < 9) { rate = p; date = obj.date || obj.lastDate || ''; }
+      }
+      Object.values(obj).forEach(scan);
+    }
+  };
+  if (data) scan(data);
+  if (!rate) { // 兜底：整段文本里找 USD/CNY 附近 6~8 之间的数
+    const m = text.match(/美元[^0-9]{0,20}([67]\.\d{3,4})/) || text.match(/USD[^0-9]{0,20}([67]\.\d{3,4})/);
+    if (m) rate = parseFloat(m[1]);
+  }
+  if (!rate) throw new Error('未解析到美元中间价');
+  return { rate, date };
+}
+
 // 构建“7/19 初始数据”状态（导入资产 + 灌入股票持仓 + 设定总资产）
 function buildSeedState() {
   const assets = SEED_ASSETS.map(a => Object.assign({ id: uid() }, a));
@@ -150,7 +217,7 @@ function buildSeedState() {
     settings: Object.assign({}, DEFAULT_SETTINGS),
     positions,
     assets,
-    portfolio: { totalAssets: Math.round(SEED_TOTAL), asOfDate: SEED_DATE },
+    portfolio: { totalAssets: Math.round(SEED_TOTAL), asOfDate: SEED_DATE, fxRate: FX_DEFAULT },
   };
 }
 
@@ -1398,6 +1465,9 @@ VIEWS.settings = function (app) {
         <input id="st-dd" type="number" step="1" value="${s.maxDrawdown}"/></div>
       <div class="field"><label>总资产</label>
         <input id="st-total" type="number" step="1000" value="${STATE.portfolio.totalAssets||1000000}"/></div>
+      <div class="field"><label>美元/人民币中间价</label>
+        <input id="st-fx" type="number" step="0.0001" value="${currentFx()}"/>
+        <p class="inline-note">美元资产与美元利息按此汇率折人民币；「投资组合」页可一键按中间价自动更新。</p></div>
     </div>
     <div class="row" style="margin-top:6px">
       <button class="btn" id="st-save" style="flex:0 0 auto">保存设置</button>
@@ -1414,6 +1484,7 @@ VIEWS.settings = function (app) {
     s.profitLockThreshold = num(card.querySelector('#st-lock').value, 30);
     s.maxDrawdown = num(card.querySelector('#st-dd').value, 15);
     STATE.portfolio.totalAssets = num(card.querySelector('#st-total').value, 1000000);
+    STATE.portfolio.fxRate = num(card.querySelector('#st-fx').value, FX_DEFAULT) || FX_DEFAULT;
     saveState();
     alert('设置已保存');
     render();
@@ -1561,30 +1632,62 @@ VIEWS.portfolio = function (app) {
     return;
   }
 
-  const total = assets.reduce((s, a) => s + a.cny, 0);
-  const byBig = sumBy(assets, a => bigClassOf(a.category));
-  const byCat = sumBy(assets, a => a.category);
-  const byCur = sumBy(assets, a => a.currency);
+  const fx = currentFx();
+  const cnyOf = a => assetCny(a, fx);
+  const total = assets.reduce((s, a) => s + cnyOf(a), 0);
+  const byBig = {}, byCat = {}, byCur = {};
+  assets.forEach(a => {
+    const v = cnyOf(a);
+    byBig[bigClassOf(a.category)] = (byBig[bigClassOf(a.category)] || 0) + v;
+    byCat[a.category] = (byCat[a.category] || 0) + v;
+    byCur[a.currency] = (byCur[a.currency] || 0) + v;
+  });
   const usdCny = byCur['USD'] || 0;
-  const totalPnl = assets.reduce((s, a) => s + (num(a.pnl) || 0), 0);
   const pct = v => (v / total * 100);
+  let interestTotal = 0, pnlTotal = 0;
+  assets.forEach(a => {
+    const inc = assetIncome(a, fx);
+    if (inc.kind === 'interest') interestTotal += inc.value;
+    else if (inc.value != null) pnlTotal += inc.value;
+  });
+
+  // 汇率控制条（美元/人民币中间价，每日更新）
+  const fxBar = el(`<div class="card" style="padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+    <span>${icon('globe')} 美元/人民币中间价：<strong id="fx-val">${fx.toFixed(4)}</strong>
+      <span class="inline-note" id="fx-note">${STATE.portfolio.fxAsOf ? '中间价 ' + STATE.portfolio.fxAsOf : '（手动/默认，可更新或在设置修改）'}</span></span>
+    <button class="btn secondary small" id="fx-upd" style="margin-left:auto">${icon('refresh')} 更新中间价</button>
+  </div>`);
+  app.appendChild(fxBar);
+  fxBar.querySelector('#fx-upd').onclick = async (e) => {
+    const b = e.currentTarget; const old = b.innerHTML; b.disabled = true; b.innerHTML = icon('refresh', 'spin') + ' 获取中…';
+    try {
+      const { rate, date } = await fetchCentralParity();
+      STATE.portfolio.fxRate = rate;
+      STATE.portfolio.fxAsOf = date || new Date().toISOString().slice(0, 10);
+      saveState(); render();
+    } catch (err) {
+      b.disabled = false; b.innerHTML = old;
+      fxBar.querySelector('#fx-note').textContent = '自动获取失败（' + err.message + '），可在「设置」手动填当日中间价';
+    }
+  };
 
   // 顶部统计
   app.appendChild(el(`
     <div class="stat-grid" style="margin-bottom:16px">
       <div class="stat"><div class="label">${icon('wallet')} 总资产</div>
-        <div class="value" style="font-size:22px">${fmtMoney(total)}</div><div class="sub">折合人民币</div></div>
-      <div class="stat"><div class="label">${icon('pie')} 权益占比</div>
-        <div class="value">${fmtPct(pct(byBig['权益']||0),0)}</div><div class="sub">股票 + 偏股基金</div></div>
+        <div class="value" style="font-size:22px">${fmtMoney(total)}</div><div class="sub">折合人民币（当日汇率）</div></div>
       <div class="stat"><div class="label">${icon('globe')} 美元敞口</div>
         <div class="value">${fmtPct(pct(usdCny),0)}</div><div class="sub">${fmtMoney(usdCny)}</div></div>
-      <div class="stat"><div class="label">持仓浮盈亏</div>
-        <div class="value" style="color:${totalPnl>=0?'var(--green-ink)':'var(--red-ink)'};font-size:22px">${totalPnl>=0?'+':''}${fmtMoney(totalPnl)}</div>
+      <div class="stat"><div class="label">${icon('coins')} 年化利息(估)</div>
+        <div class="value" style="color:var(--green-ink);font-size:22px">+${fmtMoney(interestTotal)}</div>
+        <div class="sub">美元 3% · 人民币实际</div></div>
+      <div class="stat"><div class="label">股票/基金/黄金浮盈亏</div>
+        <div class="value" style="color:${pnlTotal>=0?'var(--green-ink)':'var(--red-ink)'};font-size:22px">${pnlTotal>=0?'+':''}${fmtMoney(pnlTotal)}</div>
         <div class="sub">有盈亏记录部分合计</div></div>
     </div>
   `));
 
-  // 大类饼图 + 币种
+  // 大类饼图
   const allocCard = el(`<div class="card"><h3>${icon('pie')} 大类配置</h3></div>`);
   allocCard.appendChild(buildPie(normalize(byBig)));
   app.appendChild(allocCard);
@@ -1596,28 +1699,35 @@ VIEWS.portfolio = function (app) {
   catCard.appendChild(el(`<div class="table-scroll"><table>
     <thead><tr><th>类别</th><th class="num">金额</th><th class="num">占比</th></tr></thead>
     <tbody>${catRows}
-      <tr class="total-row"><td>人民币现金 · 美元敞口</td><td class="num">${fmtMoney(byCur['CNY']||0)} · ${fmtMoney(usdCny)}</td>
+      <tr class="total-row"><td>人民币 · 美元敞口</td><td class="num">${fmtMoney(byCur['CNY']||0)} · ${fmtMoney(usdCny)}</td>
       <td class="num">${fmtPct(pct(byCur['CNY']||0),0)} · ${fmtPct(pct(usdCny),0)}</td></tr>
     </tbody></table></div>`));
   app.appendChild(catCard);
 
-  // 持仓明细
+  // 持仓明细（收益列：理财/存款显示年化利息，其它显示浮盈亏）
   const holdCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('coins')} 全部持仓（${assets.length}）</h3></div>`);
-  const hrows = assets.slice().sort((a, b) => b.cny - a.cny).map(a => {
-    const pnl = num(a.pnl);
-    const pnlCell = a.pnl != null ? `<span style="color:${pnl>=0?'var(--green-ink)':'var(--red-ink)'}">${pnl>=0?'+':''}${fmtMoney(pnl)}</span>` : '—';
+  const hrows = assets.slice().sort((a, b) => cnyOf(b) - cnyOf(a)).map(a => {
+    const v = cnyOf(a);
+    const inc = assetIncome(a, fx);
+    let incCell;
+    if (inc.kind === 'interest') {
+      incCell = `<span style="color:var(--green-ink)" title="年化利息 ${(inc.rate*100).toFixed(2)}%${a.currency==='USD'?'（美元按中间价折算）':''}">+${fmtMoney(inc.value)}<span class="inline-note"> /年</span></span>`;
+    } else if (inc.value != null) {
+      incCell = `<span style="color:${inc.value>=0?'var(--green-ink)':'var(--red-ink)'}">${inc.value>=0?'+':''}${fmtMoney(inc.value)}</span>`;
+    } else { incCell = '—'; }
     return `<tr>
       <td>${escapeHtml(a.name)}${a.code?`<br><span class="inline-note">${escapeHtml(a.code)}</span>`:''}</td>
       <td><span class="tag-chip">${escapeHtml(a.category)}</span></td>
       <td>${a.currency}</td>
-      <td class="num">${fmtMoney(a.cny)}</td>
-      <td class="num">${fmtPct(pct(a.cny),1)}</td>
-      <td class="num">${pnlCell}</td>
+      <td class="num">${fmtMoney(v)}</td>
+      <td class="num">${fmtPct(pct(v),1)}</td>
+      <td class="num">${incCell}</td>
     </tr>`;
   }).join('');
   holdCard.appendChild(el(`<div class="table-scroll"><table>
-    <thead><tr><th>名称</th><th>类别</th><th>币种</th><th class="num">折合人民币</th><th class="num">占比</th><th class="num">浮盈亏</th></tr></thead>
+    <thead><tr><th>名称</th><th>类别</th><th>币种</th><th class="num">折合人民币</th><th class="num">占比</th><th class="num">收益/利息</th></tr></thead>
     <tbody>${hrows}</tbody></table></div>`));
+  holdCard.appendChild(el(`<p class="inline-note">收益列：理财/存款显示<strong>年化利息</strong>（美元按 3%、人民币按实际利率，美元金额按当日中间价 ${fx.toFixed(4)} 折人民币）；股票/基金/黄金显示<strong>浮盈亏</strong>。</p>`));
   app.appendChild(holdCard);
 
   // AI 深度点评
@@ -1630,17 +1740,17 @@ VIEWS.portfolio = function (app) {
   const eff = Calc.effectiveBets(STATE.positions || []);
   const bigLines = Object.entries(byBig).map(([k, v]) => `${k} ${fmtPct(pct(v),1)}（${fmtMoney(v)}）`).join('；');
   const catLines = Object.entries(byCat).sort((a,b)=>b[1]-a[1]).map(([k, v]) => `${k} ${fmtPct(pct(v),1)}`).join('、');
-  const topHold = assets.slice().sort((a,b)=>b.cny-a.cny).slice(0, 10)
-    .map(a => `${a.name}(${a.category},${fmtPct(pct(a.cny),1)}${a.pnl!=null?','+(num(a.pnl)>=0?'盈':'亏')+Math.abs(Math.round(num(a.pnl))):''})`).join('；');
+  const topHold = assets.slice().sort((a,b)=>cnyOf(b)-cnyOf(a)).slice(0, 10)
+    .map(a => `${a.name}(${a.category},${fmtPct(pct(cnyOf(a)),1)}${a.pnl!=null?','+(num(a.pnl)>=0?'盈':'亏')+Math.abs(Math.round(num(a.pnl))):''})`).join('；');
   const factorTop = Object.entries(eff.factorWeights || {}).sort((a,b)=>b[1]-a[1]).slice(0,3)
     .map(([f,w]) => `${f} ${fmtPct(w*100,0)}`).join('、');
   const summary =
-`【个人投资组合，截止${STATE.portfolio.asOfDate||'今日'}】
+`【个人投资组合，截止${STATE.portfolio.asOfDate||'今日'}，美元/人民币中间价 ${fx.toFixed(4)}】
 总资产：${fmtMoney(total)}（折合人民币）。
 大类配置：${bigLines}。
 按类别：${catLines}。
 币种敞口：人民币 ${fmtPct(pct(byCur['CNY']||0),0)}，美元 ${fmtPct(pct(usdCny),0)}。
-有盈亏记录部分合计浮盈亏：${totalPnl>=0?'+':''}${fmtMoney(totalPnl)}。
+理财/存款年化利息合计约 ${fmtMoney(interestTotal)}（美元按 3%、人民币按实际利率，美元已折人民币）；股票/基金/黄金浮盈亏合计 ${pnlTotal>=0?'+':''}${fmtMoney(pnlTotal)}。
 主要持仓（占比/盈亏，占比为占总资产）：${topHold}。
 股票子组合的“有效独立赌注数”约 ${eff.effN?eff.effN.toFixed(1):'-'}（名义 ${(STATE.positions||[]).length} 只），因子集中度前三：${factorTop||'无'}。
 请据此诊断健康度并给出下一步建议。`;
