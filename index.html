@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>理性仓位管理工具</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">◈</span>
+      <div>
+        <h1>理性仓位管理工具</h1>
+        <p class="tagline">投资纪律的守门员 · 不预测涨跌，只约束人性</p>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <span class="storage-badge" title="所有数据仅保存在本机浏览器，不上传">🔒 本地存储</span>
+    </div>
+  </header>
+
+  <nav class="tabs" id="tabs">
+    <button class="tab active" data-view="dashboard">概览</button>
+    <button class="tab" data-view="positions">持仓</button>
+    <button class="tab" data-view="kelly">① 凯利定注</button>
+    <button class="tab" data-view="diversify">② 组合分散</button>
+    <button class="tab" data-view="drawdown">③ 回撤控制</button>
+    <button class="tab" data-view="stoploss">④ 止损防御</button>
+    <button class="tab" data-view="rules">⑤ 铁律校验</button>
+    <button class="tab" data-view="planner">⑥ 加仓/利润</button>
+    <button class="tab" data-view="settings">设置</button>
+  </nav>
+
+  <main id="app"></main>
+
+  <footer class="footer">
+    <span>核心不是预测市场，而是约束人性 · 所有模型依赖你的诚实输入</span>
+  </footer>
+
+  <!-- Blocking modal for iron-rule confirmations -->
+  <div class="modal-overlay hidden" id="modal-overlay">
+    <div class="modal" id="modal"></div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
