@@ -258,6 +258,17 @@ function buildSeedState() {
   };
 }
 
+// 真正的空状态（「清空全部数据」用；不能走 loadState 兜底，否则会重新载入种子数据）
+function buildEmptyState() {
+  return {
+    settings: Object.assign({}, DEFAULT_SETTINGS),
+    positions: [],
+    assets: [],
+    portfolio: { totalAssets: 0, asOfDate: '', fxRate: FX_DEFAULT },
+    snapshots: [],
+  };
+}
+
 function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -458,7 +469,7 @@ const Calc = {
   // 反映实际押了几个"独立赌注"
   effectiveBets(positions) {
     const total = positions.reduce((s, p) => s + (Number(p.weight) || 0), 0);
-    if (total <= 0) return { effN: 0, factorWeights: {}, total: 0 };
+    if (total <= 0) return { effN: 0, factorWeights: {}, total: 0, factorSum: {} };
     const factorSum = {};
     positions.forEach(p => {
       const f = p.factor || '其它';
@@ -504,6 +515,12 @@ function fmtMoney(x) {
 function num(v, def = 0) {
   const n = parseFloat(v);
   return isFinite(n) ? n : def;
+}
+// 凯利系数显示：0.25→¼，0.5→½，其它原样
+function fracLabel(x) {
+  if (Math.abs(x - 0.25) < 1e-9) return '¼';
+  if (Math.abs(x - 0.5) < 1e-9) return '½';
+  return String(+x.toFixed(2));
 }
 function el(html) {
   const t = document.createElement('template');
@@ -633,7 +650,7 @@ VIEWS.dashboard = function (app) {
   if (!ddOk) checks.push(['red', `回撤预算超支：股票预估最大回撤 ${fmtPct(usedDrawdown,1)} > 阈值 ${s.maxDrawdown}%`]);
   if (!concentrationOk && maxFactor) checks.push(['red', `因子「${maxFactor}」占 ${fmtPct(maxFactorW*100,0)} > 60%，过度集中于单一 beta`]);
   positions.forEach(p => {
-    if (num(p.weight) > s.singleCap) checks.push(['amber', `${p.name||'未命名'} 占 ${fmtPct(num(p.weight),1)} 超单股上限 ${s.singleCap}%`]);
+    if (num(p.weight) > s.singleCap + 1e-9) checks.push(['amber', `${escapeHtml(p.name||'未命名')} 占 ${fmtPct(num(p.weight),1)} 超单股上限 ${s.singleCap}%`]);
   });
   if (effN > 0 && effN < 2 && positions.length >= 3) checks.push(['amber', `持有 ${positions.length} 只，但有效持仓数仅 ${effN.toFixed(1)}——假分散`]);
   if (checks.length === 0 && positions.length > 0) checks.push(['green', '当前组合通过全部纪律检查']);
@@ -661,6 +678,10 @@ function buildPie(factorWeights, opts) {
   opts = opts || {};
   const entries = Object.entries(factorWeights).filter(([, w]) => w > 0).sort((a, b) => b[1] - a[1]);
   const wrap = el('<div class="pie-wrap"></div>');
+  if (entries.length === 0) {
+    wrap.appendChild(el('<p class="inline-note">暂无可视化数据（各持仓占比为 0 或未录入）。</p>'));
+    return wrap;
+  }
   const size = 184, R = 84, rIn = 50, cx = 92, cy = 92;
   const total = opts.total;
   // 用「圆环 + stroke 分隔」画甜甜圈：每段是一条描边圆弧，段间留细缝，中心镂空干净。
@@ -966,13 +987,17 @@ VIEWS.positions = function (app) {
       <div class="field"><label>占比 %（自动，可手填覆盖）</label><input id="np-weight" type="number" step="0.1" placeholder="留空则按数量自动算"/></div>
     </div>
     <div class="alert blue" id="np-calc"><span class="icon">${icon('calc')}</span><div id="np-calc-text">填入持股数量与现价后，这里自动显示市值 / 占比 / 浮盈亏。</div></div>
-    <button class="btn" id="np-add">＋ 添加持仓</button>
+    <button class="btn" id="np-add" style="margin-top:14px">＋ 添加持仓</button>
     <input type="hidden" id="np-edit-id"/>
     <input type="hidden" id="np-pnl"/>
   `));
   app.appendChild(form);
 
   const $ = sel => form.querySelector(sel);
+
+  // 占比手填覆盖标记：用户手动改过占比后，不再被「数量×现价」自动回填冲掉；
+  // 一旦数量/成本价/现价变动，则回到自动模式
+  let weightDirty = false;
 
   // 实时计算：市值 / 占比 / 浮盈亏
   function recalc() {
@@ -981,7 +1006,7 @@ VIEWS.positions = function (app) {
     const cost = num($('#np-cost').value);
     const value = (shares > 0 && price > 0) ? shares * price : 0;
     let weight = null, pnl = null;
-    if (value > 0 && totalAssets > 0) {
+    if (value > 0 && totalAssets > 0 && !weightDirty) {
       weight = value / totalAssets * 100;
       $('#np-weight').value = weight.toFixed(2);   // 自动回填占比
     }
@@ -998,7 +1023,8 @@ VIEWS.positions = function (app) {
     if (totalAssets <= 0) parts.push('<span style="color:var(--amber)">（未设总资产，去「设置」填写后才能自动算占比）</span>');
     $('#np-calc-text').innerHTML = parts.join(' &nbsp;·&nbsp; ');
   }
-  ['#np-shares', '#np-price', '#np-cost', '#np-weight'].forEach(s => $(s).addEventListener('input', recalc));
+  ['#np-shares', '#np-price', '#np-cost'].forEach(s => $(s).addEventListener('input', () => { weightDirty = false; recalc(); }));
+  $('#np-weight').addEventListener('input', () => { weightDirty = true; recalc(); });
 
   // 「获取」：按代码拉取名称与最新价
   $('#np-fetch').onclick = async () => {
@@ -1024,8 +1050,8 @@ VIEWS.positions = function (app) {
     const shares = num($('#np-shares').value);
     const price = num($('#np-price').value);
     const cost = num($('#np-cost').value);
-    // 优先按 数量×现价÷总资产 算占比；无数量时用手填占比
-    let weight = (shares > 0 && price > 0 && totalAssets > 0)
+    // 优先按 数量×现价÷总资产 算占比；用户手填覆盖过占比则尊重手填
+    let weight = (shares > 0 && price > 0 && totalAssets > 0 && !weightDirty)
       ? shares * price / totalAssets * 100
       : num($('#np-weight').value);
     const pnl = (cost > 0 && price > 0) ? (price - cost) / cost * 100 : num($('#np-pnl').value);
@@ -1118,6 +1144,7 @@ VIEWS.positions = function (app) {
       form.querySelector('#np-price').value = p.price;
       form.querySelector('#np-edit-id').value = p.id;
       form.querySelector('#np-add').textContent = '✓ 保存修改';
+      weightDirty = false;   // 载入已有持仓时回到自动模式
       recalc();
       window.scrollTo({ top: 0, behavior: 'smooth' });
     });
@@ -1129,10 +1156,13 @@ VIEWS.positions = function (app) {
    模块 1 — 凯利公式计算器（单标的下注）
    ========================================================================= */
 VIEWS.kelly = function (app) {
+  const s = STATE.settings;
+  const frac = Math.min(1, Math.max(0.05, num(s.kellyFraction, 0.25)));
+  const fracTxt = fracLabel(frac);
   app.appendChild(el(`
     <div class="view-head">
       <h2>① 凯利定注 · 单标的下注</h2>
-      <p>回答"这一只该下多少注"。EV 为负直接淘汰，默认执行值为四分之一凯利。</p>
+      <p>回答"这一只该下多少注"。EV 为负直接淘汰，默认执行值为 ${fracTxt} 凯利（系数可在「设置」调整）。</p>
     </div>
   `));
 
@@ -1207,7 +1237,6 @@ VIEWS.kelly = function (app) {
     const ev = Calc.ev(p, up, down);           // EV 前置闸门
     const b = Calc.odds(up, down);
     const f = Calc.kelly(p, b);
-    const s = STATE.settings;
 
     // EV 前置闸门：EV 为负直接淘汰，不进入凯利
     if (ev < 0) {
@@ -1226,7 +1255,7 @@ VIEWS.kelly = function (app) {
     const tiers = [
       { label: '满凯利', val: f, rec: false },
       { label: '半凯利', val: f * 0.5, rec: false },
-      { label: '¼ 凯利', val: f * 0.25, rec: true },
+      { label: fracTxt + ' 凯利', val: f * frac, rec: true },
     ];
 
     resBox.appendChild(el(`
@@ -1261,15 +1290,15 @@ VIEWS.kelly = function (app) {
       </div></div>`));
     }
 
-    // 与单股上限对照
-    const quarterPct = f * 0.25 * 100;
-    if (quarterPct > s.singleCap) {
+    // 与单股上限对照（加 epsilon 容差：避免浮点误差把"恰好等于上限"误判为"超过"）
+    const fracPct = f * frac * 100;
+    if (fracPct > s.singleCap + 1e-9) {
       resBox.appendChild(el(`<div class="alert amber"><span class="icon">${icon('warn')}</span><div>
-        ¼ 凯利目标 ${quarterPct.toFixed(1)}% 已超过你的单股上限 ${s.singleCap}%。即便凯利允许，也建议以单股上限为准（分散优先）。
+        ${fracTxt} 凯利目标 ${fracPct.toFixed(1)}% 已超过你的单股上限 ${s.singleCap}%。即便凯利允许，也建议以单股上限为准（分散优先）。
       </div></div>`));
     } else {
       resBox.appendChild(el(`<div class="alert green"><span class="icon">${icon('check')}</span><div>
-        推荐执行 <strong>¼ 凯利 = ${quarterPct.toFixed(1)}%</strong>，在单股上限 ${s.singleCap}% 之内。1/4 凯利用于降低参数误差，实战更稳。
+        推荐执行 <strong>${fracTxt} 凯利 = ${fracPct.toFixed(1)}%</strong>，在单股上限 ${s.singleCap}% 之内。分数凯利用于降低参数误差，实战更稳。
       </div></div>`));
     }
   };
@@ -1295,8 +1324,18 @@ VIEWS.diversify = function (app) {
     return;
   }
 
-  const { effN, factorWeights, factorSum } = Calc.effectiveBets(STATE.positions);
+  const { effN, factorWeights, factorSum, total } = Calc.effectiveBets(STATE.positions);
   const nHoldings = STATE.positions.length;
+
+  // 占比全为 0 时无法计算分散度，给出引导而非渲染无意义的 0
+  if (total <= 0) {
+    app.appendChild(el(`<div class="card"><div class="empty"><div class="big">${icon('pie')}</div>
+      <p>各持仓占比均为 0，无法计算有效持仓数。请到「持仓」页填写占比，或填「持股数量」自动计算。</p>
+      <button class="btn" id="goto-pos2" style="margin-top:12px">前往填写占比</button>
+    </div></div>`));
+    app.querySelector('#goto-pos2').onclick = () => switchView('positions');
+    return;
+  }
 
   const card = el('<div class="card"></div>');
   card.appendChild(el(`
@@ -1341,7 +1380,6 @@ VIEWS.diversify = function (app) {
 
   // 因子合并明细
   const detail = el('<div class="card" style="margin-top:16px"><h3>因子分组明细</h3><p class="hint">同因子仓位合并 → 得出实际独立赌注</p></div>');
-  const total = STATE.positions.reduce((a, p) => a + num(p.weight), 0);
   const scroll = el('<div class="table-scroll"></div>');
   const factorGroups = {};
   STATE.positions.forEach(p => {
@@ -1492,7 +1530,7 @@ VIEWS.stoploss = function (app) {
   card.appendChild(el(`
     <div class="grid grid-2">
       <div class="field"><label>总资产（自动汇总）</label>
-        <input id="sl-total" type="number" step="1000" value="${portfolioTotal()||1000000}"/></div>
+        <input id="sl-total" type="number" step="1000" value="${portfolioTotal()>0?portfolioTotal():''}" placeholder="如 1000000"/></div>
       <div class="field"><label>单笔可接受最大亏损（占总资产）</label>
         <div class="suffix-input"><input id="sl-risk" type="number" step="0.5" value="${s.perTradeRisk}"/><span>%</span></div></div>
     </div>
@@ -1613,7 +1651,7 @@ VIEWS.rules = function (app) {
       <tr><td>正金字塔校验</td><td>高位加仓金额 ≥ 上次</td></tr>
       <tr><td>因子集中度</td><td>加仓后某因子 > 60%</td></tr>
       <tr><td>现金蓄水池</td><td>总仓位 > ${100 - s.cashFloor}%（现金 < ${s.cashFloor}%）</td></tr>
-      <tr><td>胜率诚实度</td><td>胜率 > 60% 无充分理由</td></tr>
+      <tr><td>胜率诚实度</td><td>胜率 > 60% 无充分理由（在「① 凯利定注」中强制校验）</td></tr>
     </tbody></table></div></div>`);
   app.appendChild(rulesRef);
 
@@ -1651,9 +1689,9 @@ VIEWS.rules = function (app) {
     if (pnl < 0) violations.push('禁止亏损加仓：当前浮亏 ' + fmtPct(pnl,1) + ' 仍加仓，是倒金字塔陷阱起点，禁止。');
     // 铁律2 禁止下跌趋势加仓
     if (trend === '下跌' || trend === '加速下跌') violations.push('禁止下跌趋势加仓：趋势为「' + trend + '」，加仓＝接刀，等企稳。');
-    // 铁律3 单股仓位上限
+    // 铁律3 单股仓位上限（epsilon 容差，避免浮点误判"恰好等于上限"）
     const after = cur + add;
-    if (after > s.singleCap) violations.push('单股仓位上限：加仓后占比 ' + fmtPct(after,1) + ' > 上限 ' + s.singleCap + '%，违反分散原则。');
+    if (after > s.singleCap + 1e-9) violations.push('单股仓位上限：加仓后占比 ' + fmtPct(after,1) + ' > 上限 ' + s.singleCap + '%，违反分散原则。');
     // 铁律4 正金字塔校验
     if (addAmt > 0 && lastAmt > 0 && addAmt >= lastAmt) violations.push('正金字塔校验：本次加仓金额 ' + fmtMoney(addAmt) + ' ≥ 上次 ' + fmtMoney(lastAmt) + '，高位应递减加仓，你正头重脚轻。');
     // 铁律5 因子集中度（加仓后）
@@ -1672,8 +1710,10 @@ VIEWS.rules = function (app) {
     }
     // 铁律6 现金蓄水池
     {
-      // 加仓后总仓位 = 现有总仓位 + 本次加仓（若选中已有持仓，cur 已计入 totalWeight，故只加 add）
-      const afterTotal = totalWeight + add;
+      // 加仓后总仓位 = 现有总仓位 + 本次加仓。
+      // 选中已有持仓：cur 已计入 totalWeight，只加 add；
+      // 手动输入（标的不在列表）：totalWeight 不含该股，需加上 cur + add。
+      const afterTotal = totalWeight + (selId ? add : cur + add);
       if (afterTotal > (100 - s.cashFloor)) violations.push('现金蓄水池：加仓后总仓位 ' + fmtPct(afterTotal,1) + ' 使现金 < ' + s.cashFloor + '%，丧失回调加仓能力。');
     }
 
@@ -1734,7 +1774,7 @@ VIEWS.planner = function (app) {
     <div class="grid grid-3">
       <div class="field"><label>最低价（买最多）</label><input id="py-low" type="number" step="0.01" placeholder="18"/></div>
       <div class="field"><label>最高价（买最少）</label><input id="py-high" type="number" step="0.01" placeholder="24"/></div>
-      <div class="field"><label>分几批</label><input id="py-n" type="number" step="1" value="4"/></div>
+      <div class="field"><label>分几批（2–12）</label><input id="py-n" type="number" step="1" min="2" max="12" value="4"/></div>
     </div>
     <div class="field"><label>本轮计划总投入金额</label><input id="py-total" type="number" step="1000" placeholder="100000"/></div>
     <button class="btn" id="py-calc">生成分批计划</button>
@@ -1747,7 +1787,7 @@ VIEWS.planner = function (app) {
     box.innerHTML = '';
     const low = num(pyramid.querySelector('#py-low').value);
     const high = num(pyramid.querySelector('#py-high').value);
-    const n = Math.max(2, Math.floor(num(pyramid.querySelector('#py-n').value, 4)));
+    const n = Math.min(12, Math.max(2, Math.floor(num(pyramid.querySelector('#py-n').value, 4)))); // 批次 2–12，防误输超大值
     const total = num(pyramid.querySelector('#py-total').value);
     if (low <= 0 || high <= low || total <= 0) {
       box.appendChild(el(`<div class="alert red"><span class="icon">${icon('danger')}</span><div>请确保最高价 > 最低价，且金额为正。</div></div>`));
@@ -1852,7 +1892,7 @@ VIEWS.settings = function (app) {
       <div class="field"><label>最大回撤阈值 %（默认 15）</label>
         <input id="st-dd" type="number" step="1" value="${s.maxDrawdown}"/></div>
       <div class="field"><label>总资产${(STATE.assets||[]).length ? '（由投资组合自动汇总）' : ''}</label>
-        <input id="st-total" type="number" step="1000" value="${portfolioTotal()||1000000}" ${(STATE.assets||[]).length ? 'readonly style="background:rgba(120,120,128,0.08);color:var(--muted)"' : ''}/>
+        <input id="st-total" type="number" step="1000" value="${portfolioTotal()>0?portfolioTotal():''}" placeholder="如 1000000" ${(STATE.assets||[]).length ? 'readonly style="background:rgba(120,120,128,0.08);color:var(--muted)"' : ''}/>
         ${(STATE.assets||[]).length ? '<p class="inline-note">总资产 = 「投资组合」各资产按当日中间价折算后自动求和，随你在投资组合里增删/修改资产实时变化，无需手填。</p>' : ''}</div>
       <div class="field"><label>美元/人民币中间价</label>
         <input id="st-fx" type="number" step="0.0001" value="${currentFx()}"/>
@@ -1873,7 +1913,7 @@ VIEWS.settings = function (app) {
     s.profitLockThreshold = num(card.querySelector('#st-lock').value, 30);
     s.maxDrawdown = num(card.querySelector('#st-dd').value, 15);
     // 有投资组合明细时总资产自动汇总，不用手填值覆盖；无明细时才用手填兜底
-    if (!(STATE.assets || []).length) STATE.portfolio.totalAssets = num(card.querySelector('#st-total').value, 1000000);
+    if (!(STATE.assets || []).length) STATE.portfolio.totalAssets = num(card.querySelector('#st-total').value, 0);
     STATE.portfolio.fxRate = num(card.querySelector('#st-fx').value, FX_DEFAULT) || FX_DEFAULT;
     saveState();
     alert('设置已保存');
@@ -1927,9 +1967,9 @@ VIEWS.settings = function (app) {
     reader.readAsText(file);
   };
   dataCard.querySelector('#dm-clear').onclick = () => {
-    if (!confirm('确定清空全部持仓与设置？此操作不可撤销。')) return;
-    localStorage.removeItem(STORAGE_KEY);
-    STATE = loadState();
+    if (!confirm('确定清空全部持仓、资产与设置？此操作不可撤销。')) return;
+    STATE = buildEmptyState();
+    saveState();
     render();
   };
 };
@@ -2244,7 +2284,7 @@ VIEWS.portfolio = function (app) {
   catCard.appendChild(el(`<div class="table-scroll"><table>
     <thead><tr><th>类别</th><th class="num">金额</th><th class="num">占比</th></tr></thead>
     <tbody>${catRows}
-      <tr class="total-row"><td>人民币 · 美元敞口</td><td class="num">${fmtMoney(byCur['CNY']||0)} · ${fmtMoney(usdCny)}</td>
+      <tr class="total-row"><td>人民币计价 · 美元计价合计</td><td class="num">${fmtMoney(byCur['CNY']||0)} · ${fmtMoney(usdCny)}</td>
       <td class="num">${fmtPct(pct(byCur['CNY']||0),0)} · ${fmtPct(pct(usdCny),0)}</td></tr>
     </tbody></table></div>`));
   app.appendChild(catCard);

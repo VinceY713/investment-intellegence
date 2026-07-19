@@ -180,6 +180,9 @@ svg.icon { width: 1.15em; height: 1.15em; display: inline-block; vertical-align:
 
 /* ---------- Layout ---------- */
 main { max-width: 1080px; margin: 0 auto; padding: 22px 20px 72px; }
+/* 主区直接子元素统一留白：卡片与卡片、卡片与统计栅格之间不再粘连
+   （与既有 margin-bottom 相遇时按折叠取大值，不会叠加变宽） */
+main > * + * { margin-top: 16px; }
 .view-head { margin-bottom: 18px; padding: 0 2px; }
 .view-head h2 { margin: 0 0 4px; font-size: 23px; font-weight: 700; letter-spacing: -0.02em; }
 .view-head p { margin: 0; color: var(--muted); font-size: 13.5px; }
