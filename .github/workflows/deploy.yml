@@ -138,9 +138,20 @@ jobs:
                     add_header Cache-Control "no-store";
                 }
 
-                # 快照云端存储：GET 读取 / PUT 写入 单文件 JSON（Nginx 内置 WebDAV，无需额外后端）
-                # URL /api/snapshots → 文件 /var/lib/investment-intelligence/store/api/snapshots
+                # 云端存储：GET 读取 / PUT 写入 单文件 JSON（Nginx 内置 WebDAV，无需额外后端）
+                # /api/state → 整份数据（持仓/资产/设置/快照）；/api/snapshots → 旧版仅快照（保留兼容）
                 # 与全站一样在访问密码（Basic Auth）之后，仅本人可读写。
+                location = /api/state {
+                    root /var/lib/investment-intelligence/store;
+                    client_body_temp_path /var/lib/investment-intelligence/store/tmp;
+                    client_max_body_size 16m;
+                    dav_methods PUT;
+                    create_full_put_path on;
+                    dav_access user:rw group:rw all:r;
+                    default_type application/json;
+                    charset utf-8;
+                    add_header Cache-Control "no-store";
+                }
                 location = /api/snapshots {
                     root /var/lib/investment-intelligence/store;
                     client_body_temp_path /var/lib/investment-intelligence/store/tmp;

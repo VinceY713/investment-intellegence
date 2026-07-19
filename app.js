@@ -269,18 +269,20 @@ function buildEmptyState() {
   };
 }
 
+// 补齐字段默认值（本地/云端读入的状态都走这里）
+function applyStateDefaults(s) {
+  s.settings = Object.assign({}, DEFAULT_SETTINGS, s.settings || {});
+  s.positions = s.positions || [];
+  s.assets = s.assets || [];
+  s.portfolio = Object.assign({ totalAssets: Math.round(SEED_TOTAL) }, s.portfolio || {});
+  s.snapshots = s.snapshots || [];
+  return s;
+}
+
 function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const s = JSON.parse(raw);
-      s.settings = Object.assign({}, DEFAULT_SETTINGS, s.settings || {});
-      s.positions = s.positions || [];
-      s.assets = s.assets || [];
-      s.portfolio = Object.assign({ totalAssets: Math.round(SEED_TOTAL) }, s.portfolio || {});
-      s.snapshots = s.snapshots || [];
-      return s;
-    }
+    if (raw) return applyStateDefaults(JSON.parse(raw));
   } catch (e) { console.warn('状态读取失败', e); }
   return buildSeedState();   // 首次使用：自动载入 7/19 初始数据
 }
@@ -288,8 +290,10 @@ function loadState() {
 let STATE = loadState();
 
 function saveState() {
+  STATE.savedAt = Date.now();                       // 记录保存时刻，供多设备取较新者
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(STATE)); }
   catch (e) { console.warn('状态保存失败', e); }
+  scheduleCloudPush();                              // 同时（防抖）回传云端
 }
 
 function uid() {
@@ -341,78 +345,99 @@ function recordDailySnapshot() {
 }
 
 /* -------------------------------------------------------------------------
-   快照云端同步（服务器 Nginx WebDAV：GET 读取 / PUT 写入 单文件 JSON）
-   仅「资产趋势快照」上云，便于跨设备/清缓存后仍保留历史；其它数据仍仅存本地。
-   端点与全站一样在访问密码（Basic Auth）之后，浏览器自动带上同源凭证。
+   全量云端同步（服务器 Nginx WebDAV：GET 读取 / PUT 写入 单文件 JSON）
+   整份数据（持仓 / 资产 / 设置 / 快照）都存到你自己的服务器，换设备/清缓存自动恢复；
+   本机浏览器仅作离线缓存。端点在全站访问密码之后，浏览器自动带同源凭证。
+   多设备同时修改时，以最后保存（savedAt 较新）者为准。
    ------------------------------------------------------------------------- */
-const CLOUD_SNAP_URL = '/api/snapshots';
-// unknown | syncing | synced | local-only（云端不可用，退回仅本地）
-let cloudSnapStatus = 'unknown';
-let cloudSnapAt = null;
+const CLOUD_STATE_URL = '/api/state';
+// unknown | syncing | synced | local-only（云端不可用，先存本机，恢复后自动补传）
+let cloudStatus = 'unknown';
+let cloudAt = null;
+let cloudPushTimer = null;
+let cloudReady = false;      // 首次与云端对账完成前，不触发自动回传，避免空态覆盖云端
 
-// 按日期合并两组快照：后者优先（同日以 b 覆盖 a），按日期升序返回。
-function mergeSnapshots(a, b) {
-  const map = new Map();
-  (a || []).forEach(s => { if (s && s.date) map.set(s.date, s); });
-  (b || []).forEach(s => { if (s && s.date) map.set(s.date, s); });
-  return [...map.values()].sort((x, y) => x.date.localeCompare(y.date));
-}
-
-async function cloudLoadSnapshots() {
-  const res = await fetch(CLOUD_SNAP_URL, { cache: 'no-store' });
-  if (res.status === 404) return [];                 // 云端尚未创建 → 视为空
+async function cloudGetState() {
+  const res = await fetch(CLOUD_STATE_URL, { cache: 'no-store' });
+  if (res.status === 404) return null;               // 云端尚未创建
   if (!res.ok) throw new Error('云端读取 ' + res.status);
   const text = (await res.text()).trim();
-  if (!text) return [];
-  const data = JSON.parse(text);
-  return Array.isArray(data) ? data : (data.snapshots || []);
+  if (!text) return null;
+  return JSON.parse(text);
 }
 
-async function cloudSaveSnapshots(arr) {
-  const res = await fetch(CLOUD_SNAP_URL, {
+async function cloudPutState(state) {
+  const res = await fetch(CLOUD_STATE_URL, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(arr || []),
+    body: JSON.stringify(state),
   });
   if (!res.ok) throw new Error('云端保存 ' + res.status);
 }
 
-// 启动/手动：拉取云端 → 合并本地 → 记录今日 → 回写云端。任一步失败则退回仅本地。
-async function syncCloudSnapshots(opts) {
-  opts = opts || {};
-  cloudSnapStatus = 'syncing';
-  if (opts.onstatus) opts.onstatus();
-  let cloud;
+function scheduleCloudPush() {
+  if (!cloudReady) return;                           // 尚未与云端对账完成，先不推
+  if (cloudPushTimer) clearTimeout(cloudPushTimer);
+  cloudPushTimer = setTimeout(pushCloudNow, 800);    // 防抖合并连续保存
+}
+
+async function pushCloudNow() {
+  cloudPushTimer = null;
+  cloudStatus = 'syncing'; updateCloudBadges();
   try {
-    cloud = await cloudLoadSnapshots();
+    await cloudPutState(STATE);
+    cloudStatus = 'synced'; cloudAt = STATE.savedAt || Date.now();
   } catch (e) {
-    cloudSnapStatus = 'local-only';
-    if (opts.onstatus) opts.onstatus(e);
-    return false;
+    cloudStatus = 'local-only';
   }
-  // 云端历史 + 本地 合并（本地今日为最新，优先）；再按当前资产刷新今日
-  STATE.snapshots = mergeSnapshots(cloud, STATE.snapshots || []);
-  recordDailySnapshot();                              // 覆盖/新增今日并存本地
+  updateCloudBadges();
+}
+
+// 启动对账：拉云端 → 与本地取较新者 → 缺失方补齐。失败则退回仅本机。
+async function initCloudSync() {
+  cloudStatus = 'syncing'; updateCloudBadges();
+  let cloud = null;
   try {
-    await cloudSaveSnapshots(STATE.snapshots);
-    cloudSnapStatus = 'synced';
-    cloudSnapAt = todayStr();
+    cloud = await cloudGetState();
   } catch (e) {
-    cloudSnapStatus = 'local-only';
-    if (opts.onstatus) opts.onstatus(e);
-    return false;
+    cloudStatus = 'local-only'; cloudReady = true; updateCloudBadges();
+    return { changed: false };
   }
-  if (opts.onstatus) opts.onstatus();
-  return true;
+  let changed = false;
+  if (cloud && (cloud.savedAt || 0) > (STATE.savedAt || 0)) {
+    // 云端更新 → 采用云端并写入本机缓存
+    STATE = applyStateDefaults(cloud);
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(STATE)); } catch (e) {}
+    cloudStatus = 'synced'; cloudAt = STATE.savedAt; cloudReady = true; changed = true;
+  } else {
+    // 本地较新或云端为空 → 把本地推上去
+    cloudReady = true;
+    try { await cloudPutState(STATE); cloudStatus = 'synced'; cloudAt = STATE.savedAt || Date.now(); }
+    catch (e) { cloudStatus = 'local-only'; }
+  }
+  updateCloudBadges();
+  return { changed };
 }
 
 function cloudStatusText() {
-  switch (cloudSnapStatus) {
+  switch (cloudStatus) {
     case 'syncing': return '云端同步中…';
-    case 'synced': return '已同步到云端' + (cloudSnapAt ? '（' + cloudSnapAt + '）' : '');
-    case 'local-only': return '云端暂不可用，当前仅保存在本机';
+    case 'synced': return '已同步到云端（你的服务器）';
+    case 'local-only': return '云端暂不可用，已存本机，恢复后自动补传';
     default: return '未同步';
   }
+}
+function cloudDotColor() {
+  return cloudStatus === 'synced' ? 'var(--green)' : (cloudStatus === 'syncing' ? 'var(--amber)' : (cloudStatus === 'local-only' ? 'var(--red)' : 'var(--muted-2)'));
+}
+// 更新页面上任意云端状态指示（顶栏徽章 + 趋势页状态）
+function updateCloudBadges() {
+  const badge = document.getElementById('storage-badge-text');
+  if (badge) badge.textContent = cloudStatus === 'local-only' ? '本地（待同步）' : (cloudStatus === 'syncing' ? '同步中…' : '云端同步');
+  const t = document.getElementById('cloud-status-text');
+  if (t) t.textContent = cloudStatusText();
+  const dot = document.querySelector('.cloud-dot');
+  if (dot) dot.style.background = cloudDotColor();
 }
 
 /* -------------------------------------------------------------------------
@@ -1926,7 +1951,7 @@ VIEWS.settings = function (app) {
   };
 
   /* 数据管理 */
-  const dataCard = el('<div class="card" style="margin-top:16px"><h3>数据管理</h3><p class="hint">持仓、资产明细、设置等<strong>仅保存在本机浏览器</strong>（localStorage），不上传；<strong>仅「资产趋势」的每日快照</strong>会同步到你自己的服务器，便于跨设备/清缓存后保留历史。</p></div>');
+  const dataCard = el('<div class="card" style="margin-top:16px"><h3>数据管理</h3><p class="hint">全部数据（持仓、资产、设置、快照）都<strong>保存在你自己的服务器</strong>，多设备自动同步、清缓存后自动恢复；本机浏览器保留一份离线缓存，断网时先存本机、恢复后自动补传。数据仅你本人（访问密码后）可读写。</p></div>');
   dataCard.appendChild(el(`
     <div class="row" style="flex-wrap:wrap">
       <button class="btn secondary" id="dm-export" style="flex:0 0 auto">${icon('download')} 导出数据</button>
@@ -2112,12 +2137,11 @@ VIEWS.trends = function (app) {
   app.appendChild(tableCard);
 
   // 快照管理
-  const cloudDot = cloudSnapStatus === 'synced' ? 'var(--green)' : (cloudSnapStatus === 'syncing' ? 'var(--amber)' : (cloudSnapStatus === 'local-only' ? 'var(--red)' : 'var(--muted-2)'));
   const mgmt = el(`<div class="card" style="margin-top:16px">
     <h3>${icon('globe')} 快照数据（云端同步）</h3>
-    <p class="hint">快照同步到服务器（与全站同一访问密码保护），换设备或清缓存后历史仍在；若今日资产已更新，可手动记录一份覆盖当日。</p>
+    <p class="hint">全部数据（含快照）都同步到你自己的服务器（与全站同一访问密码保护），换设备或清缓存后自动恢复；若今日资产已更新，可手动记录一份覆盖当日。</p>
     <div class="cloud-status" id="cloud-status">
-      <span class="cloud-dot" style="background:${cloudDot}"></span>
+      <span class="cloud-dot" style="background:${cloudDotColor()}"></span>
       <span id="cloud-status-text">${escapeHtml(cloudStatusText())}</span>
     </div>
     <div class="row" style="margin-top:12px">
@@ -2127,12 +2151,6 @@ VIEWS.trends = function (app) {
     </div>
   </div>`);
   app.appendChild(mgmt);
-  function refreshCloudStatus(err) {
-    const t = mgmt.querySelector('#cloud-status-text');
-    const dot = mgmt.querySelector('.cloud-dot');
-    if (t) t.textContent = cloudStatusText() + (err ? '（' + err.message + '）' : '');
-    if (dot) dot.style.background = cloudSnapStatus === 'synced' ? 'var(--green)' : (cloudSnapStatus === 'syncing' ? 'var(--amber)' : (cloudSnapStatus === 'local-only' ? 'var(--red)' : 'var(--muted-2)'));
-  }
 
   function aggregate(gran) {
     if (gran === 'day') return snaps.map(s => ({ label: s.date.slice(5), value: s.total, date: s.date }));
@@ -2181,14 +2199,14 @@ VIEWS.trends = function (app) {
     };
   });
   mgmt.querySelector('#snap-now').onclick = async () => {
-    recordDailySnapshot();
-    refreshCloudStatus();
-    await syncCloudSnapshots({ onstatus: () => refreshCloudStatus() });
+    recordDailySnapshot();          // 写入今日快照并本地保存
+    await pushCloudNow();           // 立即回传云端
     render();
   };
   mgmt.querySelector('#snap-sync').onclick = async () => {
-    await syncCloudSnapshots({ onstatus: () => refreshCloudStatus() });
+    const { changed } = await initCloudSync();   // 从云端拉取整份数据并对账
     render();
+    if (!changed) updateCloudBadges();
   };
   mgmt.querySelector('#snap-export').onclick = () => {
     const blob = new Blob([JSON.stringify(STATE.snapshots || [], null, 2)], { type: 'application/json' });
@@ -2339,8 +2357,7 @@ VIEWS.portfolio = function (app) {
   if (refBtn) refBtn.onclick = async () => {
     const old = refBtn.innerHTML; refBtn.disabled = true; refBtn.innerHTML = icon('refresh', 'spin') + ' 刷新中…';
     const r = await refreshAllQuotes();
-    recordDailySnapshot();
-    syncCloudSnapshots({});           // 值变了，顺带更新云端今日快照
+    recordDailySnapshot();            // 值变了 → 记录今日快照（saveState 自动回传云端）
     render();
     // render 会重建视图；给个短暂提示
     const note = holdCard.querySelector('#pf-lastref');
@@ -2522,17 +2539,19 @@ VIEWS.help = function (app) {
    启动
    ------------------------------------------------------------------------- */
 applyTheme(currentTheme());
-recordDailySnapshot();          // 先本地记录/更新今日快照（离线也可用）
 const themeBtn = document.getElementById('theme-toggle');
 if (themeBtn) {
   themeBtn.innerHTML = themeToggleInner(currentTheme());
   themeBtn.onclick = toggleTheme;
 }
-render();
+render();                        // 先用本机缓存渲染（离线也能用）
+updateCloudBadges();
 
-// 启动后台任务：先自动刷新基金/股票估值 → 重记今日快照 → 同步云端
+// 启动后台任务：先与云端对账（取较新者）→ 刷新基金/股票估值 → 记录今日快照
 (async () => {
+  const { changed } = await initCloudSync();       // 拉云端整份数据并对账
+  if (changed) render();                           // 云端更新 → 重绘
   const refreshed = await autoRefreshQuotes();     // 打开页面自动更新涨跌（15 分钟节流）
-  if (refreshed) { recordDailySnapshot(); if (currentView === 'portfolio' || currentView === 'trends') render(); }
-  await syncCloudSnapshots({ onstatus: () => { if (currentView === 'trends') render(); } });
+  recordDailySnapshot();                           // 记录/更新今日快照（saveState 会自动回传云端）
+  if (refreshed || changed) render();
 })();
