@@ -26,6 +26,11 @@ fi
 
 echo "==> 2/5 创建站点目录 $SITE_DIR"
 mkdir -p "$SITE_DIR"
+# 让部署用户可写：GitHub Actions 用 SCP 以该用户身份往这里写文件，
+# 若目录属 root，非 root 部署用户会 permission denied。
+DEPLOY_USER="${SUDO_USER:-$(whoami)}"
+chown -R "$DEPLOY_USER":"$DEPLOY_USER" "$SITE_DIR"
+echo "    站点目录属主设为：$DEPLOY_USER"
 
 echo "==> 3/5 安装站点配置到 /etc/nginx/conf.d/"
 mkdir -p /etc/nginx/conf.d
