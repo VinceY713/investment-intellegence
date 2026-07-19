@@ -1926,7 +1926,7 @@ VIEWS.settings = function (app) {
   };
 
   /* 数据管理 */
-  const dataCard = el('<div class="card" style="margin-top:16px"><h3>数据管理</h3><p class="hint">数据仅保存在本机浏览器（localStorage），不上传</p></div>');
+  const dataCard = el('<div class="card" style="margin-top:16px"><h3>数据管理</h3><p class="hint">持仓、资产明细、设置等<strong>仅保存在本机浏览器</strong>（localStorage），不上传；<strong>仅「资产趋势」的每日快照</strong>会同步到你自己的服务器，便于跨设备/清缓存后保留历史。</p></div>');
   dataCard.appendChild(el(`
     <div class="row" style="flex-wrap:wrap">
       <button class="btn secondary" id="dm-export" style="flex:0 0 auto">${icon('download')} 导出数据</button>
