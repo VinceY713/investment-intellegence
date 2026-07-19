@@ -121,7 +121,7 @@ const SEED_POSITIONS = [
   { name: '科士达', code: '002518', factor: 'AI电力', pnl: -26.83, maxDrop: 45 },
   { name: '创新药HK', code: '159570', factor: '创新药', pnl: 6.74, maxDrop: 35 },
   { name: '恒生科技ETF', code: '513260', factor: 'AI应用', pnl: -14.47, maxDrop: 40 },
-  { name: 'TRIP.COM', code: 'TCOM', factor: '消费', pnl: -9.54, maxDrop: 40, cost: 46.929, price: 42.45 },
+  { name: 'TRIP.COM', code: 'TCOM', factor: '消费', pnl: -9.54, maxDrop: 40, cost: 46.929, price: 42.45, shares: 650 },
 ];
 
 // 资产大类归并（用于总览饼图与诊断）
@@ -221,7 +221,7 @@ function buildSeedState() {
       id: uid(), name: sp.name, code: sp.code, factor: sp.factor,
       weight: +(cny / SEED_TOTAL * 100).toFixed(4),
       pnl: sp.pnl, trend: '震荡', maxDrop: sp.maxDrop,
-      cost: sp.cost || 0, price: sp.price || 0, shares: 0,
+      cost: sp.cost || 0, price: sp.price || 0, shares: sp.shares || 0,
     };
   });
   return {
@@ -725,6 +725,7 @@ VIEWS.positions = function (app) {
         <td><span class="tag-chip">${escapeHtml(p.factor)}</span></td>
         <td class="num">${fmtPct(num(p.weight),1)}</td>
         <td class="num">${value>0?fmtMoney(value):'—'}</td>
+        <td class="num">${num(p.shares)>0?Math.round(num(p.shares)).toLocaleString():'—'}</td>
         <td class="num" style="color:${pnlColor}">${num(p.pnl)>=0?'+':''}${fmtPct(num(p.pnl),1)}</td>
         <td>${escapeHtml(p.trend||'—')}</td>
         <td class="num">${fmtPct(num(p.maxDrop),0)}</td>
@@ -738,14 +739,14 @@ VIEWS.positions = function (app) {
     scroll.appendChild(el(`
       <table>
         <thead><tr>
-          <th>名称</th><th>因子</th><th class="num">占比</th><th class="num">金额</th><th class="num">浮盈亏</th>
+          <th>名称</th><th>因子</th><th class="num">占比</th><th class="num">金额</th><th class="num">持股数</th><th class="num">浮盈亏</th>
           <th>趋势</th><th class="num">最大跌幅</th><th class="num">回撤贡献</th><th></th>
         </tr></thead>
         <tbody>${rows}
           <tr class="total-row">
             <td>合计</td><td></td><td class="num">${fmtPct(totalWeight,1)}</td>
             <td class="num">${totalValue>0?fmtMoney(totalValue):'—'}</td>
-            <td></td><td></td><td></td>
+            <td></td><td></td><td></td><td></td>
             <td class="num">${fmtPct(STATE.positions.reduce((a,p)=>a+Calc.drawdownContribution(num(p.weight),num(p.maxDrop)),0),2)}</td><td></td>
           </tr>
         </tbody>
