@@ -58,6 +58,12 @@ jobs:
             echo "proxy_set_header Authorization \"Bearer ${DEEPSEEK_API_KEY:-MISSING}\";" | sudo tee /etc/nginx/ai_key.conf >/dev/null
             sudo chmod 600 /etc/nginx/ai_key.conf
 
+            # 1c) 快照云端存储目录（Nginx WebDAV：PUT 写入 / GET 读取 单文件 JSON）
+            #     store/api/snapshots 为数据文件；store/tmp 为 PUT 临时目录（须与目标同一文件系统）
+            sudo mkdir -p /var/lib/investment-intelligence/store/api /var/lib/investment-intelligence/store/tmp
+            sudo chown -R www-data:www-data /var/lib/investment-intelligence
+            sudo chmod -R 775 /var/lib/investment-intelligence
+
             # 2) 写站点配置（含 Basic Auth 密码门）
             sudo tee /etc/nginx/conf.d/investment-intelligence.conf >/dev/null <<'NGINXCONF'
             server {
@@ -114,6 +120,21 @@ jobs:
                     resolver_timeout 5s;
                     proxy_connect_timeout 10s;
                     proxy_read_timeout 15s;
+                    add_header Cache-Control "no-store";
+                }
+
+                # 快照云端存储：GET 读取 / PUT 写入 单文件 JSON（Nginx 内置 WebDAV，无需额外后端）
+                # URL /api/snapshots → 文件 /var/lib/investment-intelligence/store/api/snapshots
+                # 与全站一样在访问密码（Basic Auth）之后，仅本人可读写。
+                location = /api/snapshots {
+                    root /var/lib/investment-intelligence/store;
+                    client_body_temp_path /var/lib/investment-intelligence/store/tmp;
+                    client_max_body_size 8m;
+                    dav_methods PUT;
+                    create_full_put_path on;
+                    dav_access user:rw group:rw all:r;
+                    default_type application/json;
+                    charset utf-8;
                     add_header Cache-Control "no-store";
                 }
 

@@ -350,6 +350,10 @@ tr.total-row td { font-weight: 700; border-top: 1.5px solid var(--line-strong); 
 .seg-btn:hover { color: var(--ink-2); }
 .seg-btn.active { background: linear-gradient(145deg, #0a84ff, #0060df); color: #fff; box-shadow: 0 3px 9px rgba(10,132,255,0.3); }
 
+/* 云端同步状态 */
+.cloud-status { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); background: var(--surface-soft); border: 1px solid var(--line); padding: 6px 12px; border-radius: 999px; }
+.cloud-dot { width: 8px; height: 8px; border-radius: 999px; flex: 0 0 auto; box-shadow: 0 0 0 3px rgba(120,120,128,0.10); }
+
 /* 折线图 */
 .linechart { display: block; width: 100%; }
 .linechart .chart-grid { stroke: var(--chart-grid); stroke-width: 1; }

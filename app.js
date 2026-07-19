@@ -330,6 +330,81 @@ function recordDailySnapshot() {
 }
 
 /* -------------------------------------------------------------------------
+   快照云端同步（服务器 Nginx WebDAV：GET 读取 / PUT 写入 单文件 JSON）
+   仅「资产趋势快照」上云，便于跨设备/清缓存后仍保留历史；其它数据仍仅存本地。
+   端点与全站一样在访问密码（Basic Auth）之后，浏览器自动带上同源凭证。
+   ------------------------------------------------------------------------- */
+const CLOUD_SNAP_URL = '/api/snapshots';
+// unknown | syncing | synced | local-only（云端不可用，退回仅本地）
+let cloudSnapStatus = 'unknown';
+let cloudSnapAt = null;
+
+// 按日期合并两组快照：后者优先（同日以 b 覆盖 a），按日期升序返回。
+function mergeSnapshots(a, b) {
+  const map = new Map();
+  (a || []).forEach(s => { if (s && s.date) map.set(s.date, s); });
+  (b || []).forEach(s => { if (s && s.date) map.set(s.date, s); });
+  return [...map.values()].sort((x, y) => x.date.localeCompare(y.date));
+}
+
+async function cloudLoadSnapshots() {
+  const res = await fetch(CLOUD_SNAP_URL, { cache: 'no-store' });
+  if (res.status === 404) return [];                 // 云端尚未创建 → 视为空
+  if (!res.ok) throw new Error('云端读取 ' + res.status);
+  const text = (await res.text()).trim();
+  if (!text) return [];
+  const data = JSON.parse(text);
+  return Array.isArray(data) ? data : (data.snapshots || []);
+}
+
+async function cloudSaveSnapshots(arr) {
+  const res = await fetch(CLOUD_SNAP_URL, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(arr || []),
+  });
+  if (!res.ok) throw new Error('云端保存 ' + res.status);
+}
+
+// 启动/手动：拉取云端 → 合并本地 → 记录今日 → 回写云端。任一步失败则退回仅本地。
+async function syncCloudSnapshots(opts) {
+  opts = opts || {};
+  cloudSnapStatus = 'syncing';
+  if (opts.onstatus) opts.onstatus();
+  let cloud;
+  try {
+    cloud = await cloudLoadSnapshots();
+  } catch (e) {
+    cloudSnapStatus = 'local-only';
+    if (opts.onstatus) opts.onstatus(e);
+    return false;
+  }
+  // 云端历史 + 本地 合并（本地今日为最新，优先）；再按当前资产刷新今日
+  STATE.snapshots = mergeSnapshots(cloud, STATE.snapshots || []);
+  recordDailySnapshot();                              // 覆盖/新增今日并存本地
+  try {
+    await cloudSaveSnapshots(STATE.snapshots);
+    cloudSnapStatus = 'synced';
+    cloudSnapAt = todayStr();
+  } catch (e) {
+    cloudSnapStatus = 'local-only';
+    if (opts.onstatus) opts.onstatus(e);
+    return false;
+  }
+  if (opts.onstatus) opts.onstatus();
+  return true;
+}
+
+function cloudStatusText() {
+  switch (cloudSnapStatus) {
+    case 'syncing': return '云端同步中…';
+    case 'synced': return '已同步到云端' + (cloudSnapAt ? '（' + cloudSnapAt + '）' : '');
+    case 'local-only': return '云端暂不可用，当前仅保存在本机';
+    default: return '未同步';
+  }
+}
+
+/* -------------------------------------------------------------------------
    白天 / 黑夜主题（记忆到本地；默认跟随系统）
    ------------------------------------------------------------------------- */
 const THEME_KEY = 'rpm.theme';
@@ -1851,7 +1926,7 @@ VIEWS.trends = function (app) {
   app.appendChild(el(`
     <div class="view-head">
       <h2>资产趋势</h2>
-      <p>自 ${SEED_DATE} 起，每次打开应用记录一份当日快照。可按月 / 季度 / 自然年查看整体资产走势与阶段变化。</p>
+      <p>自 ${SEED_DATE} 起，每次打开应用记录一份当日快照并同步云端。可按月 / 季度 / 自然年查看整体资产走势与阶段变化。</p>
     </div>
   `));
 
@@ -1904,15 +1979,27 @@ VIEWS.trends = function (app) {
   app.appendChild(tableCard);
 
   // 快照管理
+  const cloudDot = cloudSnapStatus === 'synced' ? 'var(--green)' : (cloudSnapStatus === 'syncing' ? 'var(--amber)' : (cloudSnapStatus === 'local-only' ? 'var(--red)' : 'var(--muted-2)'));
   const mgmt = el(`<div class="card" style="margin-top:16px">
-    <h3>${icon('clipboard')} 快照数据</h3>
-    <p class="hint">快照仅存本地。若今日资产已更新，可手动记录一份覆盖当日。</p>
-    <div class="row" style="margin-top:2px">
-      <button class="btn" id="snap-now" style="flex:0 0 auto">${icon('plus')} 记录今日快照</button>
-      <button class="btn secondary" id="snap-export" style="flex:0 0 auto">${icon('download')} 导出快照(JSON)</button>
+    <h3>${icon('globe')} 快照数据（云端同步）</h3>
+    <p class="hint">快照同步到服务器（与全站同一访问密码保护），换设备或清缓存后历史仍在；若今日资产已更新，可手动记录一份覆盖当日。</p>
+    <div class="cloud-status" id="cloud-status">
+      <span class="cloud-dot" style="background:${cloudDot}"></span>
+      <span id="cloud-status-text">${escapeHtml(cloudStatusText())}</span>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn" id="snap-now" style="flex:0 0 auto">${icon('plus')} 记录今日并同步</button>
+      <button class="btn secondary" id="snap-sync" style="flex:0 0 auto">${icon('refresh')} 从云端同步</button>
+      <button class="btn secondary" id="snap-export" style="flex:0 0 auto">${icon('download')} 导出(JSON)</button>
     </div>
   </div>`);
   app.appendChild(mgmt);
+  function refreshCloudStatus(err) {
+    const t = mgmt.querySelector('#cloud-status-text');
+    const dot = mgmt.querySelector('.cloud-dot');
+    if (t) t.textContent = cloudStatusText() + (err ? '（' + err.message + '）' : '');
+    if (dot) dot.style.background = cloudSnapStatus === 'synced' ? 'var(--green)' : (cloudSnapStatus === 'syncing' ? 'var(--amber)' : (cloudSnapStatus === 'local-only' ? 'var(--red)' : 'var(--muted-2)'));
+  }
 
   function aggregate(gran) {
     if (gran === 'day') return snaps.map(s => ({ label: s.date.slice(5), value: s.total, date: s.date }));
@@ -1960,7 +2047,16 @@ VIEWS.trends = function (app) {
       drawChart(b.dataset.g); drawTable(b.dataset.g);
     };
   });
-  mgmt.querySelector('#snap-now').onclick = () => { recordDailySnapshot(); render(); };
+  mgmt.querySelector('#snap-now').onclick = async () => {
+    recordDailySnapshot();
+    refreshCloudStatus();
+    await syncCloudSnapshots({ onstatus: () => refreshCloudStatus() });
+    render();
+  };
+  mgmt.querySelector('#snap-sync').onclick = async () => {
+    await syncCloudSnapshots({ onstatus: () => refreshCloudStatus() });
+    render();
+  };
   mgmt.querySelector('#snap-export').onclick = () => {
     const blob = new Blob([JSON.stringify(STATE.snapshots || [], null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -2266,10 +2362,13 @@ VIEWS.help = function (app) {
    启动
    ------------------------------------------------------------------------- */
 applyTheme(currentTheme());
-recordDailySnapshot();          // 记录/更新今日资产快照（趋势用）
+recordDailySnapshot();          // 先本地记录/更新今日快照（离线也可用）
 const themeBtn = document.getElementById('theme-toggle');
 if (themeBtn) {
   themeBtn.innerHTML = themeToggleInner(currentTheme());
   themeBtn.onclick = toggleTheme;
 }
 render();
+
+// 异步与云端同步快照（拉取历史 → 合并 → 回写）；完成后如在趋势页则刷新
+syncCloudSnapshots({ onstatus: () => { if (currentView === 'trends') render(); } });
