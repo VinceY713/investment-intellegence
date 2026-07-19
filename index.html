@@ -4,6 +4,18 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>理性仓位管理工具</title>
+  <script>
+    // 尽早设置主题，避免刷新时白/黑闪烁
+    (function () {
+      try {
+        var t = localStorage.getItem('rpm.theme');
+        if (t !== 'light' && t !== 'dark') {
+          t = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+        }
+        document.documentElement.setAttribute('data-theme', t);
+      } catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }
+    })();
+  </script>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -20,6 +32,7 @@
       </div>
     </div>
     <div class="topbar-actions">
+      <button class="theme-toggle" id="theme-toggle" type="button" title="切换白天 / 黑夜模式" aria-label="切换主题"></button>
       <span class="storage-badge" title="所有数据仅保存在本机浏览器，不上传">
         <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px">
           <rect x="5" y="10.5" width="14" height="9.5" rx="2.2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/>
@@ -31,6 +44,7 @@
 
   <nav class="tabs" id="tabs">
     <button class="tab active" data-view="portfolio">投资组合</button>
+    <button class="tab" data-view="trends">资产趋势</button>
     <button class="tab" data-view="dashboard">股票体检</button>
     <button class="tab" data-view="positions">持仓</button>
     <button class="tab" data-view="kelly">① 凯利定注</button>

@@ -77,6 +77,10 @@ const ICONS = {
   wallet: '<rect x="3.5" y="6" width="17" height="13" rx="2.6"/><path d="M3.5 9.5h17"/><circle cx="16.5" cy="14" r="1.2" fill="currentColor" stroke="none"/>',
   coins: '<ellipse cx="12" cy="6.5" rx="6.8" ry="2.8"/><path d="M5.2 6.5v5c0 1.6 3 2.9 6.8 2.9s6.8-1.3 6.8-2.9v-5"/><path d="M5.2 11.5v5c0 1.6 3 2.9 6.8 2.9s6.8-1.3 6.8-2.9v-5"/>',
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18z"/>',
+  sun: '<circle cx="12" cy="12" r="4.2"/><line x1="12" y1="2.5" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="21.5"/><line x1="4.2" y1="4.2" x2="6" y2="6"/><line x1="18" y1="18" x2="19.8" y2="19.8"/><line x1="2.5" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="21.5" y2="12"/><line x1="4.2" y1="19.8" x2="6" y2="18"/><line x1="18" y1="6" x2="19.8" y2="4.2"/>',
+  trend: '<path d="M3 17l5-5 3.5 3.5L20 7"/><path d="M20 11.5V7h-4.5"/>',
+  chart: '<line x1="4" y1="20" x2="20" y2="20"/><rect x="6" y="11" width="3" height="6" rx="0.8"/><rect x="11" y="7" width="3" height="10" rx="0.8"/><rect x="16" y="13" width="3" height="4" rx="0.8"/>',
+  calendar: '<rect x="4" y="5.5" width="16" height="15" rx="2.4"/><line x1="4" y1="10" x2="20" y2="10"/><line x1="8.5" y1="3.2" x2="8.5" y2="7"/><line x1="15.5" y1="3.2" x2="15.5" y2="7"/>',
 };
 function icon(name, cls) {
   const p = ICONS[name] || ICONS.info;
@@ -236,11 +240,21 @@ function buildSeedState() {
       cost: sp.cost || 0, price: sp.price || 0, shares: sp.shares || 0,
     };
   });
+  // 大类拆分（用于 7/19 起点快照）
+  const byBig = {};
+  assets.forEach(a => { byBig[bigClassOf(a.category)] = (byBig[bigClassOf(a.category)] || 0) + a.cny; });
+  const seedSnap = {
+    date: SEED_DATE,
+    total: Math.round(SEED_TOTAL),
+    byBig: Object.fromEntries(Object.entries(byBig).map(([k, v]) => [k, Math.round(v)])),
+    interest: 0, pnl: 0, fx: FX_DEFAULT,
+  };
   return {
     settings: Object.assign({}, DEFAULT_SETTINGS),
     positions,
     assets,
     portfolio: { totalAssets: Math.round(SEED_TOTAL), asOfDate: SEED_DATE, fxRate: FX_DEFAULT },
+    snapshots: [seedSnap],
   };
 }
 
@@ -253,6 +267,7 @@ function loadState() {
       s.positions = s.positions || [];
       s.assets = s.assets || [];
       s.portfolio = Object.assign({ totalAssets: Math.round(SEED_TOTAL) }, s.portfolio || {});
+      s.snapshots = s.snapshots || [];
       return s;
     }
   } catch (e) { console.warn('状态读取失败', e); }
@@ -268,6 +283,77 @@ function saveState() {
 
 function uid() {
   return 'p' + Math.random().toString(36).slice(2, 9);
+}
+
+/* -------------------------------------------------------------------------
+   每日资产快照（以 7/19 为起点）→ 支撑「资产趋势」按月/季/年查看
+   ------------------------------------------------------------------------- */
+function todayStr() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
+// 生成当前组合快照对象（总资产 + 大类拆分 + 利息/浮盈亏），不含逐笔明细，保持精简
+function makeSnapshot(dateStr) {
+  const assets = STATE.assets || [];
+  const fx = currentFx();
+  const byBig = {};
+  let interest = 0, pnl = 0;
+  assets.forEach(a => {
+    const v = assetCny(a, fx);
+    byBig[bigClassOf(a.category)] = (byBig[bigClassOf(a.category)] || 0) + v;
+    const inc = assetIncome(a, fx);
+    if (inc.kind === 'interest') interest += inc.value;
+    else if (inc.value != null) pnl += inc.value;
+  });
+  return {
+    date: dateStr,
+    total: Math.round(portfolioTotal()),
+    byBig: Object.fromEntries(Object.entries(byBig).map(([k, v]) => [k, Math.round(v)])),
+    interest: Math.round(interest),
+    pnl: Math.round(pnl),
+    fx: +fx.toFixed(4),
+  };
+}
+
+// 每次进入应用记录「今日」快照：同日则覆盖为最新值，跨日则新增一条。
+function recordDailySnapshot() {
+  if (!STATE.assets || !STATE.assets.length) return;
+  STATE.snapshots = STATE.snapshots || [];
+  const t = todayStr();
+  const snap = makeSnapshot(t);
+  const idx = STATE.snapshots.findIndex(s => s.date === t);
+  if (idx >= 0) STATE.snapshots[idx] = snap;
+  else STATE.snapshots.push(snap);
+  STATE.snapshots.sort((a, b) => a.date.localeCompare(b.date));
+  saveState();
+}
+
+/* -------------------------------------------------------------------------
+   白天 / 黑夜主题（记忆到本地；默认跟随系统）
+   ------------------------------------------------------------------------- */
+const THEME_KEY = 'rpm.theme';
+function currentTheme() {
+  const saved = localStorage.getItem(THEME_KEY);
+  if (saved === 'light' || saved === 'dark') return saved;
+  return (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+}
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+}
+function toggleTheme() {
+  const next = currentTheme() === 'dark' ? 'light' : 'dark';
+  localStorage.setItem(THEME_KEY, next);
+  applyTheme(next);
+  const btn = document.getElementById('theme-toggle');
+  if (btn) btn.innerHTML = themeToggleInner(next);
+  // 主题变化后重绘（饼图/图表中心色需跟随主题）
+  render();
+}
+function themeToggleInner(theme) {
+  return theme === 'dark'
+    ? icon('sun') + '<span>白天</span>'
+    : icon('moon') + '<span>黑夜</span>';
 }
 
 /* -------------------------------------------------------------------------
@@ -496,25 +582,34 @@ VIEWS.dashboard = function (app) {
 };
 
 /* SVG 饼图 + 图例 */
-function buildPie(factorWeights) {
-  const entries = Object.entries(factorWeights).sort((a, b) => b[1] - a[1]);
+function buildPie(factorWeights, opts) {
+  opts = opts || {};
+  const entries = Object.entries(factorWeights).filter(([, w]) => w > 0).sort((a, b) => b[1] - a[1]);
   const wrap = el('<div class="pie-wrap"></div>');
-  const size = 180, r = 80, cx = 90, cy = 90;
+  const size = 184, R = 84, rIn = 50, cx = 92, cy = 92;
+  const total = opts.total;
+  // 用「圆环 + stroke 分隔」画甜甜圈：每段是一条描边圆弧，段间留细缝，中心镂空干净。
+  const circ = 2 * Math.PI * ((R + rIn) / 2);
+  const stroke = R - rIn;
+  const rMid = (R + rIn) / 2;
   let acc = 0;
   const arcs = entries.map(([f, w], i) => {
-    const start = acc * 2 * Math.PI;
-    acc += w;
-    const end = acc * 2 * Math.PI;
-    const large = (end - start) > Math.PI ? 1 : 0;
-    const x1 = cx + r * Math.sin(start), y1 = cy - r * Math.cos(start);
-    const x2 = cx + r * Math.sin(end), y2 = cy - r * Math.cos(end);
     const color = FACTOR_COLORS[i % FACTOR_COLORS.length];
-    if (w >= 0.9999) { // 单一因子占满
-      return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${color}"/>`;
-    }
-    return `<path d="M${cx},${cy} L${x1},${y1} A${r},${r} 0 ${large} 1 ${x2},${y2} Z" fill="${color}"/>`;
+    const frac = Math.min(w, 1);
+    const gap = entries.length > 1 ? 0.006 : 0;            // 段间细缝
+    const len = Math.max(circ * (frac - gap), 0.5);
+    const dash = `${len} ${circ - len}`;
+    const offset = -circ * acc;
+    acc += frac;
+    // 圆弧从 12 点方向顺时针：旋转 -90°
+    return `<circle cx="${cx}" cy="${cy}" r="${rMid}" fill="none" stroke="${color}" stroke-width="${stroke}"
+      stroke-dasharray="${dash}" stroke-dashoffset="${offset}" transform="rotate(-90 ${cx} ${cy})" stroke-linecap="butt"/>`;
   }).join('');
-  wrap.appendChild(el(`<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${arcs}<circle cx="${cx}" cy="${cy}" r="42" fill="var(--panel)"/></svg>`));
+  const centerLabel = total != null
+    ? `<text x="${cx}" y="${cy - 4}" text-anchor="middle" class="pie-center-v">${fmtMoney(total)}</text>
+       <text x="${cx}" y="${cy + 14}" text-anchor="middle" class="pie-center-k">总资产</text>`
+    : '';
+  wrap.appendChild(el(`<svg class="donut" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${arcs}${centerLabel}</svg>`));
 
   const legend = el('<div class="legend"></div>');
   entries.forEach(([f, w], i) => {
@@ -522,12 +617,59 @@ function buildPie(factorWeights) {
     const over = w > 0.6;
     legend.appendChild(el(`<div class="legend-item">
       <span class="legend-dot" style="background:${color}"></span>
-      <span>${escapeHtml(f)}</span>
-      <span style="color:${over?'var(--red)':'var(--muted)'};font-weight:600">${fmtPct(w*100,0)}${over?' '+icon('warn'):''}</span>
+      <span class="legend-name">${escapeHtml(f)}</span>
+      <span class="legend-val" style="color:${over?'var(--red)':'var(--ink-2)'}">${fmtPct(w*100,0)}${over?' '+icon('warn'):''}</span>
     </div>`));
   });
   wrap.appendChild(legend);
   return wrap;
+}
+
+/* 折线/面积图：资产趋势用。points = [{label, value}]，返回 SVG。 */
+function buildLineChart(points, opts) {
+  opts = opts || {};
+  const w = opts.width || 640, h = opts.height || 220;
+  const padL = 8, padR = 12, padT = 16, padB = 26;
+  const iw = w - padL - padR, ih = h - padT - padB;
+  if (!points.length) return el('<div class="empty">暂无数据</div>');
+  const vals = points.map(p => p.value);
+  let min = Math.min(...vals), max = Math.max(...vals);
+  if (min === max) { min = min * 0.98; max = max * 1.02 || 1; }
+  const pad = (max - min) * 0.12; min -= pad; max += pad;
+  const n = points.length;
+  const X = i => padL + (n === 1 ? iw / 2 : iw * i / (n - 1));
+  const Y = v => padT + ih * (1 - (v - min) / (max - min));
+  const line = points.map((p, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)},${Y(p.value).toFixed(1)}`).join(' ');
+  const area = `${line} L${X(n - 1).toFixed(1)},${(padT + ih).toFixed(1)} L${X(0).toFixed(1)},${(padT + ih).toFixed(1)} Z`;
+  // 网格线（4 条）
+  let grid = '';
+  for (let g = 0; g <= 4; g++) {
+    const gy = padT + ih * g / 4;
+    grid += `<line x1="${padL}" y1="${gy.toFixed(1)}" x2="${w - padR}" y2="${gy.toFixed(1)}" class="chart-grid"/>`;
+  }
+  // 端点/首点标注
+  const dots = points.map((p, i) =>
+    (n <= 12 || i === 0 || i === n - 1)
+      ? `<circle cx="${X(i).toFixed(1)}" cy="${Y(p.value).toFixed(1)}" r="3" class="chart-dot"/>` : '').join('');
+  // X 轴标签（最多约 6 个）
+  const step = Math.max(1, Math.ceil(n / 6));
+  let xlab = '';
+  points.forEach((p, i) => {
+    if (i % step === 0 || i === n - 1) {
+      xlab += `<text x="${X(i).toFixed(1)}" y="${h - 8}" text-anchor="middle" class="chart-xlab">${escapeHtml(p.label)}</text>`;
+    }
+  });
+  const svg = el(`<svg class="linechart" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" width="100%" height="${h}">
+    <defs><linearGradient id="lc-fill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="var(--accent)" stop-opacity="0.28"/>
+      <stop offset="100%" stop-color="var(--accent)" stop-opacity="0"/>
+    </linearGradient></defs>
+    ${grid}
+    <path d="${area}" fill="url(#lc-fill)"/>
+    <path d="${line}" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+    ${dots}${xlab}
+  </svg>`);
+  return svg;
 }
 
 /* -------------------------------------------------------------------------
@@ -536,9 +678,15 @@ function buildPie(factorWeights) {
    ------------------------------------------------------------------------- */
 function detectMarket(code) {
   code = String(code || '').trim();
-  if (/^6/.test(code)) return 'sh';                       // 沪市（600/601/603/605/688…）
+  if (/^6/.test(code)) return 'sh';                       // 沪市股票（600/601/603/605/688…）
+  if (/^(5|11|13)/.test(code)) return 'sh';               // 沪市 ETF/LOF/基金/可转债（50/51/52/56/58/511/113…）
   if (/^(4|8)/.test(code) || /^920/.test(code)) return 'bj'; // 北交所
-  return 'sz';                                            // 深市（000/002/003/300…）
+  return 'sz';                                            // 深市（000/002/003/300/15x/16x…）
+}
+
+// 判断是否美股代码（含字母，如 TCOM、AAPL、BABA、BRK.B）
+function isUsCode(code) {
+  return /[A-Za-z]/.test(String(code || '').trim());
 }
 
 async function getQuoteText(url) {
@@ -575,7 +723,23 @@ function parseSina(text) {
 
 async function fetchQuote(rawCode) {
   const code = String(rawCode || '').trim();
-  if (!/^\d{5,6}$/.test(code)) throw new Error('请输入 5–6 位数字代码');
+
+  // 美股（含字母代码，如 TCOM / AAPL）：腾讯 us 前缀；新浪 gb_ 前缀兜底
+  if (isUsCode(code)) {
+    const sym = code.toUpperCase().replace(/\s+/g, '');
+    try {
+      return parseTencent(await getQuoteText('/api/quote?code=' + encodeURIComponent('us' + sym)));
+    } catch (e1) {
+      try {
+        return parseSina(await getQuoteText('/api/quote_sina?code=' + encodeURIComponent('gb_' + sym.toLowerCase())));
+      } catch (e2) {
+        throw new Error('美股行情获取失败（代码可能有误或已休市），可手动填名称与现价');
+      }
+    }
+  }
+
+  // A股 / ETF / 基金 / 可转债：5–6 位数字
+  if (!/^\d{5,6}$/.test(code)) throw new Error('请输入 5–6 位数字代码（A股/ETF），或美股字母代码（如 TCOM）');
   const full = detectMarket(code) + code;
   const q = encodeURIComponent(full);
   // 先腾讯，失败再退回新浪
@@ -609,12 +773,12 @@ VIEWS.positions = function (app) {
       <code class="formula">持股市值 ÷ 总资产</code> 自动计算，浮盈亏按成本价与现价自动算。
       当前总资产 <strong>${fmtMoney(totalAssets)}</strong>（由「投资组合」明细自动汇总，随资产变动实时更新）。</p>
     <div class="grid grid-3">
-      <div class="field"><label>股票代码（A股）</label>
+      <div class="field"><label>代码（A股 / ETF / 美股）</label>
         <div class="row" style="gap:6px">
-          <input id="np-code" placeholder="如 002518" style="flex:1"/>
+          <input id="np-code" placeholder="如 002518 / 513260 / TCOM" style="flex:1"/>
           <button class="btn secondary" id="np-fetch" style="flex:0 0 auto">获取</button>
         </div>
-        <p class="inline-note" id="np-code-note">自动识别沪/深/京</p>
+        <p class="inline-note" id="np-code-note">数字＝A股/ETF（自动识别沪/深/京）；字母＝美股（如 TCOM）</p>
       </div>
       <div class="field"><label>名称</label><input id="np-name" placeholder="如 科士达"/></div>
       <div class="field"><label>底层因子标签</label>
@@ -1672,6 +1836,139 @@ async function aiReview(summaryText, box, btn) {
   }
 }
 
+/* =========================================================================
+   视图：资产趋势（以 7/19 为起点的每日快照 → 按月/季/年看整体走势）
+   ========================================================================= */
+function periodKey(dateStr, gran) {
+  const [y, m] = dateStr.split('-').map(Number);
+  if (gran === 'year') return { key: String(y), label: y + '年' };
+  if (gran === 'quarter') { const q = Math.floor((m - 1) / 3) + 1; return { key: y + '-Q' + q, label: y + ' Q' + q }; }
+  return { key: y + '-' + String(m).padStart(2, '0'), label: y + '/' + String(m).padStart(2, '0') };
+}
+
+VIEWS.trends = function (app) {
+  const snaps = (STATE.snapshots || []).slice().sort((a, b) => a.date.localeCompare(b.date));
+  app.appendChild(el(`
+    <div class="view-head">
+      <h2>资产趋势</h2>
+      <p>自 ${SEED_DATE} 起，每次打开应用记录一份当日快照。可按月 / 季度 / 自然年查看整体资产走势与阶段变化。</p>
+    </div>
+  `));
+
+  if (snaps.length < 1) {
+    app.appendChild(el(`<div class="card"><div class="empty"><div class="big">${icon('chart')}</div>
+      <p>还没有快照数据。载入初始数据或添加资产后，打开应用即会自动记录。</p></div></div>`));
+    return;
+  }
+
+  const first = snaps[0], last = snaps[snaps.length - 1];
+  const chg = last.total - first.total;
+  const chgPct = first.total ? chg / first.total * 100 : 0;
+
+  // 概览卡
+  app.appendChild(el(`
+    <div class="stat-grid" style="margin-bottom:16px">
+      <div class="stat"><div class="label">${icon('wallet')} 当前总资产</div>
+        <div class="value" style="font-size:22px">${fmtMoney(last.total)}</div><div class="sub">截至 ${last.date}</div></div>
+      <div class="stat"><div class="label">${icon('calendar')} 起点(${first.date})</div>
+        <div class="value" style="font-size:22px">${fmtMoney(first.total)}</div><div class="sub">首个快照</div></div>
+      <div class="stat"><div class="label">${icon('trend')} 累计变化</div>
+        <div class="value" style="font-size:22px;color:${chg>=0?'var(--green-ink)':'var(--red-ink)'}">${chg>=0?'+':''}${fmtMoney(chg)}</div>
+        <div class="sub" style="color:${chg>=0?'var(--green-ink)':'var(--red-ink)'}">${chg>=0?'+':''}${fmtPct(chgPct,2)}</div></div>
+      <div class="stat"><div class="label">${icon('list')} 快照数</div>
+        <div class="value" style="font-size:22px">${snaps.length}</div><div class="sub">天</div></div>
+    </div>
+  `));
+
+  // 趋势图卡（带粒度切换）
+  const chartCard = el(`<div class="card">
+    <div class="card-head-row">
+      <h3 style="margin:0">${icon('chart')} 总资产走势</h3>
+      <div class="seg" id="gran-seg">
+        <button class="seg-btn active" data-g="day">日</button>
+        <button class="seg-btn" data-g="month">月</button>
+        <button class="seg-btn" data-g="quarter">季度</button>
+        <button class="seg-btn" data-g="year">自然年</button>
+      </div>
+    </div>
+    <div id="trend-chart" style="margin-top:14px"></div>
+  </div>`);
+  app.appendChild(chartCard);
+
+  // 阶段变化表
+  const tableCard = el(`<div class="card" style="margin-top:16px">
+    <h3>${icon('calendar')} 阶段变化</h3>
+    <div class="table-scroll"><table id="period-table"></table></div>
+    <p class="inline-note">阶段收益 = 期末总资产 ÷ 期初总资产 − 1。因未单独区分资金转入/转出，此处为「总资产净值」变化，非纯投资收益率，仅作趋势参考。</p>
+  </div>`);
+  app.appendChild(tableCard);
+
+  // 快照管理
+  const mgmt = el(`<div class="card" style="margin-top:16px">
+    <h3>${icon('clipboard')} 快照数据</h3>
+    <p class="hint">快照仅存本地。若今日资产已更新，可手动记录一份覆盖当日。</p>
+    <div class="row" style="margin-top:2px">
+      <button class="btn" id="snap-now" style="flex:0 0 auto">${icon('plus')} 记录今日快照</button>
+      <button class="btn secondary" id="snap-export" style="flex:0 0 auto">${icon('download')} 导出快照(JSON)</button>
+    </div>
+  </div>`);
+  app.appendChild(mgmt);
+
+  function aggregate(gran) {
+    if (gran === 'day') return snaps.map(s => ({ label: s.date.slice(5), value: s.total, date: s.date }));
+    const groups = new Map();
+    snaps.forEach(s => {
+      const { key, label } = periodKey(s.date, gran);
+      groups.set(key, { label, last: s.total, first: groups.has(key) ? groups.get(key).first : s.total, date: s.date });
+    });
+    return [...groups.values()].map(g => ({ label: g.label, value: g.last, first: g.first, date: g.date }));
+  }
+
+  function drawChart(gran) {
+    const pts = aggregate(gran);
+    const box = chartCard.querySelector('#trend-chart');
+    box.innerHTML = '';
+    box.appendChild(buildLineChart(pts.map(p => ({ label: p.label, value: p.value }))));
+  }
+
+  function drawTable(gran) {
+    // 阶段变化：按所选粒度分组，展示各期期初/期末/变化
+    const g = gran === 'day' ? 'month' : gran;   // 「日」视图下阶段表用「月」汇总更有意义
+    const groups = new Map();
+    snaps.forEach(s => {
+      const { key, label } = periodKey(s.date, g);
+      if (!groups.has(key)) groups.set(key, { label, first: s.total, firstDate: s.date, last: s.total, lastDate: s.date });
+      const o = groups.get(key); o.last = s.total; o.lastDate = s.date;
+    });
+    const rows = [...groups.values()];
+    const table = tableCard.querySelector('#period-table');
+    table.innerHTML = `<thead><tr><th>阶段</th><th class="num">期初</th><th class="num">期末</th><th class="num">变化</th><th class="num">变化%</th></tr></thead><tbody>${
+      rows.map(r => {
+        const d = r.last - r.first, p = r.first ? d / r.first * 100 : 0;
+        const col = d >= 0 ? 'var(--green-ink)' : 'var(--red-ink)';
+        return `<tr><td>${r.label}</td><td class="num">${fmtMoney(r.first)}</td><td class="num">${fmtMoney(r.last)}</td>
+          <td class="num" style="color:${col}">${d>=0?'+':''}${fmtMoney(d)}</td>
+          <td class="num" style="color:${col}">${d>=0?'+':''}${fmtPct(p,2)}</td></tr>`;
+      }).join('')
+    }</tbody>`;
+  }
+
+  drawChart('day'); drawTable('day');
+  chartCard.querySelectorAll('.seg-btn').forEach(b => {
+    b.onclick = () => {
+      chartCard.querySelectorAll('.seg-btn').forEach(x => x.classList.toggle('active', x === b));
+      drawChart(b.dataset.g); drawTable(b.dataset.g);
+    };
+  });
+  mgmt.querySelector('#snap-now').onclick = () => { recordDailySnapshot(); render(); };
+  mgmt.querySelector('#snap-export').onclick = () => {
+    const blob = new Blob([JSON.stringify(STATE.snapshots || [], null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = 'asset-snapshots.json'; a.click();
+    URL.revokeObjectURL(url);
+  };
+};
+
 VIEWS.portfolio = function (app) {
   const assets = STATE.assets || [];
   app.appendChild(el(`
@@ -1747,7 +2044,7 @@ VIEWS.portfolio = function (app) {
 
   // 大类饼图
   const allocCard = el(`<div class="card"><h3>${icon('pie')} 大类配置</h3></div>`);
-  allocCard.appendChild(buildPie(normalize(byBig)));
+  allocCard.appendChild(buildPie(normalize(byBig), { total }));
   app.appendChild(allocCard);
 
   // 明细表：按类别（按大类排序：股票→基金→理财→黄金→现金）
@@ -1968,4 +2265,11 @@ VIEWS.help = function (app) {
 /* -------------------------------------------------------------------------
    启动
    ------------------------------------------------------------------------- */
+applyTheme(currentTheme());
+recordDailySnapshot();          // 记录/更新今日资产快照（趋势用）
+const themeBtn = document.getElementById('theme-toggle');
+if (themeBtn) {
+  themeBtn.innerHTML = themeToggleInner(currentTheme());
+  themeBtn.onclick = toggleTheme;
+}
 render();

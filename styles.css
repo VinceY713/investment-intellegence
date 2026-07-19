@@ -3,7 +3,7 @@
    浅色玻璃质感 · SF 风格 · 移动端友好
    ========================================================================= */
 
-:root {
+:root, :root[data-theme="light"] {
   --accent: #0a84ff;
   --accent-ink: #0060df;
   --green: #34c759;
@@ -24,6 +24,22 @@
   --glass-strong: rgba(255, 255, 255, 0.78);
   --blur: saturate(170%) blur(22px);
 
+  /* 主题化表面（浅色） */
+  --bg: #eaeef5;
+  --bg-grad:
+    radial-gradient(42vw 42vw at 12% 8%, rgba(10, 132, 255, 0.20), transparent 60%),
+    radial-gradient(46vw 46vw at 92% 4%, rgba(175, 82, 222, 0.18), transparent 60%),
+    radial-gradient(50vw 50vw at 78% 92%, rgba(52, 199, 89, 0.16), transparent 62%),
+    radial-gradient(46vw 46vw at 8% 96%, rgba(255, 159, 10, 0.14), transparent 60%),
+    linear-gradient(160deg, #f3f6fb 0%, #eef1f8 50%, #f4eef8 100%);
+  --card-border: rgba(255, 255, 255, 0.65);
+  --input-bg: rgba(255, 255, 255, 0.72);
+  --input-bg-focus: #ffffff;
+  --surface-soft: rgba(255, 255, 255, 0.55);
+  --surface-hover: rgba(255, 255, 255, 0.5);
+  --pie-hole: #f4f6fb;
+  --chart-grid: rgba(60, 60, 67, 0.10);
+
   --radius: 20px;
   --radius-sm: 13px;
   --radius-xs: 9px;
@@ -33,9 +49,51 @@
     "PingFang SC", "Helvetica Neue", "Microsoft YaHei", system-ui, sans-serif;
 }
 
+/* ---------- 黑夜模式 ---------- */
+:root[data-theme="dark"] {
+  --accent: #0a84ff;
+  --accent-ink: #64b4ff;
+  --green: #30d158;
+  --green-ink: #5be07f;
+  --red: #ff453a;
+  --red-ink: #ff6b61;
+  --amber: #ff9f0a;
+  --amber-ink: #ffc061;
+  --ink: #f2f2f7;
+  --ink-2: #d0d2da;
+  --muted: #9a9aa2;
+  --muted-2: #7c7c86;
+  --line: rgba(255, 255, 255, 0.10);
+  --line-strong: rgba(255, 255, 255, 0.18);
+
+  --glass: rgba(30, 32, 40, 0.62);
+  --glass-2: rgba(24, 26, 33, 0.55);
+  --glass-strong: rgba(34, 36, 45, 0.85);
+  --blur: saturate(150%) blur(22px);
+
+  --bg: #0a0c12;
+  --bg-grad:
+    radial-gradient(44vw 44vw at 12% 6%, rgba(10, 132, 255, 0.24), transparent 60%),
+    radial-gradient(48vw 48vw at 92% 2%, rgba(120, 82, 222, 0.22), transparent 60%),
+    radial-gradient(52vw 52vw at 80% 96%, rgba(20, 120, 80, 0.20), transparent 62%),
+    radial-gradient(46vw 46vw at 6% 98%, rgba(180, 110, 20, 0.16), transparent 60%),
+    linear-gradient(160deg, #0d1017 0%, #0b0d14 50%, #12101a 100%);
+  --card-border: rgba(255, 255, 255, 0.09);
+  --input-bg: rgba(255, 255, 255, 0.06);
+  --input-bg-focus: rgba(255, 255, 255, 0.10);
+  --surface-soft: rgba(255, 255, 255, 0.05);
+  --surface-hover: rgba(255, 255, 255, 0.08);
+  --pie-hole: #171922;
+  --chart-grid: rgba(255, 255, 255, 0.09);
+
+  --shadow: 0 10px 34px rgba(0, 0, 0, 0.5), 0 2px 10px rgba(0, 0, 0, 0.4);
+  --shadow-sm: 0 2px 12px rgba(0, 0, 0, 0.4);
+}
+
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
 html, body { height: 100%; }
+html { background: var(--bg); }
 
 body {
   margin: 0;
@@ -45,9 +103,10 @@ body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-  background: #eaeef5;
+  background: var(--bg);
   position: relative;
   overflow-x: hidden;
+  transition: background-color 0.3s ease, color 0.3s ease;
 }
 
 /* 柔和渐变 + 模糊色斑背景，制造玻璃后的景深 */
@@ -56,12 +115,7 @@ body::before {
   position: fixed;
   inset: -20% -10% -10% -10%;
   z-index: -2;
-  background:
-    radial-gradient(42vw 42vw at 12% 8%, rgba(10, 132, 255, 0.20), transparent 60%),
-    radial-gradient(46vw 46vw at 92% 4%, rgba(175, 82, 222, 0.18), transparent 60%),
-    radial-gradient(50vw 50vw at 78% 92%, rgba(52, 199, 89, 0.16), transparent 62%),
-    radial-gradient(46vw 46vw at 8% 96%, rgba(255, 159, 10, 0.14), transparent 60%),
-    linear-gradient(160deg, #f3f6fb 0%, #eef1f8 50%, #f4eef8 100%);
+  background: var(--bg-grad);
 }
 
 svg.icon { width: 1.15em; height: 1.15em; display: inline-block; vertical-align: -0.18em; flex: 0 0 auto; }
@@ -102,7 +156,7 @@ svg.icon { width: 1.15em; height: 1.15em; display: inline-block; vertical-align:
   background: var(--glass-2);
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
-  border-top: 1px solid rgba(255,255,255,0.5);
+  border-top: 1px solid var(--card-border);
   border-bottom: 1px solid var(--line);
 }
 .tabs::-webkit-scrollbar { display: none; }
@@ -116,7 +170,7 @@ svg.icon { width: 1.15em; height: 1.15em; display: inline-block; vertical-align:
   font-family: inherit;
   transition: background 0.18s, color 0.18s, transform 0.1s;
 }
-.tab:hover { background: rgba(255,255,255,0.5); }
+.tab:hover { background: var(--surface-hover); }
 .tab:active { transform: scale(0.97); }
 .tab.active {
   color: #fff;
@@ -138,7 +192,7 @@ main { max-width: 1080px; margin: 0 auto; padding: 22px 20px 72px; }
   background: var(--glass);
   backdrop-filter: var(--blur);
   -webkit-backdrop-filter: var(--blur);
-  border: 1px solid rgba(255, 255, 255, 0.65);
+  border: 1px solid var(--card-border);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   padding: 20px;
@@ -156,7 +210,7 @@ main { max-width: 1080px; margin: 0 auto; padding: 22px 20px 72px; }
 .field label .req { color: var(--red); }
 input, select, textarea {
   width: 100%; font-family: inherit; font-size: 15px; color: var(--ink);
-  background: rgba(255, 255, 255, 0.72);
+  background: var(--input-bg);
   border: 1px solid var(--line-strong);
   padding: 11px 13px; border-radius: var(--radius-xs);
   transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
@@ -164,11 +218,11 @@ input, select, textarea {
 input::placeholder, textarea::placeholder { color: var(--muted-2); }
 input:focus, select:focus, textarea:focus {
   outline: none; border-color: var(--accent);
-  background: #fff;
-  box-shadow: 0 0 0 4px rgba(10, 132, 255, 0.14);
+  background: var(--input-bg-focus);
+  box-shadow: 0 0 0 4px rgba(10, 132, 255, 0.18);
 }
 select { appearance: none; -webkit-appearance: none;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>");
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238a94a3' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>");
   background-repeat: no-repeat; background-position: right 12px center; padding-right: 36px;
 }
 textarea { resize: vertical; min-height: 62px; }
@@ -206,7 +260,7 @@ button.btn .spin { animation: spin 0.9s linear infinite; }
 /* ---------- Result panels ---------- */
 .result-box {
   margin-top: 15px; padding: 16px 18px; border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.5); border: 1px solid var(--line);
+  background: var(--surface-soft); border: 1px solid var(--line);
 }
 .metric-row { display: flex; justify-content: space-between; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--line); gap: 12px; }
 .metric-row:last-child { border-bottom: none; }
@@ -214,7 +268,7 @@ button.btn .spin { animation: spin 0.9s linear infinite; }
 .metric-row .v { font-weight: 700; font-variant-numeric: tabular-nums; }
 
 .kelly-tiers { display: grid; grid-template-columns: repeat(3, 1fr); gap: 11px; margin-top: 15px; }
-.tier { text-align: center; padding: 15px 8px; border-radius: var(--radius-sm); background: rgba(255,255,255,0.55); border: 1px solid var(--line); }
+.tier { text-align: center; padding: 15px 8px; border-radius: var(--radius-sm); background: var(--surface-soft); border: 1px solid var(--line); }
 .tier.recommended { border-color: rgba(52,199,89,0.5); background: rgba(52, 199, 89, 0.12); }
 .tier .label { font-size: 12.5px; color: var(--muted); }
 .tier .val { font-size: 27px; font-weight: 800; margin: 4px 0; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
@@ -251,7 +305,7 @@ tr.total-row td { font-weight: 700; border-top: 1.5px solid var(--line-strong); 
 .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
 .stat {
   background: var(--glass); backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
-  border: 1px solid rgba(255,255,255,0.65); border-radius: var(--radius-sm);
+  border: 1px solid var(--card-border); border-radius: var(--radius-sm);
   box-shadow: var(--shadow-sm); padding: 16px;
 }
 .stat .label { font-size: 12.5px; color: var(--muted); display:flex; align-items:center; gap:6px; }
@@ -259,10 +313,48 @@ tr.total-row td { font-weight: 700; border-top: 1.5px solid var(--line-strong); 
 .stat .sub { font-size: 12px; color: var(--muted); margin-top: 3px; }
 
 /* pie / legend */
-.pie-wrap { display: flex; gap: 22px; align-items: center; flex-wrap: wrap; }
-.legend { display: flex; flex-direction: column; gap: 7px; font-size: 13.5px; min-width: 180px; }
-.legend-item { display: flex; align-items: center; gap: 9px; }
-.legend-dot { width: 12px; height: 12px; border-radius: 4px; flex: 0 0 auto; }
+.pie-wrap { display: flex; gap: 26px; align-items: center; flex-wrap: wrap; }
+.donut { flex: 0 0 auto; filter: drop-shadow(0 6px 14px rgba(0,0,0,0.12)); }
+.donut circle { transition: stroke-dasharray 0.5s ease; }
+.pie-center-v { fill: var(--ink); font-size: 17px; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+.pie-center-k { fill: var(--muted); font-size: 11px; font-weight: 600; }
+.legend { display: flex; flex-direction: column; gap: 9px; font-size: 13.5px; min-width: 190px; flex: 1; }
+.legend-item { display: flex; align-items: center; gap: 10px; }
+.legend-dot { width: 11px; height: 11px; border-radius: 4px; flex: 0 0 auto; }
+.legend-name { flex: 1; color: var(--ink-2); }
+.legend-val { font-weight: 700; font-variant-numeric: tabular-nums; }
+
+/* 主题切换按钮 */
+.theme-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink-2);
+  background: var(--glass); border: 1px solid var(--card-border);
+  padding: 7px 12px; border-radius: 999px; cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
+  transition: transform 0.1s, background 0.2s, color 0.2s;
+}
+.theme-toggle:hover { background: var(--surface-hover); }
+.theme-toggle:active { transform: scale(0.96); }
+.theme-toggle svg.icon { width: 16px; height: 16px; }
+.topbar-actions { display: flex; align-items: center; gap: 10px; }
+
+/* 分段控件（资产趋势粒度切换） */
+.card-head-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.seg { display: inline-flex; background: var(--surface-soft); border: 1px solid var(--line); border-radius: 999px; padding: 3px; gap: 2px; }
+.seg-btn {
+  border: none; background: transparent; font-family: inherit; cursor: pointer;
+  color: var(--muted); font-size: 12.5px; font-weight: 600; padding: 6px 13px; border-radius: 999px;
+  transition: background 0.18s, color 0.18s;
+}
+.seg-btn:hover { color: var(--ink-2); }
+.seg-btn.active { background: linear-gradient(145deg, #0a84ff, #0060df); color: #fff; box-shadow: 0 3px 9px rgba(10,132,255,0.3); }
+
+/* 折线图 */
+.linechart { display: block; width: 100%; }
+.linechart .chart-grid { stroke: var(--chart-grid); stroke-width: 1; }
+.linechart .chart-dot { fill: var(--accent); stroke: var(--pie-hole); stroke-width: 1.5; }
+.linechart .chart-xlab { fill: var(--muted); font-size: 11px; }
 
 .progress { height: 12px; background: rgba(120,120,128,0.16); border-radius: 999px; overflow: hidden; }
 .progress .fill { height: 100%; border-radius: 999px; transition: width 0.4s ease; }
@@ -308,7 +400,7 @@ code.formula { background: rgba(10,132,255,0.10); padding: 2px 7px; border-radiu
 .modal {
   background: var(--glass-strong);
   backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
-  border: 1px solid rgba(255,255,255,0.7);
+  border: 1px solid var(--card-border);
   border-radius: var(--radius); max-width: 520px; width: 100%;
   box-shadow: 0 24px 60px rgba(17,24,39,0.3); overflow: hidden;
 }
