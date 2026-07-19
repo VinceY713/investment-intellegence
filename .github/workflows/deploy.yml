@@ -38,12 +38,13 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         env:
           APP_PASSWORD: ${{ secrets.APP_PASSWORD }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         with:
           host: ${{ secrets.ECS_HOST }}
           username: ${{ secrets.ECS_USERNAME }}
           key: ${{ secrets.ECS_SSH_KEY }}
           port: ${{ secrets.ECS_PORT || '22' }}
-          envs: APP_PASSWORD
+          envs: APP_PASSWORD,DEEPSEEK_API_KEY
           script: |
             set -e
             # 1) 用 APP_PASSWORD 生成访问口令文件（用户名固定为 admin）
@@ -52,6 +53,10 @@ jobs:
             fi
             echo "admin:$(openssl passwd -apr1 "$APP_PASSWORD")" | sudo tee /etc/nginx/.htpasswd >/dev/null
             sudo chmod 644 /etc/nginx/.htpasswd
+
+            # 1b) 写 DeepSeek 密钥到独立 include 文件（密钥不进主配置、不进前端）
+            echo "proxy_set_header Authorization \"Bearer ${DEEPSEEK_API_KEY:-MISSING}\";" | sudo tee /etc/nginx/ai_key.conf >/dev/null
+            sudo chmod 600 /etc/nginx/ai_key.conf
 
             # 2) 写站点配置（含 Basic Auth 密码门）
             sudo tee /etc/nginx/conf.d/investment-intelligence.conf >/dev/null <<'NGINXCONF'
@@ -94,6 +99,22 @@ jobs:
                     proxy_ssl_name hq.sinajs.cn;
                     resolver 119.29.29.29 223.5.5.5 valid=300s;
                     resolver_timeout 5s;
+                    add_header Cache-Control "no-store";
+                }
+
+                # AI 代理：浏览器同源 POST /api/ai-review → DeepSeek（密钥由服务器 include 注入）
+                location = /api/ai-review {
+                    proxy_pass https://api.deepseek.com/chat/completions;
+                    proxy_set_header Host api.deepseek.com;
+                    proxy_set_header Content-Type application/json;
+                    include /etc/nginx/ai_key.conf;
+                    proxy_ssl_server_name on;
+                    proxy_ssl_name api.deepseek.com;
+                    resolver 119.29.29.29 223.5.5.5 valid=300s;
+                    resolver_timeout 5s;
+                    proxy_connect_timeout 15s;
+                    proxy_read_timeout 120s;
+                    proxy_send_timeout 120s;
                     add_header Cache-Control "no-store";
                 }
 
