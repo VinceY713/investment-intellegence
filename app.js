@@ -950,24 +950,23 @@ async function getQuoteText(url) {
   catch (e) { return new TextDecoder('utf-8').decode(buf); }
 }
 
-// 腾讯：v_sz002518="51~科士达~002518~现价~昨收~今开~…";
+// 腾讯：A股 v_sz002518="51~科士达~002518~现价(p3)~昨收(p4)~今开(p5)~…";
+//       美股 v_usTCOM="200~200~TCOM.OQ~现价(p3)~昨收(p4)~今开(p5)~…~USD~…~公司名~…";
+// 关键：美股与 A股「现价/昨收」同为 p[3]/p[4]；美股 p[1] 是数字非名称、p[5] 是今开非涨跌幅。
 function parseTencent(text, opts) {
   opts = opts || {};
   const m = text.match(/"([^"]*)"/);
   if (!m || !m[1]) throw new Error('无数据');
   const p = m[1].split('~');
-  const name = p[1];
   let price = parseFloat(p[3]);
   if (!(price > 0)) price = parseFloat(p[4]);         // 休市回退昨收
-  if (!name || !isFinite(price)) throw new Error('解析失败');
-  let changePct = null, prevClose = null;
-  if (opts.us) {
-    changePct = parseFloat(p[5]);                     // 美股：p[5]=涨跌幅%
-    if (isFinite(changePct)) prevClose = price / (1 + changePct / 100);
-  } else {
-    prevClose = parseFloat(p[4]);                     // A股/ETF：p[4]=昨收
-    if (prevClose > 0) changePct = (price - prevClose) / prevClose * 100;
+  const prevClose = parseFloat(p[4]);                 // 昨收（美股/A股同为 p[4]）
+  const changePct = (prevClose > 0 && price > 0) ? (price - prevClose) / prevClose * 100 : null;
+  let name = p[1];
+  if (opts.us) {                                       // 美股名称取靠后「含空格的字母」字段（如 "Trip Com Group Ltd"）
+    name = (p.find(f => /[A-Za-z]/.test(f) && /\s/.test(f) && f.trim().length > 3) || p[2] || '').trim();
   }
+  if (!name || !isFinite(price)) throw new Error('解析失败');
   return { name, price, changePct: isFinite(changePct) ? changePct : null, prevClose: prevClose > 0 ? prevClose : null };
 }
 

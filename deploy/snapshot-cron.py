@@ -172,12 +172,15 @@ def fetch_quote(code):
         txt = http_get('https://qt.gtimg.cn/q=us%s' % sym, 'gbk')
         m = re.search(r'"([^"]*)"', txt)
         p = m.group(1).split('~') if m else []
+        # 美股与 A股同布局：p[3]=现价, p[4]=昨收（p[5] 是今开、非涨跌幅）
         price = num(p[3]) if len(p) > 3 else 0
-        day = num(p[5]) if len(p) > 5 else None
-        prev = price / (1 + day / 100) if (day is not None and (1 + day / 100) != 0) else None
+        prev = num(p[4]) if len(p) > 4 else 0
+        if price <= 0:
+            price = prev
+        day = ((price - prev) / prev * 100) if prev > 0 else None
         if price <= 0:
             raise ValueError('price<=0')
-        return price, prev, day
+        return price, (prev if prev > 0 else None), day
     full = detect_market(code) + code
     txt = http_get('https://qt.gtimg.cn/q=%s' % full, 'gbk')
     m = re.search(r'"([^"]*)"', txt)
