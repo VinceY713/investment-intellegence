@@ -128,7 +128,8 @@ svg.icon { width: 1.15em; height: 1.15em; display: inline-block; vertical-align:
   padding: 18px 22px;
   gap: 14px;
 }
-.brand { display: flex; align-items: center; gap: 13px; }
+.brand { display: flex; align-items: center; gap: 13px; min-width: 0; }
+.brand > div { min-width: 0; }
 .logo {
   width: 40px; height: 40px; border-radius: 12px; flex: 0 0 auto;
   display: grid; place-items: center;
@@ -144,7 +145,9 @@ svg.icon { width: 1.15em; height: 1.15em; display: inline-block; vertical-align:
   background: rgba(52, 199, 89, 0.14);
   padding: 7px 12px; border-radius: 999px;
   border: 1px solid rgba(52, 199, 89, 0.25);
+  white-space: nowrap; flex: 0 0 auto;
 }
+.storage-badge svg { flex: 0 0 auto; }
 
 /* ---------- Tabs ---------- */
 .tabs {
@@ -300,8 +303,10 @@ button.btn .spin { animation: spin 0.9s linear infinite; }
 table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 th, td { text-align: left; padding: 10px 9px; border-bottom: 1px solid var(--line); }
 th { color: var(--muted); font-weight: 600; font-size: 12px; }
-td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 tr.total-row td { font-weight: 700; border-top: 1.5px solid var(--line-strong); }
+tr.total-row td.num { white-space: normal; }   /* 合计行可在 token 间换行，不撑宽表格 */
+.nowrap { white-space: nowrap; }
 .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 
 /* ---------- Stats ---------- */
@@ -336,7 +341,9 @@ tr.total-row td { font-weight: 700; border-top: 1.5px solid var(--line-strong); 
   box-shadow: var(--shadow-sm);
   backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
   transition: transform 0.1s, background 0.2s, color 0.2s;
+  white-space: nowrap; flex: 0 0 auto;
 }
+.theme-toggle svg { flex: 0 0 auto; }
 .theme-toggle:hover { background: var(--surface-hover); }
 .theme-toggle:active { transform: scale(0.96); }
 .theme-toggle svg.icon { width: 16px; height: 16px; }
@@ -441,4 +448,14 @@ code.formula { background: rgba(10,132,255,0.10); padding: 2px 7px; border-radiu
   .stat-grid { grid-template-columns: 1fr 1fr; }
   .stat .value { font-size: 22px; }
   body { font-size: 14.5px; }
+  /* 顶栏：品牌名不折行且过窄时省略，让主题/同步按钮内容始终完整 */
+  .topbar { padding: 12px 14px; gap: 10px; }
+  .topbar h1 { font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .brand { gap: 10px; }
+  .logo { width: 34px; height: 34px; border-radius: 10px; }
+  .logo svg { width: 19px; height: 19px; }
+  .topbar-actions { gap: 8px; }
+  .theme-toggle { padding: 6px 10px; font-size: 12px; }
+  .storage-badge { padding: 6px 9px; font-size: 11.5px; }
+  th, td { padding: 9px 7px; }
 }

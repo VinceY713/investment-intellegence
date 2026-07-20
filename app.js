@@ -3002,8 +3002,9 @@ VIEWS.portfolio = function (app) {
   catCard.appendChild(el(`<div class="table-scroll"><table>
     <thead><tr><th>类别</th><th class="num">金额</th><th class="num">占比</th></tr></thead>
     <tbody>${catRows}
-      <tr class="total-row"><td>人民币计价 · 美元计价合计</td><td class="num">${fmtMoney(byCur['CNY']||0)} · ${fmtMoney(usdCny)}</td>
-      <td class="num">${fmtPct(pct(byCur['CNY']||0),0)} · ${fmtPct(pct(usdCny),0)}</td></tr>
+      <tr class="total-row"><td><span class="nowrap">人民币计价</span> · <span class="nowrap">美元计价合计</span></td>
+      <td class="num"><span class="nowrap">${fmtMoney(byCur['CNY']||0)}</span> · <span class="nowrap">${fmtMoney(usdCny)}</span></td>
+      <td class="num"><span class="nowrap">${fmtPct(pct(byCur['CNY']||0),0)}</span> · <span class="nowrap">${fmtPct(pct(usdCny),0)}</span></td></tr>
     </tbody></table></div>`));
   app.appendChild(catCard);
 
