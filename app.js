@@ -1204,6 +1204,19 @@ VIEWS.positions = function (app) {
     } else {
       STATE.positions.push(pos);
     }
+    // 持仓若与「投资组合」某资产同代码，同步更新该资产（否则渲染时会被资产回填覆盖，编辑不生效）
+    if (pos.code) {
+      const fx = currentFx();
+      const a = (STATE.assets || []).find(x => x.code === pos.code);
+      const px = price > 0 ? price : (a ? num(a.lastPx) : 0);
+      if (a && shares > 0 && px > 0) {
+        a.shares = shares;
+        a.amount = Math.round(shares * px * 100) / 100;
+        a.lastPx = px;
+        if (cost > 0) a.pnl = Math.round(shares * (px - cost) * (a.currency === 'USD' ? fx : 1) * 100) / 100;
+        a.cny = Math.round(assetCny(a, fx));
+      }
+    }
     saveState();
     render();
   };
