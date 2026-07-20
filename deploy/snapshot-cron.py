@@ -170,7 +170,28 @@ def fetch_quote(code):
     return price, (prev if prev > 0 else None), day
 
 
+OZ_TO_GRAM = 31.1034768
+
+
+def fetch_gold(fx):
+    txt = http_get('https://hq.sinajs.cn/list=hf_XAU', 'gbk',
+                   referer='https://finance.sina.com.cn')
+    m = re.search(r'"([^"]*)"', txt)
+    p = m.group(1).split(',') if m else []
+    usd_oz = num(p[0]) if p else 0
+    if usd_oz <= 0 and len(p) > 8:
+        usd_oz = num(p[8])
+    if usd_oz <= 0:
+        raise ValueError('gold price invalid')
+    cny_gram = usd_oz * (fx or FX_DEFAULT) / OZ_TO_GRAM
+    if not (300 <= cny_gram <= 2500):
+        raise ValueError('gold out of range %.1f' % cny_gram)
+    return cny_gram
+
+
 def asset_fetchable(a):
+    if a.get('category') == '黄金':
+        return True
     code = a.get('code') or ''
     if not code:
         return False
@@ -182,7 +203,9 @@ def asset_fetchable(a):
 
 
 def refresh_asset(a, fx):
-    if a.get('category') == '基金':
+    if a.get('category') == '黄金':
+        px, prev, day = fetch_gold(fx), None, None
+    elif a.get('category') == '基金':
         px, prev, day = fetch_fund(a['code'])
     else:
         px, prev, day = fetch_quote(a['code'])

@@ -617,6 +617,7 @@ const VIEWS = {};
 let currentView = 'portfolio';
 
 function render() {
+  syncPositionsFromAssets();        // 渲染前先把持仓与最新资产对齐，各模块联动实时数据
   const app = document.getElementById('app');
   app.innerHTML = '';
   (VIEWS[currentView] || VIEWS.dashboard)(app);
@@ -932,12 +933,34 @@ async function fetchFund(code) {
 }
 
 /* -------------------------------------------------------------------------
+   黄金价格：人民币/克（纸黄金跟随国际现货金）。
+   经 /api/gold 代理新浪现货金 hf_XAU（美元/盎司）→ ×中间价 ÷ 31.1035 折人民币/克。
+   做强合理性校验（400–2000 元/克），异常一律不采用，避免坏行情污染持仓。
+   ------------------------------------------------------------------------- */
+const OZ_TO_GRAM = 31.1034768;
+async function fetchGold(fx) {
+  const text = await getQuoteText('/api/gold');
+  const m = text.match(/"([^"]*)"/);
+  if (!m || !m[1]) throw new Error('无黄金数据');
+  const p = m[1].split(',');
+  // 新浪 hf_XAU：p[0]=当前价(美元/盎司)，休市时回退 p[8]/昨结
+  let usdOz = parseFloat(p[0]);
+  if (!(usdOz > 0)) usdOz = parseFloat(p[8]);
+  if (!(usdOz > 0)) throw new Error('金价无效');
+  const cnyGram = usdOz * (fx || currentFx()) / OZ_TO_GRAM;
+  if (!(cnyGram >= 300 && cnyGram <= 2500)) throw new Error('金价超出合理区间(' + cnyGram.toFixed(1) + ')，不采用');
+  return cnyGram;
+}
+
+/* -------------------------------------------------------------------------
    一键刷新组合估值：公募基金走天天基金，股票/ETF/美股走行情源。
    份额模型：首次刷新用「金额 ÷ 现价/净值」反推份额并存下；之后价值 = 份额 × 最新价，
    浮盈亏随价值等额变动（Δ浮盈亏 = Δ市值），避免多天重复计算。
    ------------------------------------------------------------------------- */
 function assetFetchable(a) {
-  if (!a || !a.code) return false;
+  if (!a) return false;
+  if (a.category === '黄金') return true;               // 纸黄金按国际金价折人民币/克
+  if (!a.code) return false;
   if (a.category === '基金') return /^\d{6}$/.test(a.code);
   if (a.category === 'A股股票' || a.category === '美股股票') return isUsCode(a.code) || /^\d{5,6}$/.test(a.code);
   return false;
@@ -945,7 +968,9 @@ function assetFetchable(a) {
 
 async function refreshOneAsset(a, fx) {
   let px = null, dayPct = null;
-  if (a.category === '基金') {
+  if (a.category === '黄金') {
+    px = await fetchGold(fx); dayPct = null;            // 金价（元/克）；当日涨跌暂不展示
+  } else if (a.category === '基金') {
     const f = await fetchFund(a.code); px = f.nav; dayPct = f.dayPct;
   } else {
     const q = await fetchQuote(a.code); px = q.price; dayPct = q.changePct;
@@ -982,9 +1007,33 @@ async function refreshAllQuotes() {
     try { const ok = await refreshOneAsset(a, fx); if (ok) updated++; else skipped++; }
     catch (e) { failed++; }
   }
+  syncPositionsFromAssets();
   STATE.lastQuoteRefresh = Date.now();
   saveState();
   return { updated, failed, skipped, total: targets.length };
+}
+
+// 用「投资组合」里同代码资产的最新数据回填持仓的占比/浮盈亏%/现价/当日涨跌，
+// 让 ②分散 ③回撤 ④止损 ⑤铁律 ①凯利 各模块都联动最新持仓。只更新有代码的持仓，
+// 不动 factor / maxDrop / trend 等人工字段。
+function syncPositionsFromAssets() {
+  const fx = currentFx();
+  const total = portfolioTotal();
+  (STATE.positions || []).forEach(p => {
+    if (!p.code) return;
+    const a = (STATE.assets || []).find(x => x.code === p.code);
+    if (!a) return;
+    const vCny = assetCny(a, fx);
+    if (total > 0) p.weight = +(vCny / total * 100).toFixed(4);
+    if (a.pnl != null && a.amount != null) {
+      const pnlOrig = a.currency === 'USD' ? num(a.pnl) / fx : num(a.pnl);
+      const cost = num(a.amount) - pnlOrig;
+      if (cost > 0) p.pnl = +(pnlOrig / cost * 100).toFixed(2);   // 持仓 pnl 存的是浮盈亏%
+    }
+    if (num(a.lastPx) > 0) p.price = a.lastPx;
+    if (a.dayPct != null) p.dayPct = a.dayPct;
+    if (num(a.shares) > 0) p.shares = a.shares;
+  });
 }
 
 // 打开页面自动刷新：有可刷新资产且距上次 > 15 分钟才请求，避免频繁打扰
@@ -1218,14 +1267,14 @@ VIEWS.kelly = function (app) {
     </div>
   `));
 
-  /* --- 傻瓜模式：选持仓 → AI 给胜率/空间/理由 → 自动算凯利并回填计算器 --- */
-  const kaPositions = STATE.positions || [];
+  /* --- 傻瓜模式：选持仓/基金 → AI 给胜率/空间/理由 → 自动算凯利并回填计算器 --- */
+  const kaPositions = kellyCandidates();
   const aiCard = el(`<div class="card" style="margin-bottom:16px">
     <h3>${icon('sparkles')} 傻瓜模式 · 选持仓，AI 帮你估参数</h3>
     <p class="hint">不知道胜率/空间怎么填？选一只持仓，AI（DeepSeek）按它对该公司与行业的认知给出<strong>保守估计</strong>的胜率、上涨/下跌空间和多空理由，自动完成凯利计算，并把参数回填到下方计算器供你微调。<strong>AI 估计仅供参考，非投资建议，最终判断在你。</strong></p>
     ${kaPositions.length ? `
     <div class="row" style="gap:8px;max-width:560px">
-      <select id="ka-pos">${kaPositions.map(p => `<option value="${p.id}">${escapeHtml(p.name)}${p.code ? '（' + escapeHtml(p.code) + '）' : ''} · 当前 ${(+num(p.weight)).toFixed(1)}%</option>`).join('')}</select>
+      <select id="ka-pos">${kaPositions.map(p => `<option value="${p.id}">${p.kind === '基金' ? '[基金] ' : ''}${escapeHtml(p.name)}${p.code ? '（' + escapeHtml(p.code) + '）' : ''} · 当前 ${(+num(p.weight)).toFixed(1)}%</option>`).join('')}</select>
       <button class="btn" id="ka-go" style="flex:0 0 auto">${icon('sparkles')} 让 AI 评估</button>
     </div>` : `<div class="alert blue"><span class="icon">${icon('info')}</span><div>还没有持仓。先到「持仓」页添加，这里才能联动评估。</div></div>`}
     <div id="ka-out"></div>
@@ -1286,20 +1335,22 @@ VIEWS.kelly = function (app) {
     const old = kaGo.innerHTML; kaGo.disabled = true; kaGo.innerHTML = icon('refresh', 'spin') + ' AI 分析中…';
     out.innerHTML = '<div class="inline-note" style="margin-top:10px">正在请求 DeepSeek 评估「' + escapeHtml(p.name) + '」，约 10–30 秒…</div>';
     try {
-      const sys = '你是一位严谨、保守的股票投资分析师。基于你对该公司与所属行业的认知，对用户持仓给出未来 6–12 个月的保守评估。'
-        + '硬性要求：宁可低估胜率、高估风险；胜率不允许超过 70；空间用价格涨跌幅的正百分数。'
+      const sys = '你是一位严谨、保守的投资分析师，评估对象可能是股票或基金。基于你对该标的（公司/行业/指数/主题）的认知，给出未来 6–12 个月的保守评估。'
+        + '一致性要求：请给出你最有把握的【单一保守中枢估计】，不要给区间、不要发散；相同输入应尽量得到相近结论。'
+        + '硬性要求：宁可低估胜率、高估风险；胜率必须在 30–65 之间；空间用价格涨跌幅的正百分数，下跌空间不小于上涨空间的一半。'
+        + '基金按其跟踪的指数/主题整体评估，波动通常小于个股，空间相应收敛。'
         + '只输出一个 JSON 对象，不要任何多余文字、解释或代码块标记。格式：'
-        + '{"winRate":55,"upside":40,"downside":25,"bulls":["客观看多理由1","理由2"],"bears":["客观看空理由1","理由2"],"note":"一句话结论"}';
+        + '{"winRate":52,"upside":35,"downside":25,"bulls":["客观看多理由1","理由2"],"bears":["客观看空理由1","理由2"],"note":"一句话结论"}';
       const user = `标的：${p.name}（代码 ${p.code || '无'}）\n`
         + `底层驱动因子：${p.factor}；用户标注趋势：${p.trend || '未知'}；当前浮盈亏：${num(p.pnl).toFixed(1)}%；`
         + `用户预估最大跌幅：${num(p.maxDrop) || '未填'}%；当前占总资产：${num(p.weight).toFixed(2)}%。\n`
         + `请给出胜率(winRate)、上涨空间(upside)、下跌空间(downside)与各 2-4 条客观多空理由。`;
       const j = await aiChatJSON(sys, user);
 
-      // 消毒：胜率封顶 70（防 AI 过度乐观），空间必须为正
-      const win = Math.min(70, Math.max(5, Math.round(num(j.winRate))));
+      // 消毒：胜率夹到 30–65（防 AI 过度乐观/发散），空间为正，下跌空间≥上涨空间一半
+      const win = Math.min(65, Math.max(30, Math.round(num(j.winRate))));
       const up = Math.max(1, num(j.upside));
-      const down = Math.max(1, num(j.downside));
+      const down = Math.max(1, Math.max(num(j.downside), up * 0.5));
       const bulls = (j.bulls || []).map(x => String(x).trim()).filter(Boolean).slice(0, 4);
       const bears = (j.bears || []).map(x => String(x).trim()).filter(Boolean).slice(0, 4);
       const note = String(j.note || '').trim();
@@ -1630,9 +1681,13 @@ VIEWS.drawdown = function (app) {
     const contrib = Calc.drawdownContribution(w, md);
     const cap = md > 0 ? (threshold / md) * 100 : Infinity; // 单股独占预算时的上限占比
     const over = w > cap;
+    const pnl = num(p.pnl);
+    const day = (p.dayPct != null && isFinite(p.dayPct)) ? `<span class="pill ${p.dayPct>=0?'green':'red'}">${p.dayPct>=0?'+':''}${fmtPct(p.dayPct,2)}</span>` : '—';
     return `<tr data-ddrow="${i}" style="cursor:pointer">
       <td>${escapeHtml(p.name)}</td>
       <td class="num">${fmtPct(w,1)}</td>
+      <td class="num" style="color:${pnl>=0?'var(--green-ink)':'var(--red-ink)'}">${pnl>=0?'+':''}${fmtPct(pnl,1)}</td>
+      <td class="num">${day}</td>
       <td class="num">${fmtPct(md,0)}</td>
       <td class="num">${fmtPct(contrib,2)}</td>
       <td class="num">${isFinite(cap)?fmtPct(cap,1):'—'}</td>
@@ -1642,7 +1697,7 @@ VIEWS.drawdown = function (app) {
     </tr>`;
   }).join('');
   scroll.appendChild(el(`<table><thead><tr>
-    <th>名称</th><th class="num">当前占比</th><th class="num">最大跌幅</th>
+    <th>名称</th><th class="num">当前占比</th><th class="num">浮盈亏</th><th class="num">今日</th><th class="num">最大跌幅</th>
     <th class="num">回撤贡献</th><th class="num">理论上限*</th><th>判定</th>
   </tr></thead><tbody>${rows}</tbody></table>`));
   detail.appendChild(scroll);
@@ -1677,6 +1732,32 @@ VIEWS.drawdown = function (app) {
 /* =========================================================================
    模块 4 — 固定分数止损（本金防御）
    ========================================================================= */
+// 凯利傻瓜模式候选：股票持仓 + 基金资产（基金不在 positions 里，这里合成）
+function kellyCandidates() {
+  const fx = currentFx();
+  const total = portfolioTotal();
+  const list = [];
+  const seen = new Set();
+  (STATE.positions || []).forEach(p => {
+    if (!p.name) return;
+    list.push({ id: p.id, name: p.name, code: p.code || '', factor: p.factor || '其它', trend: p.trend || '未知', pnl: num(p.pnl), weight: num(p.weight), maxDrop: num(p.maxDrop) || 40, kind: '持仓' });
+    if (p.code) seen.add(p.code);
+  });
+  (STATE.assets || []).forEach(a => {
+    if (a.category !== '基金') return;
+    if (a.code && seen.has(a.code)) return;
+    const vCny = assetCny(a, fx);
+    let pnlPct = 0;
+    if (a.pnl != null && a.amount != null) {
+      const pnlOrig = a.currency === 'USD' ? num(a.pnl) / fx : num(a.pnl);
+      const cost = num(a.amount) - pnlOrig;
+      if (cost > 0) pnlPct = +(pnlOrig / cost * 100).toFixed(2);
+    }
+    list.push({ id: 'ast:' + a.id, name: a.name, code: a.code || '', factor: '基金', trend: '未知', pnl: pnlPct, weight: total > 0 ? +(vCny / total * 100).toFixed(2) : 0, maxDrop: 30, kind: '基金' });
+  });
+  return list;
+}
+
 // 汇总可选持仓（股票/基金）及其成本价、现价，供止损模块联动带出
 function stopLossHoldings() {
   const fx = currentFx();
@@ -1992,6 +2073,13 @@ VIEWS.planner = function (app) {
   const pyramid = el(`<div class="card" style="margin-top:16px"><h3>正金字塔分批加仓</h3>
     <p class="hint">输入价位区间与总投入，系统生成"越低买越多、越高买越少"的分批金额</p></div>`);
   pyramid.appendChild(el(`
+    <div class="field"><label>标的代码（A股/ETF 数字，美股字母；可留空手填）</label>
+      <div class="row" style="gap:6px;max-width:420px">
+        <input id="py-code" placeholder="如 002518 / 513260 / TCOM" style="flex:1"/>
+        <button class="btn secondary" id="py-fetch" style="flex:0 0 auto">获取现价</button>
+      </div>
+      <p class="inline-note" id="py-code-note">获取后自动把现价填入「最高价」，并按现价 −15% 预填「最低价」，都可改。</p>
+    </div>
     <div class="grid grid-3">
       <div class="field"><label>最低价（买最多）</label><input id="py-low" type="number" step="0.01" placeholder="18"/></div>
       <div class="field"><label>最高价（买最少）</label><input id="py-high" type="number" step="0.01" placeholder="24"/></div>
@@ -2002,6 +2090,22 @@ VIEWS.planner = function (app) {
     <div id="py-result"></div>
   `));
   app.appendChild(pyramid);
+
+  pyramid.querySelector('#py-fetch').onclick = async () => {
+    const note = pyramid.querySelector('#py-code-note');
+    const code = pyramid.querySelector('#py-code').value.trim();
+    if (!code) { note.textContent = '请先填标的代码（数字 A股/ETF，字母美股）。'; return; }
+    note.textContent = '获取中…'; note.style.color = 'var(--muted)';
+    try {
+      const q = await fetchQuote(code);
+      const cur = num(q.price);
+      pyramid.querySelector('#py-high').value = +cur.toFixed(cur >= 100 ? 2 : 3);
+      pyramid.querySelector('#py-low').value = +(cur * 0.85).toFixed(cur >= 100 ? 2 : 3);
+      note.innerHTML = `${icon('check')} ${escapeHtml(q.name)}  现价 ${cur}，已填入价位区间（可改）`; note.style.color = 'var(--green)';
+    } catch (e) {
+      note.innerHTML = `${icon('warn')} 获取失败（${escapeHtml(e.message)}）——请手动填价位`; note.style.color = 'var(--amber)';
+    }
+  };
 
   pyramid.querySelector('#py-calc').onclick = () => {
     const box = pyramid.querySelector('#py-result');
@@ -2253,7 +2357,7 @@ async function aiChatJSON(sys, user) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: AI_MODEL, stream: false, temperature: 0.3, max_tokens: 900,
+      model: AI_MODEL, stream: false, temperature: 0.15, max_tokens: 900,
       messages: [{ role: 'system', content: sys }, { role: 'user', content: user }],
     }),
   });
@@ -2765,6 +2869,12 @@ VIEWS.help = function (app) {
   app.appendChild(el(`<div class="card"><div class="alert blue"><span class="icon">${icon('info')}</span><div>
     <strong>核心理念</strong>：投资比拼的是概率认知、仓位管理与人性约束。本工具不预测涨跌、不荐股，只做量化计算与纪律校验——把“人性约束”固化成代码，在情绪化时刻把你拉回理性。所有模型都依赖你的诚实输入。</div></div></div>`));
 
+  G('globe', '数据 · 实时行情 · 云端存储', [
+    ['自动更新涨跌', '<p>打开页面会自动刷新一次(15 分钟节流),也可在「投资组合」点<strong>一键刷新估值</strong>。覆盖:公募<strong>基金</strong>(天天基金实时估值)、<strong>A股/ETF/美股</strong>(腾讯/新浪行情)、<strong>黄金</strong>(国际现货金折人民币/克)。持仓表「今日」列显示当日涨跌。理财为银行自有产品无公开接口,保持手动维护 + 年化利息估算。</p>'],
+    ['持仓联动', '<p>刷新后,各分析模块(凯利/分散/回撤/止损/铁律)都会用<strong>最新占比与浮盈亏</strong>联动计算,无需手动同步。份额模型:首次用「金额÷现价」反推份额,之后市值=份额×最新价,单次异常波动>40% 自动跳过以防坏行情污染。</p>'],
+    ['云端存储与恢复', '<p>全部数据存到<strong>你自己的服务器</strong>(访问密码保护),换设备/清缓存自动恢复,本机浏览器仅作离线缓存。每天(含服务器定时 22:00/23:00/23:30)记录一份快照,「资产趋势」看走势;数据记错可在<strong>设置→数据管理→恢复到某一天</strong>一键回退。</p>'],
+  ]);
+
   G('wallet', '投资组合 · 总览与 AI 诊断', [
     ['怎么用', '<p>已导入你 7/19 的资产汇总表。查看大类配置、按类别明细、币种敞口与全部持仓；点「生成 AI 组合诊断」由 DeepSeek 给出健康度评分与下一步建议。</p>'],
     ['计算逻辑', '<p>把每笔资产按汇率折算人民币后，归并为大类（权益/固收理财/现金/黄金），并按类别、币种分别汇总占比；美元敞口 = 所有 USD 计价资产折人民币之和。AI 诊断把这些占比 + 股票子组合的有效持仓数/因子集中度打包发给模型。</p>'],
@@ -2773,7 +2883,8 @@ VIEWS.help = function (app) {
   ]);
 
   G('pie', '① 凯利定注 · 单标的下注', [
-    ['怎么用', '<p>填赢/输情形的涨跌幅、胜率，并各写≥2 条看多/看空的客观理由；先过 EV 闸门，再看满/半/¼ 凯利三档，默认执行 ¼ 凯利。</p>'],
+    ['傻瓜模式(推荐)', '<p>顶部选一只<strong>持仓或基金</strong>→点「让 AI 评估」,DeepSeek 按对该标的的认知给出<strong>保守估计</strong>的胜率、上涨/下跌空间和多空理由,自动算出 ¼ 凯利目标仓位,并与你当前占比对比给出加/减仓空间(含金额)。参数会回填到下方计算器供微调。<strong>AI 估计每次可能略有出入,只作起点参考,非投资建议。</strong></p>'],
+    ['怎么用', '<p>或手动填赢/输情形的涨跌幅、胜率，并各写≥2 条看多/看空的客观理由；先过 EV 闸门，再看满/半/¼ 凯利三档，默认执行 ¼ 凯利。</p>'],
     ['计算逻辑', '<p>期望值 <code class="formula">EV = p×涨幅 − q×跌幅</code>，EV&lt;0 直接淘汰；净赔率 <code class="formula">b = 涨幅 ÷ 跌幅</code>；凯利 <code class="formula">f = (b×p − q) / b</code>；实战取 <code class="formula">f×0.25</code> 以降低参数误差。</p>'],
     ['理论', '<p><strong>凯利公式（Kelly Criterion）</strong>：在已知赔率与胜率下，使资金<strong>长期复利增长率最大</strong>的下注比例。半/四分之一凯利用来对冲主观胜率高估的风险。</p>'],
     ['遵循的收益', '<p>长期看，按（分数）凯利下注比“凭感觉重仓/轻仓”获得更高的复利增长率，同时把爆仓概率压到极低——既不错失机会，也不被单笔击穿。</p>'],
@@ -2787,28 +2898,28 @@ VIEWS.help = function (app) {
   ]);
 
   G('gauge', '③ 回撤控制 · 最大回撤约束', [
-    ['怎么用', '<p>设定组合可承受的最大回撤阈值（默认 15%），本页显示回撤预算“已用/剩余”，并给出每只高波动持仓的理论仓位上限。</p>'],
+    ['怎么用', '<p>设定组合可承受的最大回撤阈值（默认 15%），本页按<strong>最新持仓占比</strong>显示回撤预算“已用/剩余”(表格含浮盈亏/今日涨跌)，并给出每只高波动持仓的理论仓位上限。点表格任意行看该股解读。</p>'],
     ['计算逻辑', '<p>单股回撤贡献 <code class="formula">= 持仓占比 × 该股最大跌幅</code>；组合预估回撤 = 各股贡献之和；单股理论上限 <code class="formula">= 回撤阈值 ÷ 该股最大跌幅</code>。</p>'],
     ['理论', '<p><strong>风险预算（Risk Budgeting）</strong>：把“可承受回撤”当成一笔总预算，分配给各持仓，而不是只盯仓位百分比。</p>'],
     ['遵循的收益', '<p>组合整体回撤被钉在你能承受的范围内，避免深套后被迫在底部割肉——控制回撤本身就是提高长期复利的关键（跌 50% 需涨 100% 才回本）。</p>'],
   ]);
 
   G('scissors', '④ 止损防御 · 固定分数止损', [
-    ['怎么用', '<p>填总资产、单笔可接受最大亏损（默认 2%）、买入价与计划止损价，反推“最多能买多少”。</p>'],
+    ['怎么用', '<p>顶部可<strong>从持仓/基金选择</strong>,自动带出成本价填入「买入价」(可手改);再填单笔可接受最大亏损(默认 2%)与计划止损价,反推“最多能买多少”。总资产自动汇总。</p>'],
     ['计算逻辑', '<p><code class="formula">最大可买仓位 = (总资产 × 单笔风险%) ÷ 止损幅度%</code>，其中止损幅度 = (买入价−止损价)/买入价。</p>'],
     ['理论', '<p><strong>固定分数法（Fixed-Fractional）</strong>：先定“这一笔最多亏本金的多少”，再由止损距离倒推仓位——把亏损前置锁死。</p>'],
     ['遵循的收益', '<p>单笔亏损被限制在总资产的固定小比例（如 2%），连续犯错也难伤筋动骨，保证你“留在牌桌上”等到属于自己的大机会。</p>'],
   ]);
 
   G('shield', '⑤ 铁律校验 · 操作拦截引擎', [
-    ['怎么用', '<p>任何“加仓”前跑一遍校验：填浮盈亏、趋势、当前/加仓占比等，触发任一铁律即弹出必须二次确认的红色拦截。</p>'],
+    ['怎么用', '<p>放在凯利定注之后:任何“加仓”前跑一遍校验。选已有持仓会带出<strong>最新占比/浮盈亏</strong>;加仓以<strong>金额优先</strong>(自动算占比);触发任一铁律即弹出必须二次确认的红色拦截。</p>'],
     ['计算逻辑', '<p>七条硬规则：亏损加仓、下跌趋势加仓、超单股上限、正金字塔（高位加仓额≥上次）、因子集中度&gt;60%、现金池&lt;下限、胜率&gt;60% 无充分理由。</p>'],
     ['理论', '<p><strong>行为金融学 + 交易纪律</strong>：把处置效应、损失厌恶、追高等人性弱点，用规则在情绪化时刻强制拦下。</p>'],
     ['遵循的收益', '<p>躲开散户最典型的四类致命操作（亏损加仓、接下跌的刀、追高头重脚轻、满仓无现金），这些正是账户从回撤走向巨亏的分水岭。</p>'],
   ]);
 
   G('ruler', '⑥ 加仓计划器 + 利润隔离', [
-    ['怎么用', '<p>用橄榄型模板规划试水→主力→收缩；输入价位区间与总投入，生成“越低买越多”的正金字塔分批；浮盈超阈值（默认 +30%）提醒隔离部分利润。</p>'],
+    ['怎么用', '<p>可先输入<strong>标的代码</strong>点「获取现价」,自动把现价填入「最高价」、按 −15% 预填「最低价」(可改);再填总投入,生成“越低买越多”的正金字塔分批。用橄榄型模板规划试水→主力→收缩;浮盈超阈值(默认 +30%)提醒隔离部分利润。</p>'],
     ['计算逻辑', '<p>正金字塔按“越低价权重越大”线性分配买入额；利润隔离建议把浮盈的一半转入货基/债/黄金等安全资产并记录。</p>'],
     ['理论', '<p><strong>正金字塔加仓 + 落袋为安</strong>：摊薄成本、避免高位头重脚轻；把账面利润变成已实现的安全垫。</p>'],
     ['遵循的收益', '<p>降低平均持仓成本、抬高盈亏平衡点的安全边际，并在泡沫期锁住部分胜利果实，避免坐了一轮过山车回到原点。</p>'],

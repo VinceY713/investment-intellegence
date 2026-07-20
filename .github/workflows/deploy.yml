@@ -136,6 +136,19 @@ jobs:
                     add_header Cache-Control "no-store";
                 }
 
+                # 黄金代理：/api/gold → 新浪现货金 hf_XAU（美元/盎司），前端折人民币/克
+                location = /api/gold {
+                    proxy_pass https://hq.sinajs.cn/list=hf_XAU;
+                    proxy_set_header Host hq.sinajs.cn;
+                    proxy_set_header Referer https://finance.sina.com.cn;
+                    proxy_set_header User-Agent "Mozilla/5.0";
+                    proxy_ssl_server_name on;
+                    proxy_ssl_name hq.sinajs.cn;
+                    resolver 119.29.29.29 223.5.5.5 valid=300s;
+                    resolver_timeout 5s;
+                    add_header Cache-Control "no-store";
+                }
+
                 # 汇率代理：/api/fxrate → 中国货币网人民币汇率中间价（每日）
                 location = /api/fxrate {
                     proxy_pass https://www.chinamoney.com.cn/r/cms/www/chinamoney/data/fx/ccpr.json;
