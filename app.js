@@ -171,6 +171,67 @@ function portfolioTotal() {
   return num(STATE.portfolio && STATE.portfolio.totalAssets, 0);
 }
 
+/* -------------------------------------------------------------------------
+   股票现金池：卖出股票释放的现金自动归集为一笔「人民币现金」资产，
+   出现在投资组合的现金分类中，总资产守恒（股票↓ = 现金↑）。
+   ------------------------------------------------------------------------- */
+const STOCK_CASH_POOL_NAME = '股票现金池';
+function findStockCashPool() {
+  return (STATE.assets || []).find(a => a.autoPool === 'stockCash');
+}
+function stockCashPoolBalance() {
+  const p = findStockCashPool();
+  return p ? num(p.amount) : 0;
+}
+// 入账：卖出所得累加到股票现金池（没有则自动创建）
+function addToStockCashPool(amountCny, note) {
+  if (!(amountCny > 0)) return stockCashPoolBalance();
+  let p = findStockCashPool();
+  if (!p) {
+    p = { id: uid(), autoPool: 'stockCash', name: STOCK_CASH_POOL_NAME, category: '人民币现金',
+          currency: 'CNY', amount: 0, cny: 0, platform: '股票账户', note: '' };
+    STATE.assets = STATE.assets || [];
+    STATE.assets.push(p);
+  }
+  p.amount = Math.round((num(p.amount) + amountCny) * 100) / 100;
+  p.cny = p.amount;
+  if (note) p.note = note;
+  return p.amount;
+}
+// 现金类资产合计（铁律「现金蓄水池」的真实口径，含股票现金池）
+function cashAssetsCny() {
+  const fx = currentFx();
+  return (STATE.assets || []).reduce((s, a) =>
+    s + (a.category === '人民币现金' || a.category === '香港账户现金' ? assetCny(a, fx) : 0), 0);
+}
+// 减仓记账：卖出金额写回数据——联动资产/股数自动减少，所得自动进股票现金池
+function applySellToPool(posId, amtCny) {
+  const fx = currentFx();
+  const total = portfolioTotal();
+  const p = (STATE.positions || []).find(x => x.id === posId);
+  const a = p && p.code ? (STATE.assets || []).find(x => x.code === p.code) : null;
+  let ratio = 0;
+  if (a) {
+    const vCny = assetCny(a, fx);
+    ratio = vCny > 0 ? Math.min(1, amtCny / vCny) : 0;
+    const amtOrig = a.currency === 'USD' ? amtCny / fx : amtCny;
+    a.amount = Math.max(0, Math.round((num(a.amount) - amtOrig) * 100) / 100);
+    if (num(a.shares) > 0) a.shares = Math.max(0, Math.round(a.shares * (1 - ratio) * 100) / 100);
+    if (a.pnl != null) a.pnl = Math.round(a.pnl * (1 - ratio) * 100) / 100;   // 卖出部分的浮盈亏按比例结转
+    a.cny = Math.round(assetCny(a, fx));
+  }
+  if (p) {
+    // 持仓股数始终按比例同步减少（即便资产侧没登记股数，持仓页的股数也要跟得上）
+    const posV = total > 0 ? num(p.weight) / 100 * total : 0;
+    const pr = a ? ratio : (posV > 0 ? Math.min(1, amtCny / posV) : 0);
+    if (num(p.shares) > 0 && pr > 0) p.shares = Math.max(0, Math.round(p.shares * (1 - pr) * 100) / 100);
+    if (!a && total > 0) p.weight = Math.max(0, +(num(p.weight) - amtCny / total * 100).toFixed(4));
+  }
+  const pool = addToStockCashPool(amtCny, '卖出' + (p ? p.name : '股票') + '回笼');
+  saveState();
+  return { pool, ratio };
+}
+
 // 年化利率：理财/存款 —— 美元 3%，人民币按实际（从名称/备注的“x%”解析，默认按类别兜底）
 function annualRateOf(a) {
   if (a.annualRate != null) return num(a.annualRate);
@@ -1081,7 +1142,7 @@ VIEWS.positions = function (app) {
   app.appendChild(el(`
     <div class="view-head">
       <h2>持仓管理</h2>
-      <p>录入的持仓将驱动「股票体检」「回撤控制」「铁律校验」「加减仓计划」等模块，并随行情自动刷新占比/浮盈亏。数据仅存本地。</p>
+      <p>录入的持仓将驱动「股票体检」「回撤控制」「铁律校验」「加减仓计划」等模块，并随行情自动刷新占比/浮盈亏。与「投资组合」同代码的标的<strong>双向联动</strong>：这里改股数会同步更新资产金额，那边改资产也会回填这里；减仓请用「⑤ 加减仓」的一键记账，所得自动进股票现金池。</p>
     </div>
   `));
 
@@ -1266,7 +1327,7 @@ VIEWS.positions = function (app) {
       </table>
     `));
     listCard.appendChild(scroll);
-    listCard.appendChild(el(`<p class="inline-note">现金池：${fmtPct(Math.max(0,100-totalWeight),1)}。<strong>回撤贡献(潜在)</strong> = 占比 × 最大跌幅 = 该股若跌到最坏情形对组合的拖累，是<strong>向前看的风险</strong>，恒为正，与"浮盈亏"(当前盈亏)无关——盈利的股也仍有下行风险。</p>`));
+    listCard.appendChild(el(`<p class="inline-note">股票现金池余额：<strong>${fmtMoney(stockCashPoolBalance())}</strong>（卖出股票自动归集，计入「投资组合 → 人民币现金」）；按仓位推算的现金余量 ${fmtPct(Math.max(0,100-totalWeight),1)}。<strong>回撤贡献(潜在)</strong> = 占比 × 最大跌幅 = 该股若跌到最坏情形对组合的拖累，是<strong>向前看的风险</strong>，恒为正，与"浮盈亏"(当前盈亏)无关——盈利的股也仍有下行风险。</p>`));
 
     scroll.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
       STATE.positions = STATE.positions.filter(p => p.id !== b.dataset.del);
@@ -1925,7 +1986,7 @@ VIEWS.rules = function (app) {
       <tr><td>单股仓位上限</td><td>加仓后 > 上限（默认 ${s.singleCap}%）</td></tr>
       <tr><td>正金字塔校验</td><td>高位加仓金额 ≥ 上次</td></tr>
       <tr><td>因子集中度</td><td>加仓后某因子 > 60%</td></tr>
-      <tr><td>现金蓄水池</td><td>总仓位 > ${100 - s.cashFloor}%（现金 < ${s.cashFloor}%）</td></tr>
+      <tr><td>现金蓄水池</td><td>加仓后真实现金（现金类资产−加仓金额）< ${s.cashFloor}% 总资产</td></tr>
       <tr><td>胜率诚实度</td><td>胜率 > 60% 无充分理由（在「① 凯利定注」中强制校验）</td></tr>
     </tbody></table></div></div>`);
   app.appendChild(rulesRef);
@@ -1997,13 +2058,19 @@ VIEWS.rules = function (app) {
       const fw = factorWeights[factor] || 0;
       if (fw > 0.6) violations.push('因子集中度：加仓后因子「' + factor + '」占 ' + fmtPct(fw*100,0) + ' > 60%，该操作加重单一 beta 集中度。');
     }
-    // 铁律6 现金蓄水池
+    // 铁律6 现金蓄水池——真实口径：现金类资产（含股票现金池）÷ 总资产，
+    // 加仓后现金 = 当前现金 − 本次加仓金额。无资产明细时回退到「100−股票总仓位」推算口径。
     {
-      // 加仓后总仓位 = 现有总仓位 + 本次加仓。
-      // 选中已有持仓：cur 已计入 totalWeight，只加 add；
-      // 手动输入（标的不在列表）：totalWeight 不含该股，需加上 cur + add。
-      const afterTotal = totalWeight + (selId ? add : cur + add);
-      if (afterTotal > (100 - s.cashFloor)) violations.push('现金蓄水池：加仓后总仓位 ' + fmtPct(afterTotal,1) + ' 使现金 < ' + s.cashFloor + '%，丧失回调加仓能力。');
+      const addMoney = addAmt > 0 ? addAmt : (tot > 0 ? add / 100 * tot : 0);
+      if ((STATE.assets || []).length && tot > 0) {
+        const cashNow = cashAssetsCny();
+        const afterCashPct = (cashNow - addMoney) / tot * 100;
+        if (afterCashPct < s.cashFloor - 1e-9) violations.push('现金蓄水池：当前现金 ' + fmtMoney(cashNow) + '（' + fmtPct(cashNow / tot * 100,1) + '），加仓 ' + fmtMoney(addMoney) + ' 后现金占比降至 ' + fmtPct(afterCashPct,1) + ' < ' + s.cashFloor + '%，丧失回调加仓能力。');
+      } else {
+        // 选中已有持仓：cur 已计入 totalWeight，只加 add；手动输入需加 cur + add。
+        const afterTotal = totalWeight + (selId ? add : cur + add);
+        if (afterTotal > (100 - s.cashFloor)) violations.push('现金蓄水池：加仓后总仓位 ' + fmtPct(afterTotal,1) + ' 使现金 < ' + s.cashFloor + '%，丧失回调加仓能力。');
+      }
     }
 
     // 软提醒（黄色，不拦截，但要看到）
@@ -2162,7 +2229,7 @@ VIEWS.planner = function (app) {
   } else if (gainers.length === 0) {
     lock.appendChild(el(`<div class="alert blue"><span class="icon">${icon('moon')}</span><div>当前没有浮盈达到 +${s.profitLockThreshold}% 的标的，无需隔离。</div></div>`));
   } else {
-    const totalAssets = portfolioTotal() || 1000000;
+    const totalAssets = portfolioTotal();   // 为 0 时金额列显示 ¥0，请到「设置/投资组合」补齐总资产
     const scroll = el('<div class="table-scroll"></div>');
     const rows = gainers.map(p => {
       const w = num(p.weight);
@@ -2319,6 +2386,31 @@ VIEWS.planner = function (app) {
           <tbody>${rows}<tr class="total-row"><td>合计</td><td></td><td class="num">${fmtMoney(reduceValue)}</td><td></td><td class="num">100%</td></tr></tbody></table></div>`));
         box.appendChild(el(`<div class="alert blue" style="margin-top:10px"><span class="icon">${icon('ruler')}</span><div><strong>反金字塔减仓：逢反弹越涨卖越多</strong>(现价/+3%/+6%),把"减仓"尽量卖在相对高点,而不是恐慌市价砸出。逻辑没破的持仓不必一次清空。</div></div>`));
       }
+
+      // —— 执行记账：一键把减仓写回数据（联动资产/股数自动减少，卖出所得自动进股票现金池）——
+      const poolNow = stockCashPoolBalance();
+      box.appendChild(el(`<div class="result-box" style="margin-top:14px">
+        <div class="metric-row"><span class="k">执行记账 · 卖出所得自动归集</span>
+          <span class="v">当前股票现金池余额 <strong>${fmtMoney(poolNow)}</strong></span></div>
+        <div class="row" style="gap:8px;margin-top:10px;align-items:center">
+          <input id="rd-exec-amt" type="number" step="1000" value="${Math.max(0, Math.round(reduceValue))}" style="max-width:180px"/>
+          <button class="btn" id="rd-exec" style="flex:0 0 auto">${icon('check')} 记账：卖出 → 股票现金池</button>
+        </div>
+        <p class="inline-note" style="margin-top:8px">金额可改（默认=上方建议减仓金额）。记账后：「投资组合」中该标的金额与股数自动减少，所得计入 <strong>股票现金池</strong>（投资组合 → 人民币现金分类），总资产守恒（股票↓＝现金↑），铁律「现金蓄水池」同步按真实现金计算。</p>
+      </div>`));
+      box.querySelector('#rd-exec').onclick = () => {
+        const amt = num(box.querySelector('#rd-exec-amt').value);
+        if (!(amt > 0)) { alert('请输入有效的卖出金额'); return; }
+        const posV = total > 0 ? w / 100 * total : 0;
+        if (posV > 0 && amt > posV * 1.02 && !confirm('卖出金额超过该持仓当前市值，确定继续？（超出部分也会计入现金池）')) return;
+        const hasAsset = p.code && (STATE.assets || []).some(x => x.code === p.code);
+        if (!hasAsset && !confirm(`「${p.name}」未在「投资组合」登记对应资产，卖出回款 ${fmtMoney(amt)} 计入现金池后，总资产会相应增加（因为该股票市值此前未入账）。\n建议先到「投资组合」补录该资产再记账，账才能守恒。仍要继续吗？`)) return;
+        if (!confirm(`确认记账：卖出「${p.name}」${fmtMoney(amt)}？\n资产/股数自动减少，所得进入股票现金池。`)) return;
+        const r = applySellToPool(p.id, amt);
+        recordDailySnapshot();            // 资产结构变了 → 覆盖今日快照
+        alert(`已记账：${fmtMoney(amt)} 计入股票现金池（当前余额 ${fmtMoney(r.pool)}）。`);
+        render();
+      };
     };
   } // end renderReduce
 };
@@ -2965,7 +3057,18 @@ VIEWS.portfolio = function (app) {
     if (pnlStr !== '') asset.pnl = num(pnlStr);
     if (editId) {
       const i = STATE.assets.findIndex(x => x.id === editId);
-      if (i >= 0) STATE.assets[i] = asset;
+      if (i >= 0) {
+        const oldAsset = STATE.assets[i];
+        STATE.assets[i] = asset;
+        // 股票类资产金额被调低 → 若是卖出，差额可一键计入股票现金池（总资产守恒）
+        if (['A股股票', '美股股票'].includes(asset.category)) {
+          const fxNow = currentFx();
+          const diff = assetCny(oldAsset, fxNow) - assetCny(asset, fxNow);
+          if (diff > 1 && confirm(`该资产减少 ${fmtMoney(diff)}。若为卖出回款，可计入「股票现金池」（投资组合 → 人民币现金），是否计入？`)) {
+            addToStockCashPool(diff, '卖出' + asset.name + '回笼');
+          }
+        }
+      }
     } else { STATE.assets.push(asset); }
     saveState(); render();
   };
@@ -3093,6 +3196,7 @@ VIEWS.help = function (app) {
   G('ruler', '⑤ 加减仓计划（加仓 / 减仓·退出 两个标签）', [
     ['加仓计划', '<p>输入标的代码点「获取现价」,自动填价位区间;生成“越低买越多”的<strong>正金字塔</strong>分批。橄榄型模板规划试水→主力→收缩;浮盈超阈值(默认 +30%)提醒隔离部分利润(落袋为安)。</p>'],
     ['减仓/退出(科学退出算法)', '<p>卖出被<strong>处置效应</strong>与<strong>沉没成本</strong>绑架,所以只看向前看的事实、<strong>成本价不参与决策</strong>。两个开关:①原逻辑是否仍成立 ②今天空仓会不会按现价买。决策树:<br>· 逻辑已破 / 跌破止损 → <strong>计划性退出</strong>(目标 0,3 批短窗口出);<br>· 逻辑成立但超弹性仓单股上限 → <strong>减到合规</strong>(只减超出部分,逢反弹分批);<br>· 逻辑成立、没超预算,但“今天不会买” → <strong>减仓</strong>(处置效应警示);<br>· 逻辑成立、今天还会买 → <strong>持有</strong>(深套也别在低点割)。</p>'],
+    ['股票现金池(自动归集)', '<p>减仓决策下方点<strong>「记账：卖出 → 股票现金池」</strong>:该标的在投资组合中的金额/股数自动减少,卖出所得自动计入<strong>股票现金池</strong>(投资组合 → 人民币现金分类)——总资产守恒(股票↓＝现金↑),现金蓄水池铁律、大类饼图、资产趋势全部自动联动。手动把股票资产金额调低时,也会询问是否把差额计入。现金池余额在「持仓」页底部与减仓结果里实时可见。</p>'],
     ['理论', '<p><strong>“今天还会买吗”测试</strong>是破解深套死扛的关键:它把问题从"我亏了多少舍不舍得割"(向后看、被成本绑架)翻成"它未来还值不值得占这笔钱"。<strong>成本是沉没成本,市场不知道也不在乎你买在多少。</strong>研究亦表明投资者卖出决策质量普遍差,故用规则化退出。</p>'],
     ['遵循的收益', '<p>深套逻辑破了能果断认赔(=买回选择权),逻辑没破又能避免恐慌割在低点;加仓摊薄成本、减仓卖在相对高点,一进一出都有纪律。</p>'],
   ]);
