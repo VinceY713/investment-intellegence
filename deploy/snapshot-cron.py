@@ -241,12 +241,15 @@ def make_snapshot(state, date):
     assets = state.get('assets') or []
     fx = current_fx(state)
     by_big = {}
+    by_cat = {}
     interest = 0.0
     pnl = 0.0
     for a in assets:
         v = asset_cny(a, fx)
         k = big_class_of(a.get('category'))
         by_big[k] = by_big.get(k, 0) + v
+        c = a.get('category')
+        by_cat[c] = by_cat.get(c, 0) + v
         kind, val = asset_income(a, fx)
         if kind == 'interest':
             interest += val
@@ -256,6 +259,7 @@ def make_snapshot(state, date):
         'date': date,
         'total': portfolio_total(state),
         'byBig': {k: round(v) for k, v in by_big.items()},
+        'byCat': {k: round(v) for k, v in by_cat.items()},
         'interest': round(interest),
         'pnl': round(pnl),
         'fx': round(fx, 4),

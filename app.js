@@ -240,13 +240,17 @@ function buildSeedState() {
       cost: sp.cost || 0, price: sp.price || 0, shares: sp.shares || 0,
     };
   });
-  // 大类拆分（用于 7/19 起点快照）
-  const byBig = {};
-  assets.forEach(a => { byBig[bigClassOf(a.category)] = (byBig[bigClassOf(a.category)] || 0) + a.cny; });
+  // 大类/类别拆分（用于 7/19 起点快照）
+  const byBig = {}, byCat = {};
+  assets.forEach(a => {
+    byBig[bigClassOf(a.category)] = (byBig[bigClassOf(a.category)] || 0) + a.cny;
+    byCat[a.category] = (byCat[a.category] || 0) + a.cny;
+  });
   const seedSnap = {
     date: SEED_DATE,
     total: Math.round(SEED_TOTAL),
     byBig: Object.fromEntries(Object.entries(byBig).map(([k, v]) => [k, Math.round(v)])),
+    byCat: Object.fromEntries(Object.entries(byCat).map(([k, v]) => [k, Math.round(v)])),
     interest: 0, pnl: 0, fx: FX_DEFAULT,
     // 起点快照也带明细副本 → 任何时候都能「恢复到 7/19」
     assets: JSON.parse(JSON.stringify(assets)),
@@ -316,11 +320,12 @@ function todayStr() {
 function makeSnapshot(dateStr) {
   const assets = STATE.assets || [];
   const fx = currentFx();
-  const byBig = {};
+  const byBig = {}, byCat = {};
   let interest = 0, pnl = 0;
   assets.forEach(a => {
     const v = assetCny(a, fx);
     byBig[bigClassOf(a.category)] = (byBig[bigClassOf(a.category)] || 0) + v;
+    byCat[a.category] = (byCat[a.category] || 0) + v;
     const inc = assetIncome(a, fx);
     if (inc.kind === 'interest') interest += inc.value;
     else if (inc.value != null) pnl += inc.value;
@@ -329,6 +334,7 @@ function makeSnapshot(dateStr) {
     date: dateStr,
     total: Math.round(portfolioTotal()),
     byBig: Object.fromEntries(Object.entries(byBig).map(([k, v]) => [k, Math.round(v)])),
+    byCat: Object.fromEntries(Object.entries(byCat).map(([k, v]) => [k, Math.round(v)])),
     interest: Math.round(interest),
     pnl: Math.round(pnl),
     fx: +fx.toFixed(4),
@@ -2443,36 +2449,41 @@ VIEWS.trends = function (app) {
   }
 
   const first = snaps[0], last = snaps[snaps.length - 1];
-  const chg = last.total - first.total;
-  const chgPct = first.total ? chg / first.total * 100 : 0;
 
-  // 概览卡
-  app.appendChild(el(`
-    <div class="stat-grid" style="margin-bottom:16px">
-      <div class="stat"><div class="label">${icon('wallet')} 当前总资产</div>
-        <div class="value" style="font-size:22px">${fmtMoney(last.total)}</div><div class="sub">截至 ${last.date}</div></div>
-      <div class="stat"><div class="label">${icon('calendar')} 起点(${first.date})</div>
-        <div class="value" style="font-size:22px">${fmtMoney(first.total)}</div><div class="sub">首个快照</div></div>
-      <div class="stat"><div class="label">${icon('trend')} 累计变化</div>
-        <div class="value" style="font-size:22px;color:${chg>=0?'var(--green-ink)':'var(--red-ink)'}">${chg>=0?'+':''}${fmtMoney(chg)}</div>
-        <div class="sub" style="color:${chg>=0?'var(--green-ink)':'var(--red-ink)'}">${chg>=0?'+':''}${fmtPct(chgPct,2)}</div></div>
-      <div class="stat"><div class="label">${icon('list')} 快照数</div>
-        <div class="value" style="font-size:22px">${snaps.length}</div><div class="sub">天</div></div>
-    </div>
-  `));
+  // 分析维度：总资产 / 各大类 / 各类别（快照里已存 byBig、byCat）
+  const bigKeys = [], catKeys = [], seenB = new Set(), seenC = new Set();
+  snaps.forEach(s => {
+    Object.keys(s.byBig || {}).forEach(k => { if (!seenB.has(k)) { seenB.add(k); bigKeys.push(k); } });
+    Object.keys(s.byCat || {}).forEach(k => { if (!seenC.has(k)) { seenC.add(k); catKeys.push(k); } });
+  });
+  const dims = [{ key: 'total', label: '总资产（汇总）', short: '总资产' }]
+    .concat(bigKeys.map(k => ({ key: 'big:' + k, label: '大类 · ' + k, short: k })))
+    .concat(catKeys.map(k => ({ key: 'cat:' + k, label: '类别 · ' + k, short: k })));
+  const dimValue = (s, dim) => dim === 'total' ? num(s.total)
+    : dim.slice(0, 4) === 'big:' ? num((s.byBig || {})[dim.slice(4)])
+    : num((s.byCat || {})[dim.slice(4)]);
+  const dimShort = (dim) => (dims.find(d => d.key === dim) || dims[0]).short;
+  let curDim = 'total', curGran = 'day';
 
-  // 趋势图卡（带粒度切换）
+  const overviewBox = el('<div class="stat-grid" style="margin-bottom:16px"></div>');
+  app.appendChild(overviewBox);
+
+  // 趋势图卡（维度 + 粒度切换）
   const chartCard = el(`<div class="card">
     <div class="card-head-row">
-      <h3 style="margin:0">${icon('chart')} 总资产走势</h3>
-      <div class="seg" id="gran-seg">
-        <button class="seg-btn active" data-g="day">日</button>
-        <button class="seg-btn" data-g="month">月</button>
-        <button class="seg-btn" data-g="quarter">季度</button>
-        <button class="seg-btn" data-g="year">自然年</button>
+      <h3 style="margin:0">${icon('chart')} <span id="chart-title">总资产</span>走势</h3>
+      <div class="row" style="gap:8px;flex:0 0 auto;align-items:center;flex-wrap:wrap">
+        <select id="dim-sel" style="width:auto;min-width:120px">${dims.map(d => `<option value="${d.key}">${escapeHtml(d.label)}</option>`).join('')}</select>
+        <div class="seg" id="gran-seg">
+          <button class="seg-btn active" data-g="day">日</button>
+          <button class="seg-btn" data-g="month">月</button>
+          <button class="seg-btn" data-g="quarter">季度</button>
+          <button class="seg-btn" data-g="year">自然年</button>
+        </div>
       </div>
     </div>
     <div id="trend-chart" style="margin-top:14px"></div>
+    <p class="inline-note" style="margin-top:10px">切换「维度」可分别看总资产或某个大类/类别（如权益、基金、黄金）随时间的走势。</p>
   </div>`);
   app.appendChild(chartCard);
 
@@ -2480,7 +2491,7 @@ VIEWS.trends = function (app) {
   const tableCard = el(`<div class="card" style="margin-top:16px">
     <h3>${icon('calendar')} 阶段变化</h3>
     <div class="table-scroll"><table id="period-table"></table></div>
-    <p class="inline-note">阶段收益 = 期末总资产 ÷ 期初总资产 − 1。因未单独区分资金转入/转出，此处为「总资产净值」变化，非纯投资收益率，仅作趋势参考。</p>
+    <p class="inline-note">阶段变化% = 期末 ÷ 期初 − 1（按上方所选维度取值）。因未单独区分资金转入/转出，此处为「净值」变化，非纯投资收益率，仅作趋势参考。</p>
   </div>`);
   app.appendChild(tableCard);
 
@@ -2539,31 +2550,33 @@ VIEWS.trends = function (app) {
     render();
   });
 
-  function aggregate(gran) {
-    if (gran === 'day') return snaps.map(s => ({ label: s.date.slice(5), value: s.total, date: s.date }));
+  function aggregate(gran, dim) {
+    if (gran === 'day') return snaps.map(s => ({ label: s.date.slice(5), value: dimValue(s, dim), date: s.date }));
     const groups = new Map();
     snaps.forEach(s => {
       const { key, label } = periodKey(s.date, gran);
-      groups.set(key, { label, last: s.total, first: groups.has(key) ? groups.get(key).first : s.total, date: s.date });
+      const v = dimValue(s, dim);
+      groups.set(key, { label, last: v, first: groups.has(key) ? groups.get(key).first : v, date: s.date });
     });
     return [...groups.values()].map(g => ({ label: g.label, value: g.last, first: g.first, date: g.date }));
   }
 
-  function drawChart(gran) {
-    const pts = aggregate(gran);
+  function drawChart(gran, dim) {
+    const pts = aggregate(gran, dim);
     const box = chartCard.querySelector('#trend-chart');
     box.innerHTML = '';
     box.appendChild(buildLineChart(pts.map(p => ({ label: p.label, value: p.value }))));
   }
 
-  function drawTable(gran) {
-    // 阶段变化：按所选粒度分组，展示各期期初/期末/变化
+  function drawTable(gran, dim) {
+    // 阶段变化：按所选粒度分组，展示各期期初/期末/变化（按所选维度取值）
     const g = gran === 'day' ? 'month' : gran;   // 「日」视图下阶段表用「月」汇总更有意义
     const groups = new Map();
     snaps.forEach(s => {
       const { key, label } = periodKey(s.date, g);
-      if (!groups.has(key)) groups.set(key, { label, first: s.total, firstDate: s.date, last: s.total, lastDate: s.date });
-      const o = groups.get(key); o.last = s.total; o.lastDate = s.date;
+      const v = dimValue(s, dim);
+      if (!groups.has(key)) groups.set(key, { label, first: v, last: v });
+      groups.get(key).last = v;
     });
     const rows = [...groups.values()];
     const table = tableCard.querySelector('#period-table');
@@ -2578,11 +2591,30 @@ VIEWS.trends = function (app) {
     }</tbody>`;
   }
 
-  drawChart('day'); drawTable('day');
+  function redraw() {
+    const f = dimValue(first, curDim), l = dimValue(last, curDim);
+    const c = l - f, cp = f ? c / f * 100 : 0;
+    const sh = dimShort(curDim);
+    chartCard.querySelector('#chart-title').textContent = sh;
+    overviewBox.innerHTML = `
+      <div class="stat"><div class="label">${icon('wallet')} 当前${escapeHtml(sh)}</div>
+        <div class="value" style="font-size:22px">${fmtMoney(l)}</div><div class="sub">截至 ${last.date}</div></div>
+      <div class="stat"><div class="label">${icon('calendar')} 起点(${first.date})</div>
+        <div class="value" style="font-size:22px">${fmtMoney(f)}</div><div class="sub">首个快照</div></div>
+      <div class="stat"><div class="label">${icon('trend')} 累计变化</div>
+        <div class="value" style="font-size:22px;color:${c>=0?'var(--green-ink)':'var(--red-ink)'}">${c>=0?'+':''}${fmtMoney(c)}</div>
+        <div class="sub" style="color:${c>=0?'var(--green-ink)':'var(--red-ink)'}">${c>=0?'+':''}${fmtPct(cp,2)}</div></div>
+      <div class="stat"><div class="label">${icon('list')} 快照数</div>
+        <div class="value" style="font-size:22px">${snaps.length}</div><div class="sub">天</div></div>`;
+    drawChart(curGran, curDim); drawTable(curGran, curDim);
+  }
+
+  redraw();
+  chartCard.querySelector('#dim-sel').onchange = (e) => { curDim = e.target.value; redraw(); };
   chartCard.querySelectorAll('.seg-btn').forEach(b => {
     b.onclick = () => {
       chartCard.querySelectorAll('.seg-btn').forEach(x => x.classList.toggle('active', x === b));
-      drawChart(b.dataset.g); drawTable(b.dataset.g);
+      curGran = b.dataset.g; redraw();
     };
   });
   mgmt.querySelector('#snap-now').onclick = async () => {
