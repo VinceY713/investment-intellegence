@@ -1677,6 +1677,45 @@ VIEWS.drawdown = function (app) {
 /* =========================================================================
    模块 4 — 固定分数止损（本金防御）
    ========================================================================= */
+// 汇总可选持仓（股票/基金）及其成本价、现价，供止损模块联动带出
+function stopLossHoldings() {
+  const fx = currentFx();
+  const list = [];
+  const seen = new Set();
+  (STATE.positions || []).forEach(p => {
+    if (!p.name) return;
+    let buy = num(p.cost) > 0 ? num(p.cost) : null;
+    let cur = num(p.price) > 0 ? num(p.price) : null;
+    // 用同代码的资产（投资组合）补齐现价（刷新后有 lastPx）
+    const a = p.code ? (STATE.assets || []).find(x => x.code === p.code) : null;
+    if (cur == null && a) {
+      const sh = num(a.shares);
+      cur = num(a.lastPx) > 0 ? num(a.lastPx) : (sh > 0 ? num(a.amount) / sh : null);
+    }
+    // 有现价 + 持仓浮盈亏% → 反推成本价（成本 = 现价 ÷ (1 + 盈亏%/100)）
+    if (buy == null && cur != null && p.pnl != null && num(p.pnl) !== 0) {
+      const c = cur / (1 + num(p.pnl) / 100);
+      if (c > 0) buy = c;
+    }
+    list.push({ key: 'pos:' + p.id, name: p.name, code: p.code || '', buy, cur, kind: '持仓' });
+    if (p.code) seen.add(p.code);
+  });
+  (STATE.assets || []).forEach(a => {
+    if (!['基金', 'A股股票', '美股股票'].includes(a.category)) return;
+    if (a.code && seen.has(a.code)) return;            // 已在持仓里出现，避免重复
+    const shares = num(a.shares);
+    const cur = num(a.lastPx) > 0 ? num(a.lastPx) : (shares > 0 ? num(a.amount) / shares : null);
+    let buy = null;
+    if (shares > 0 && a.amount != null) {
+      const pnlOrig = a.pnl != null ? (a.currency === 'USD' ? num(a.pnl) / fx : num(a.pnl)) : 0;
+      const costTotal = num(a.amount) - pnlOrig;       // 原币成本总额 = 市值 − 浮盈亏
+      if (costTotal > 0) buy = costTotal / shares;
+    }
+    list.push({ key: 'ast:' + a.id, name: a.name, code: a.code || '', buy, cur, kind: a.category === '基金' ? '基金' : '持仓' });
+  });
+  return list;
+}
+
 VIEWS.stoploss = function (app) {
   app.appendChild(el(`
     <div class="view-head">
@@ -1686,8 +1725,16 @@ VIEWS.stoploss = function (app) {
   `));
 
   const s = STATE.settings;
+  const holdings = stopLossHoldings();
+  const fmtPx = v => (v != null && isFinite(v)) ? (+v).toFixed(v >= 100 ? 2 : 3) : '—';
   const card = el('<div class="card"></div>');
   card.appendChild(el(`
+    ${holdings.length ? `<div class="field"><label>从持仓/基金选择（自动带出成本价，可手动修正）</label>
+      <select id="sl-pick">
+        <option value="">— 手动输入 —</option>
+        ${holdings.map(h => `<option value="${h.key}">${escapeHtml(h.name)}${h.code ? '（' + escapeHtml(h.code) + '）' : ''} · 成本 ${fmtPx(h.buy)} · 现价 ${fmtPx(h.cur)}</option>`).join('')}
+      </select>
+      <p class="inline-note" id="sl-pick-note">选一只，会把成本价填进「买入价」；现价仅供你参考着定止损。都可手改。</p></div>` : ''}
     <div class="grid grid-2">
       <div class="field"><label>总资产（自动汇总）</label>
         <input id="sl-total" type="number" step="1000" value="${portfolioTotal()>0?portfolioTotal():''}" placeholder="如 1000000"/></div>
@@ -1695,13 +1742,27 @@ VIEWS.stoploss = function (app) {
         <div class="suffix-input"><input id="sl-risk" type="number" step="0.5" value="${s.perTradeRisk}"/><span>%</span></div></div>
     </div>
     <div class="grid grid-2">
-      <div class="field"><label>买入价</label><input id="sl-buy" type="number" step="0.01" placeholder="20.00"/></div>
+      <div class="field"><label>买入价（成本价）</label><input id="sl-buy" type="number" step="0.01" placeholder="20.00"/></div>
       <div class="field"><label>计划止损价</label><input id="sl-stop" type="number" step="0.01" placeholder="18.00"/></div>
     </div>
     <button class="btn" id="sl-calc">计算最大可买仓位</button>
     <div id="sl-result"></div>
   `));
   app.appendChild(card);
+
+  const pick = card.querySelector('#sl-pick');
+  if (pick) pick.onchange = () => {
+    const h = holdings.find(x => x.key === pick.value);
+    const note = card.querySelector('#sl-pick-note');
+    if (!h) { if (note) note.textContent = '选一只，会把成本价填进「买入价」；现价仅供你参考着定止损。都可手改。'; return; }
+    const base = h.buy != null ? h.buy : h.cur;         // 优先成本价，无则用现价
+    if (base != null) card.querySelector('#sl-buy').value = +base.toFixed(base >= 100 ? 2 : 3);
+    // 按默认止损幅度给个建议止损价（买入价 × (1 − 默认止损%)），用户可改
+    const stopHint = base != null ? base * (1 - Math.max(0.02, num(s.perTradeRisk) / 100 * 4)) : null;
+    if (note) note.innerHTML = `已带出${h.buy != null ? '成本价' : '现价'} <strong>${fmtPx(base)}</strong>`
+      + (h.cur != null ? `，当前价 <strong>${fmtPx(h.cur)}</strong>` : '')
+      + `。可手动修正；止损价请自行设定${stopHint != null ? '（参考：' + stopHint.toFixed(stopHint >= 100 ? 2 : 3) + '）' : ''}。`;
+  };
 
   card.querySelector('#sl-calc').onclick = () => {
     const box = card.querySelector('#sl-result');
