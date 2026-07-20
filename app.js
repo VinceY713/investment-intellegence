@@ -1240,7 +1240,7 @@ VIEWS.positions = function (app) {
       <table>
         <thead><tr>
           <th>名称</th><th>因子</th><th class="num">占比</th><th class="num">金额</th><th class="num">持股数</th><th class="num">浮盈亏</th>
-          <th>趋势</th><th class="num">最大跌幅</th><th class="num">回撤贡献</th><th></th>
+          <th>趋势</th><th class="num">最大跌幅</th><th class="num" title="潜在下行风险 = 占比 × 最大跌幅，与当前盈亏无关，恒为正">回撤贡献(潜在)</th><th></th>
         </tr></thead>
         <tbody>${rows}
           <tr class="total-row">
@@ -1253,7 +1253,7 @@ VIEWS.positions = function (app) {
       </table>
     `));
     listCard.appendChild(scroll);
-    listCard.appendChild(el(`<p class="inline-note">现金池：${fmtPct(Math.max(0,100-totalWeight),1)}</p>`));
+    listCard.appendChild(el(`<p class="inline-note">现金池：${fmtPct(Math.max(0,100-totalWeight),1)}。<strong>回撤贡献(潜在)</strong> = 占比 × 最大跌幅 = 该股若跌到最坏情形对组合的拖累，是<strong>向前看的风险</strong>，恒为正，与"浮盈亏"(当前盈亏)无关——盈利的股也仍有下行风险。</p>`));
 
     scroll.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
       STATE.positions = STATE.positions.filter(p => p.id !== b.dataset.del);
