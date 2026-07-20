@@ -1055,13 +1055,16 @@ async function fetchGold(fx) {
   const m = text.match(/"([^"]*)"/);
   if (!m || !m[1]) throw new Error('无黄金数据');
   const p = m[1].split(',');
-  // 新浪 hf_XAU：p[0]=当前价(美元/盎司)，休市时回退 p[8]/昨结
+  // 新浪 hf_XAU：p[0]=当前价(美元/盎司)，p[8]=昨收（休市时 p[0] 可能为 0，回退昨收）
   let usdOz = parseFloat(p[0]);
-  if (!(usdOz > 0)) usdOz = parseFloat(p[8]);
+  const prevOz = parseFloat(p[8]);
+  if (!(usdOz > 0)) usdOz = prevOz;
   if (!(usdOz > 0)) throw new Error('金价无效');
   const cnyGram = usdOz * (fx || currentFx()) / OZ_TO_GRAM;
   if (!(cnyGram >= 300 && cnyGram <= 2500)) throw new Error('金价超出合理区间(' + cnyGram.toFixed(1) + ')，不采用');
-  return cnyGram;
+  // 当日涨跌 = (现价 − 昨收) / 昨收；异常由调用方 |≤30%| 过滤
+  const dayPct = (prevOz > 0 && usdOz > 0) ? (usdOz - prevOz) / prevOz * 100 : null;
+  return { px: cnyGram, dayPct };
 }
 
 /* -------------------------------------------------------------------------
@@ -1081,7 +1084,7 @@ function assetFetchable(a) {
 async function refreshOneAsset(a, fx) {
   let px = null, dayPct = null;
   if (a.category === '黄金') {
-    px = await fetchGold(fx); dayPct = null;            // 金价（元/克）；当日涨跌暂不展示
+    const g = await fetchGold(fx); px = g.px; dayPct = g.dayPct;   // 金价（元/克）+ 当日涨跌
   } else if (a.category === '基金') {
     const f = await fetchFund(a.code); px = f.nav; dayPct = f.dayPct;
   } else {
@@ -1425,10 +1428,18 @@ VIEWS.kelly = function (app) {
     <h3>${icon('sparkles')} 傻瓜模式 · 选持仓，AI 帮你估参数</h3>
     <p class="hint">选一只持仓/基金，AI（DeepSeek）给出<strong>保守估计</strong>的胜率、上涨/下跌空间与多空理由，并给<strong>综合评分</strong>。注意区分：<strong>个股</strong>用凯利定目标仓位；<strong>宽基/低波/红利/债等配置型基金</strong>凯利会系统性低估，改用「资产角色 + 策略权重区间」来定（详见结果里的说明）。参数会回填下方计算器供微调。<strong>AI 估计仅供参考，非投资建议。</strong></p>
     ${kaPositions.length ? `
+    <div class="mini-label">A · 选已有持仓/基金</div>
     <div class="row" style="gap:8px;max-width:560px">
       <select id="ka-pos">${kaPositions.map(p => `<option value="${p.id}">${p.kind === '基金' ? '[基金] ' : ''}${escapeHtml(p.name)}${p.code ? '（' + escapeHtml(p.code) + '）' : ''} · 当前 ${(+num(p.weight)).toFixed(1)}%</option>`).join('')}</select>
-      <button class="btn" id="ka-go" style="flex:0 0 auto">${icon('sparkles')} 让 AI 评估</button>
-    </div>` : `<div class="alert blue"><span class="icon">${icon('info')}</span><div>还没有持仓。先到「持仓」页添加，这里才能联动评估。</div></div>`}
+      <button class="btn ka-eval-btn" id="ka-go" style="flex:0 0 auto">${icon('sparkles')} 让 AI 评估</button>
+    </div>
+    <div class="section-divider"></div>` : ''}
+    <div class="mini-label">${kaPositions.length ? 'B · ' : ''}或输入任意股票/基金评估（不必是你的持仓）</div>
+    <div class="row" style="gap:8px;max-width:560px">
+      <input id="ka-adhoc" placeholder="代码或名称，如 600519 / 贵州茅台 / TCOM / 513260"/>
+      <button class="btn secondary ka-eval-btn" id="ka-adhoc-go" style="flex:0 0 auto">${icon('sparkles')} 评估此标的</button>
+    </div>
+    <p class="inline-note">输入代码会尝试联网带出名称/价格；也可直接输名称。评估不改动你的持仓，仅供参考。</p>
     <div id="ka-out"></div>
   </div>`);
   app.appendChild(aiCard);
@@ -1478,14 +1489,13 @@ VIEWS.kelly = function (app) {
   addReason(bullBox); addReason(bullBox);
   addReason(bearBox); addReason(bearBox);
 
-  // 傻瓜模式：AI 评估 → 算凯利 → 与当前占比对比 → 回填计算器
-  const kaGo = aiCard.querySelector('#ka-go');
-  if (kaGo) kaGo.onclick = async () => {
-    const p = kaPositions.find(x => x.id === aiCard.querySelector('#ka-pos').value);
+  // 傻瓜模式：AI 评估 → 算凯利 → 与当前占比对比 → 回填计算器（持仓与自由输入共用）
+  async function evaluateCandidate(p) {
     if (!p) return;
     const out = aiCard.querySelector('#ka-out');
-    const old = kaGo.innerHTML; kaGo.disabled = true; kaGo.innerHTML = icon('refresh', 'spin') + ' AI 分析中…';
-    out.innerHTML = '<div class="inline-note" style="margin-top:10px">正在请求 DeepSeek 评估「' + escapeHtml(p.name) + '」，约 10–30 秒…</div>';
+    const evalBtns = [...aiCard.querySelectorAll('.ka-eval-btn')];
+    evalBtns.forEach(b => b.disabled = true);
+    out.innerHTML = '<div class="inline-note" style="margin-top:10px">' + icon('refresh', 'spin') + ' 正在请求 DeepSeek 评估「' + escapeHtml(p.name) + '」，约 10–30 秒…</div>';
     try {
       const sys = '你是一位严谨、保守的投资分析师，评估对象可能是股票或基金。基于你对该标的（公司/行业/指数/主题）的认知，给出未来 6–12 个月的保守评估。'
         + '一致性要求：请给出你最有把握的【单一保守中枢估计】，不要给区间、不要发散；相同输入应尽量得到相近结论。'
@@ -1581,8 +1591,34 @@ VIEWS.kelly = function (app) {
         <strong>AI 评估暂不可用</strong>：${escapeHtml(err.message)}<br>
         可先用下方计算器手动填参数；或稍后重试。</div></div>`;
     } finally {
-      kaGo.disabled = false; kaGo.innerHTML = old;
+      evalBtns.forEach(b => b.disabled = false);
     }
+  }
+
+  // A：评估已有持仓
+  const kaGo = aiCard.querySelector('#ka-go');
+  if (kaGo) kaGo.onclick = () => {
+    const p = kaPositions.find(x => x.id === aiCard.querySelector('#ka-pos').value);
+    evaluateCandidate(p);
+  };
+  // B：评估自由输入的任意标的（不必是持仓，不改动持仓）
+  const kaAdhocGo = aiCard.querySelector('#ka-adhoc-go');
+  if (kaAdhocGo) kaAdhocGo.onclick = async () => {
+    const raw = (aiCard.querySelector('#ka-adhoc').value || '').trim();
+    if (!raw) { alert('请输入股票 / 基金的代码或名称'); return; }
+    let name = raw, code = '';
+    // 形似代码：A股/ETF 5–6 位数字，或美股 1–6 位字母 → 尝试联网带出名称
+    if (/^\d{5,6}$/.test(raw) || /^[A-Za-z]{1,6}$/.test(raw)) {
+      code = raw.toUpperCase();
+      const out = aiCard.querySelector('#ka-out');
+      out.innerHTML = '<div class="inline-note" style="margin-top:10px">' + icon('refresh', 'spin') + ' 正在识别代码 ' + escapeHtml(code) + '…</div>';
+      try {
+        if (/^\d{6}$/.test(code)) { const f = await fetchFund(code); if (f && f.name) name = f.name; }
+        else { const q = await fetchQuote(code); if (q && q.name) name = q.name; }
+      } catch (e) { /* 取名失败不阻断，用原始输入当名称 */ }
+    }
+    const factor = FACTORS.includes('其它') ? '其它' : (FACTORS[FACTORS.length - 1] || '其它');
+    evaluateCandidate({ id: 'adhoc', name, code, factor, trend: '未知', pnl: 0, maxDrop: 0, weight: 0, kind: '股票' });
   };
 
   card.querySelector('#k-calc').onclick = () => {
@@ -3033,8 +3069,8 @@ VIEWS.portfolio = function (app) {
     if (a.dayPct != null && isFinite(a.dayPct)) {
       const up = a.dayPct >= 0;
       dayCell = `<span class="pill ${up?'green':'red'}">${up?'+':''}${fmtPct(a.dayPct,2)}</span>`;
-    } else if (assetFetchable(a)) {
-      dayCell = '<span class="inline-note">待刷新</span>';
+    } else if (assetFetchable(a) && !(num(a.lastPx) > 0)) {
+      dayCell = '<span class="inline-note">待刷新</span>';   // 仅「从未取过价」时提示，取过价则显示 —
     }
     return `<tr>
       <td>${escapeHtml(a.name)}${a.code?`<br><span class="inline-note">${escapeHtml(a.code)}</span>`:''}</td>

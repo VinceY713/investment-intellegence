@@ -179,14 +179,16 @@ def fetch_gold(fx):
     m = re.search(r'"([^"]*)"', txt)
     p = m.group(1).split(',') if m else []
     usd_oz = num(p[0]) if p else 0
-    if usd_oz <= 0 and len(p) > 8:
-        usd_oz = num(p[8])
+    prev_oz = num(p[8]) if len(p) > 8 else 0     # hf_XAU：p[8]=昨收
+    if usd_oz <= 0:
+        usd_oz = prev_oz
     if usd_oz <= 0:
         raise ValueError('gold price invalid')
     cny_gram = usd_oz * (fx or FX_DEFAULT) / OZ_TO_GRAM
     if not (300 <= cny_gram <= 2500):
         raise ValueError('gold out of range %.1f' % cny_gram)
-    return cny_gram
+    day = ((usd_oz - prev_oz) / prev_oz * 100) if (prev_oz > 0 and usd_oz > 0) else None
+    return cny_gram, day
 
 
 def asset_fetchable(a):
@@ -204,7 +206,8 @@ def asset_fetchable(a):
 
 def refresh_asset(a, fx):
     if a.get('category') == '黄金':
-        px, prev, day = fetch_gold(fx), None, None
+        px, day = fetch_gold(fx)
+        prev = None
     elif a.get('category') == '基金':
         px, prev, day = fetch_fund(a['code'])
     else:
