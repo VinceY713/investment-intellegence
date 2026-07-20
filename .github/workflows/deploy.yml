@@ -136,14 +136,14 @@ jobs:
                     add_header Cache-Control "no-store";
                 }
 
-                # 黄金代理：/api/gold → 新浪现货金 hf_XAU（美元/盎司），前端折人民币/克
+                # 黄金代理：/api/gold → 东方财富 黄金T+D(118.AUTD)，报价人民币/克（直取，免汇率）
+                # 返回 JSON：{"data":{"f43":现价,"f58":名称,"f60":昨收,"f170":当日%}}
                 location = /api/gold {
-                    proxy_pass https://hq.sinajs.cn/list=hf_XAU;
-                    proxy_set_header Host hq.sinajs.cn;
-                    proxy_set_header Referer https://finance.sina.com.cn;
+                    proxy_pass https://push2.eastmoney.com/api/qt/stock/get?secid=118.AUTD&fields=f43,f58,f60,f170&fltt=2;
+                    proxy_set_header Host push2.eastmoney.com;
                     proxy_set_header User-Agent "Mozilla/5.0";
                     proxy_ssl_server_name on;
-                    proxy_ssl_name hq.sinajs.cn;
+                    proxy_ssl_name push2.eastmoney.com;
                     resolver 119.29.29.29 223.5.5.5 valid=300s;
                     resolver_timeout 5s;
                     add_header Cache-Control "no-store";
