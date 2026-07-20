@@ -239,7 +239,7 @@ button.btn {
   background: linear-gradient(145deg, #0a84ff, #0060df);
   color: #fff; border: none; font-family: inherit;
   padding: 11px 20px; border-radius: 999px;
-  font-size: 14.5px; font-weight: 600; cursor: pointer;
+  font-size: 14.5px; font-weight: 600; cursor: pointer; white-space: nowrap;
   box-shadow: 0 4px 12px rgba(10, 132, 255, 0.28);
   transition: filter 0.15s, transform 0.1s;
 }
@@ -290,7 +290,7 @@ button.btn .spin { animation: spin 0.9s linear infinite; }
 .alert.blue { background: rgba(10, 132, 255, 0.10); border: 1px solid rgba(10,132,255,0.24); color: var(--accent-ink); }
 .alert strong { font-weight: 700; }
 
-.pill { display: inline-flex; align-items:center; gap:4px; padding: 3px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; }
+.pill { display: inline-flex; align-items:center; gap:4px; padding: 3px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
 .pill.green { background: rgba(52,199,89,0.16); color: var(--green-ink); }
 .pill.red { background: rgba(255,59,48,0.14); color: var(--red-ink); }
 .pill.amber { background: rgba(255,159,10,0.16); color: var(--amber-ink); }
@@ -344,10 +344,12 @@ tr.total-row td { font-weight: 700; border-top: 1.5px solid var(--line-strong); 
 
 /* 分段控件（资产趋势粒度切换） */
 .card-head-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.seg { display: inline-flex; background: var(--surface-soft); border: 1px solid var(--line); border-radius: 999px; padding: 3px; gap: 2px; }
+.seg { display: inline-flex; flex: 0 0 auto; background: var(--surface-soft); border: 1px solid var(--line); border-radius: 999px; padding: 3px; gap: 2px; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.seg::-webkit-scrollbar { display: none; }
 .seg-btn {
   border: none; background: transparent; font-family: inherit; cursor: pointer;
   color: var(--muted); font-size: 12.5px; font-weight: 600; padding: 6px 13px; border-radius: 999px;
+  white-space: nowrap; flex: 0 0 auto;
   transition: background 0.18s, color 0.18s;
 }
 .seg-btn:hover { color: var(--ink-2); }
