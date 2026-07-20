@@ -3084,7 +3084,10 @@ VIEWS.portfolio = function (app) {
     let dayCell = '—';
     if (a.dayPct != null && isFinite(a.dayPct)) {
       const up = a.dayPct >= 0;
-      dayCell = `<span class="pill ${up?'green':'red'}">${up?'+':''}${fmtPct(a.dayPct,2)}</span>`;
+      // 当日涨跌金额（人民币）= 现市值 − 昨市值 = v × dayPct/(100+dayPct)
+      const dayAmt = v * a.dayPct / (100 + a.dayPct);
+      dayCell = `<span class="pill ${up?'green':'red'}">${up?'+':''}${fmtPct(a.dayPct,2)}</span>`
+        + `<br><span class="inline-note" style="color:${up?'var(--green-ink)':'var(--red-ink)'}">${dayAmt>=0?'+':'−'}${fmtMoney(Math.abs(dayAmt))}</span>`;
     } else if (assetFetchable(a) && !(num(a.lastPx) > 0)) {
       dayCell = '<span class="inline-note">待刷新</span>';   // 仅「从未取过价」时提示，取过价则显示 —
     }
