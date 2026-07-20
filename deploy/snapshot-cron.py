@@ -196,21 +196,22 @@ OZ_TO_GRAM = 31.1034768
 
 
 def fetch_gold(fx):
-    # 东方财富 黄金T+D(118.AUTD)：报价人民币/克，直取免汇率换算
-    txt = http_get('https://push2.eastmoney.com/api/qt/stock/get'
-                   '?secid=118.AUTD&fields=f43,f58,f60,f170&fltt=2', 'utf-8')
-    d = (json.loads(txt) or {}).get('data') or {}
-    cny_gram = num(d.get('f43'))
-    prev = num(d.get('f60'))
-    if cny_gram <= 0:
-        cny_gram = prev
-    if cny_gram <= 0:
+    # 腾讯伦敦金 hf_XAU（美元/盎司，HTTP/1.1 稳）→ ×汇率 ÷ 31.1035 折人民币/克
+    # v_hf_XAU="现价(p0),涨跌幅(p1),...,昨收(p7),...";
+    txt = http_get('https://qt.gtimg.cn/q=hf_XAU', 'gbk')
+    m = re.search(r'"([^"]*)"', txt)
+    p = m.group(1).split(',') if m else []
+    usd_oz = num(p[0]) if p else 0
+    prev_oz = num(p[7]) if len(p) > 7 else 0
+    if usd_oz <= 0:
         raise ValueError('gold price invalid')
+    cny_gram = usd_oz * (fx or FX_DEFAULT) / OZ_TO_GRAM
     if not (300 <= cny_gram <= 2500):
         raise ValueError('gold out of range %.1f' % cny_gram)
-    day = num(d.get('f170')) if d.get('f170') is not None else None
-    if day is None and prev > 0:
-        day = (cny_gram - prev) / prev * 100
+    day = ((usd_oz - prev_oz) / prev_oz * 100) if prev_oz > 0 else None
+    if day is None and len(p) > 1:
+        d = num(p[1])
+        day = d if d != 0 else None
     return cny_gram, day
 
 

@@ -1062,26 +1062,25 @@ async function fetchFund(code) {
 }
 
 /* -------------------------------------------------------------------------
-   黄金价格：人民币/克（纸黄金跟随国内金价）。
-   经 /api/gold 代理东方财富 黄金T+D(118.AUTD)，报价即人民币/克，直取免汇率换算。
-   做强合理性校验（300–2500 元/克），异常一律不采用，避免坏行情污染持仓。
+   黄金价格：人民币/克（纸黄金跟随国际金价）。
+   经 /api/gold 代理腾讯伦敦金 hf_XAU（美元/盎司，与股票同源、HTTP/1.1 稳）→ ×汇率 ÷ 31.1035 折人民币/克。
+   （东方财富 push2 只认 HTTP/2，服务器/nginx 均为 HTTP/1.1 无法取数，故改腾讯源。）
+   格式：v_hf_XAU="现价(p0),涨跌幅(p1),...,昨收(p7),...";  做 300–2500 元/克 护栏。
    ------------------------------------------------------------------------- */
-const OZ_TO_GRAM = 31.1034768;   // 保留：历史换算常量，其它处可能引用
+const OZ_TO_GRAM = 31.1034768;
 async function fetchGold(fx) {
-  // 东方财富 黄金T+D(118.AUTD)：报价单位人民币/克，直取免汇率换算。
-  // /api/gold 代理返回 JSON：{"data":{"f43":现价,"f58":名称,"f60":昨收,"f170":当日%}}
   const text = await getQuoteText('/api/gold');
-  let d;
-  try { d = (JSON.parse(text) || {}).data; } catch (e) { throw new Error('无黄金数据'); }
-  if (!d) throw new Error('无黄金数据');
-  let cnyGram = parseFloat(d.f43);
-  const prev = parseFloat(d.f60);
-  if (!(cnyGram > 0)) cnyGram = prev;                 // 休市/异常回退昨收
-  if (!(cnyGram > 0)) throw new Error('金价无效');
+  const m = text.match(/"([^"]*)"/);
+  if (!m || !m[1]) throw new Error('无黄金数据');
+  const p = m[1].split(',');
+  const usdOz = parseFloat(p[0]);         // 伦敦金 美元/盎司
+  const prevOz = parseFloat(p[7]);        // 昨收
+  if (!(usdOz > 0)) throw new Error('金价无效');
+  const cnyGram = usdOz * (fx || currentFx()) / OZ_TO_GRAM;
   if (!(cnyGram >= 300 && cnyGram <= 2500)) throw new Error('金价超出合理区间(' + cnyGram.toFixed(1) + ')，不采用');
-  // 当日涨跌优先用接口 f170；缺失则按 (现价−昨收)/昨收；异常由调用方 |≤30%| 过滤
-  let dayPct = (d.f170 != null && isFinite(parseFloat(d.f170))) ? parseFloat(d.f170) : null;
-  if (dayPct == null && prev > 0) dayPct = (cnyGram - prev) / prev * 100;
+  // 当日涨跌：优先 (现价−昨收)/昨收；昨收异常再退用接口涨跌幅 p[1]；异常由调用方 |≤30%| 过滤
+  let dayPct = (prevOz > 0) ? (usdOz - prevOz) / prevOz * 100 : null;
+  if (dayPct == null || !isFinite(dayPct)) { const d = parseFloat(p[1]); dayPct = isFinite(d) ? d : null; }
   return { px: cnyGram, dayPct };
 }
 
