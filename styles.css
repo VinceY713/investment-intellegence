@@ -353,6 +353,10 @@ tr.total-row td { font-weight: 700; border-top: 1.5px solid var(--line-strong); 
 .seg-btn:hover { color: var(--ink-2); }
 .seg-btn.active { background: linear-gradient(145deg, #0a84ff, #0060df); color: #fff; box-shadow: 0 3px 9px rgba(10,132,255,0.3); }
 
+/* 复选行（铁律校验 计划内分批 等） */
+.check-row { display: flex; align-items: flex-start; gap: 9px; font-size: 13px; color: var(--ink-2); margin: 2px 0 14px; line-height: 1.5; cursor: pointer; }
+.check-row input[type="checkbox"] { width: 17px; height: 17px; flex: 0 0 auto; margin-top: 1px; accent-color: var(--accent); }
+
 /* 云端同步状态 */
 .cloud-status { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); background: var(--surface-soft); border: 1px solid var(--line); padding: 6px 12px; border-radius: 999px; }
 .cloud-dot { width: 8px; height: 8px; border-radius: 999px; flex: 0 0 auto; box-shadow: 0 0 0 3px rgba(120,120,128,0.10); }

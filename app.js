@@ -1953,6 +1953,7 @@ VIEWS.rules = function (app) {
       <div class="field"><label>上次加仓金额（可选）</label><input id="r-lastamt" type="number" step="1000" placeholder="正金字塔校验用"/></div>
     </div>
     <p class="inline-note">加仓以<strong>金额</strong>为准：占比 = 加仓金额 ÷ 总资产（当前 ${fmtMoney(portfolioTotal())}）自动计算。</p>
+    <label class="check-row"><input type="checkbox" id="r-planned"/> <span>这是<strong>计划内的分批建仓 / 定投</strong>（正金字塔，预设了价位区间）——不是套牢后临时摊平</span></label>
     <div class="field"><label>该标的因子（用于集中度校验）</label>
       <select id="r-factor">${FACTORS.map(f=>`<option>${f}</option>`).join('')}</select></div>
     <button class="btn danger" id="r-check">${icon('search')} 运行铁律校验</button>
@@ -1983,8 +1984,8 @@ VIEWS.rules = function (app) {
   const rulesRef = el(`<div class="card" style="margin-top:16px"><h3>七条铁律</h3>
     <div class="table-scroll"><table><thead><tr><th>铁律</th><th>触发条件</th></tr></thead>
     <tbody>
-      <tr><td>禁止亏损加仓</td><td>浮亏 + 加仓</td></tr>
-      <tr><td>禁止下跌趋势加仓</td><td>趋势=下跌/加速下跌 + 加仓</td></tr>
+      <tr><td>亏损加仓（分级）</td><td>深套(≥20%)硬拦；浅亏非计划内→提醒；浅亏+计划内分批+非下跌→放行</td></tr>
+      <tr><td>禁止下跌趋势加仓</td><td>趋势=下跌/加速下跌 + 加仓（接刀）</td></tr>
       <tr><td>单股仓位上限</td><td>加仓后 > 上限（默认 ${s.singleCap}%）</td></tr>
       <tr><td>正金字塔校验</td><td>高位加仓金额 ≥ 上次</td></tr>
       <tr><td>因子集中度</td><td>加仓后某因子 > 60%</td></tr>
@@ -2021,12 +2022,26 @@ VIEWS.rules = function (app) {
       </div></div>`));
     }
 
-    const violations = [];
+    const planned = card.querySelector('#r-planned').checked;
+    const DEEP_LOSS = 20;                       // 深套阈值 %：超过即视为可能逻辑破坏
+    const violations = [], softWarnings = [];
 
-    // 铁律1 禁止亏损加仓
-    if (pnl < 0) violations.push('禁止亏损加仓：当前浮亏 ' + fmtPct(pnl,1) + ' 仍加仓，是倒金字塔陷阱起点，禁止。');
-    // 铁律2 禁止下跌趋势加仓
-    if (trend === '下跌' || trend === '加速下跌') violations.push('禁止下跌趋势加仓：趋势为「' + trend + '」，加仓＝接刀，等企稳。');
+    // 铁律1 亏损加仓（分级，而非一刀切）：
+    //  · 深套(浮亏≥阈值) → 硬拦：套牢摊平的典型死亡螺旋，需复核原逻辑后二次确认
+    //  · 浅亏 + 下跌趋势 → 由铁律2 接管（接刀）
+    //  · 浅亏 + 非计划内 → 软提醒：区分“计划内分批”还是“套牢摊平”
+    //  · 浅亏 + 计划内分批 + 非下跌 → 放行（视为纪律内）
+    const downtrend = (trend === '下跌' || trend === '加速下跌');
+    if (pnl < 0) {
+      if (pnl <= -DEEP_LOSS) {
+        violations.push('深套加仓（浮亏 ' + fmtPct(pnl,1) + '，已超 ' + DEEP_LOSS + '%）：这是“套牢摊平”死亡螺旋的典型入口。除非同时满足 ① 原始买入逻辑经复核仍成立（不是“跌了更便宜”）② 这是计划内的最后一批 ③ 加仓后总仓位仍在回撤预算与单股上限内，否则不应加仓。');
+      } else if (!downtrend && !planned) {
+        softWarnings.push('浮亏 ' + fmtPct(pnl,1) + ' 补仓：请先确认这是“计划内分批 / 企稳补仓”，而非“套牢摊平”。若无预设计划，倾向于等企稳或按计划再买。');
+      }
+      // 浅亏 + 计划内 + 非下跌 → 视为纪律内正金字塔，放行（不拦不提醒）
+    }
+    // 铁律2 禁止下跌趋势加仓（接刀；真正的反转应标为企稳/震荡/向上）
+    if (downtrend) violations.push('禁止下跌趋势加仓：趋势为「' + trend + '」，加仓＝接刀，等企稳/反转确认。');
     // 铁律3 单股仓位上限（epsilon 容差，避免浮点误判"恰好等于上限"）
     const after = cur + add;
     if (after > s.singleCap + 1e-9) violations.push('单股仓位上限：加仓后占比 ' + fmtPct(after,1) + ' > 上限 ' + s.singleCap + '%，违反分散原则。');
@@ -2055,17 +2070,23 @@ VIEWS.rules = function (app) {
       if (afterTotal > (100 - s.cashFloor)) violations.push('现金蓄水池：加仓后总仓位 ' + fmtPct(afterTotal,1) + ' 使现金 < ' + s.cashFloor + '%，丧失回调加仓能力。');
     }
 
+    // 软提醒（黄色，不拦截，但要看到）
+    const showSoft = () => { if (softWarnings.length) box.appendChild(el(`<div class="alert amber" style="margin-top:10px"><span class="icon">${icon('warn')}</span><div>
+      <strong>提醒（不拦截，请自行判断）：</strong><br>${softWarnings.map(v=>'· '+v).join('<br>')}</div></div>`)); };
+
     if (violations.length === 0) {
       box.appendChild(el(`<div class="alert green" style="margin-top:14px"><span class="icon">${icon('check')}</span><div>
-        <strong>通过全部铁律校验</strong>，本次加仓未触发拦截。仍请对照客观依据后再操作。
+        <strong>${softWarnings.length ? '未触发硬性拦截' : '通过全部铁律校验'}</strong>，本次加仓未被硬拦。仍请对照客观依据后再操作。
       </div></div>`));
+      showSoft();
       return;
     }
 
-    // 有违规：先展示，再弹阻塞式二次确认
+    // 有硬违规：先展示违规 + 软提醒，再弹阻塞式二次确认
     box.appendChild(el(`<div class="alert red" style="margin-top:14px"><span class="icon">${icon('danger')}</span><div>
       <strong>触发 ${violations.length} 条铁律，操作被拦截：</strong><br>${violations.map(v=>'· '+v).join('<br>')}
     </div></div>`));
+    showSoft();
 
     const proceed = await showBlockingModal({
       title: '铁律拦截 · 需二次确认',
@@ -2975,10 +2996,11 @@ VIEWS.help = function (app) {
   ]);
 
   G('shield', '⑤ 铁律校验 · 操作拦截引擎', [
-    ['怎么用', '<p>放在凯利定注之后:任何“加仓”前跑一遍校验。选已有持仓会带出<strong>最新占比/浮盈亏</strong>;加仓以<strong>金额优先</strong>(自动算占比);触发任一铁律即弹出必须二次确认的红色拦截。</p>'],
-    ['计算逻辑', '<p>七条硬规则：亏损加仓、下跌趋势加仓、超单股上限、正金字塔（高位加仓额≥上次）、因子集中度&gt;60%、现金池&lt;下限、胜率&gt;60% 无充分理由。</p>'],
-    ['理论', '<p><strong>行为金融学 + 交易纪律</strong>：把处置效应、损失厌恶、追高等人性弱点，用规则在情绪化时刻强制拦下。</p>'],
-    ['遵循的收益', '<p>躲开散户最典型的四类致命操作（亏损加仓、接下跌的刀、追高头重脚轻、满仓无现金），这些正是账户从回撤走向巨亏的分水岭。</p>'],
+    ['怎么用', '<p>放在凯利定注之后:任何“加仓”前跑一遍校验。选已有持仓会带出<strong>最新占比/浮盈亏</strong>;加仓以<strong>金额优先</strong>;触发硬性铁律弹出必须二次确认的红色拦截,较轻的情况给黄色<strong>软提醒</strong>(不拦截)。</p>'],
+    ['亏损加仓为何“分级”而非一刀切', '<p>真正致命的不是“浮亏就加”,而是两种具体行为:<strong>接下跌的刀</strong>(还在跌就加)和<strong>深套摊平</strong>(−20% 以上还往里加、拒绝承认逻辑破坏)。而<strong>计划内分批/定投</strong>(正是本工具⑥所提倡)和<strong>企稳/反转后的底部补仓</strong>是合理的。所以规则改为:深套硬拦(需复核原逻辑);下跌趋势硬拦(接刀);浅亏且非计划内→软提醒;浅亏+勾选“计划内分批”+非下跌→放行。勾选框强制你分清“计划”还是“摊平”。</p>'],
+    ['计算逻辑', '<p>规则:亏损加仓(分级)、下跌趋势加仓、超单股上限、正金字塔(高位加仓额≥上次)、因子集中度&gt;60%、现金池&lt;下限、胜率&gt;60% 无充分理由。</p>'],
+    ['理论', '<p><strong>行为金融学 + 交易纪律</strong>：把处置效应、损失厌恶、沉没成本、追高等人性弱点,用规则在情绪化时刻拦下——但不误伤“有纪律的计划内分批”。</p>'],
+    ['遵循的收益', '<p>躲开散户最典型的致命操作(接下跌的刀、深套摊平、追高头重脚轻、满仓无现金),同时保留“底部分批/定投”这类正确的逆向操作空间。</p>'],
   ]);
 
   G('ruler', '⑥ 加仓计划器 + 利润隔离', [
