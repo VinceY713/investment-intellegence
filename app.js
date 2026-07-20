@@ -248,6 +248,9 @@ function buildSeedState() {
     total: Math.round(SEED_TOTAL),
     byBig: Object.fromEntries(Object.entries(byBig).map(([k, v]) => [k, Math.round(v)])),
     interest: 0, pnl: 0, fx: FX_DEFAULT,
+    // 起点快照也带明细副本 → 任何时候都能「恢复到 7/19」
+    assets: JSON.parse(JSON.stringify(assets)),
+    positions: JSON.parse(JSON.stringify(positions)),
   };
   return {
     settings: Object.assign({}, DEFAULT_SETTINGS),
@@ -308,7 +311,8 @@ function todayStr() {
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
 
-// 生成当前组合快照对象（总资产 + 大类拆分 + 利息/浮盈亏），不含逐笔明细，保持精简
+// 生成当前组合快照对象（总资产 + 大类拆分 + 利息/浮盈亏 + 当日资产/持仓明细副本）
+// 明细副本用于「设置 → 恢复到某一天」按日期整体还原。
 function makeSnapshot(dateStr) {
   const assets = STATE.assets || [];
   const fx = currentFx();
@@ -328,7 +332,22 @@ function makeSnapshot(dateStr) {
     interest: Math.round(interest),
     pnl: Math.round(pnl),
     fx: +fx.toFixed(4),
+    // 当日明细副本（深拷贝），供「恢复到某一天」使用
+    assets: JSON.parse(JSON.stringify(assets)),
+    positions: JSON.parse(JSON.stringify(STATE.positions || [])),
   };
+}
+
+// 用某个快照的明细副本整体还原资产/持仓（快照历史本身保持不动）
+function restoreFromSnapshot(snap) {
+  if (!snap || !snap.assets || !snap.assets.length) return false;
+  STATE.assets = JSON.parse(JSON.stringify(snap.assets));
+  STATE.positions = JSON.parse(JSON.stringify(snap.positions || STATE.positions || []));
+  if (snap.fx > 0) STATE.portfolio.fxRate = snap.fx;
+  STATE.portfolio.asOfDate = snap.date;
+  STATE.lastQuoteRefresh = 0;          // 还原后允许重新拉行情
+  saveState();
+  return true;
 }
 
 // 每次进入应用记录「今日」快照：同日则覆盖为最新值，跨日则新增一条。
@@ -1199,6 +1218,20 @@ VIEWS.kelly = function (app) {
     </div>
   `));
 
+  /* --- 傻瓜模式：选持仓 → AI 给胜率/空间/理由 → 自动算凯利并回填计算器 --- */
+  const kaPositions = STATE.positions || [];
+  const aiCard = el(`<div class="card" style="margin-bottom:16px">
+    <h3>${icon('sparkles')} 傻瓜模式 · 选持仓，AI 帮你估参数</h3>
+    <p class="hint">不知道胜率/空间怎么填？选一只持仓，AI（DeepSeek）按它对该公司与行业的认知给出<strong>保守估计</strong>的胜率、上涨/下跌空间和多空理由，自动完成凯利计算，并把参数回填到下方计算器供你微调。<strong>AI 估计仅供参考，非投资建议，最终判断在你。</strong></p>
+    ${kaPositions.length ? `
+    <div class="row" style="gap:8px;max-width:560px">
+      <select id="ka-pos">${kaPositions.map(p => `<option value="${p.id}">${escapeHtml(p.name)}${p.code ? '（' + escapeHtml(p.code) + '）' : ''} · 当前 ${(+num(p.weight)).toFixed(1)}%</option>`).join('')}</select>
+      <button class="btn" id="ka-go" style="flex:0 0 auto">${icon('sparkles')} 让 AI 评估</button>
+    </div>` : `<div class="alert blue"><span class="icon">${icon('info')}</span><div>还没有持仓。先到「持仓」页添加，这里才能联动评估。</div></div>`}
+    <div id="ka-out"></div>
+  </div>`);
+  app.appendChild(aiCard);
+
   const card = el('<div class="card"></div>');
   card.appendChild(el(`
     <div class="grid grid-2">
@@ -1243,6 +1276,100 @@ VIEWS.kelly = function (app) {
   card.querySelector('#k-bear-add').onclick = () => addReason(bearBox);
   addReason(bullBox); addReason(bullBox);
   addReason(bearBox); addReason(bearBox);
+
+  // 傻瓜模式：AI 评估 → 算凯利 → 与当前占比对比 → 回填计算器
+  const kaGo = aiCard.querySelector('#ka-go');
+  if (kaGo) kaGo.onclick = async () => {
+    const p = kaPositions.find(x => x.id === aiCard.querySelector('#ka-pos').value);
+    if (!p) return;
+    const out = aiCard.querySelector('#ka-out');
+    const old = kaGo.innerHTML; kaGo.disabled = true; kaGo.innerHTML = icon('refresh', 'spin') + ' AI 分析中…';
+    out.innerHTML = '<div class="inline-note" style="margin-top:10px">正在请求 DeepSeek 评估「' + escapeHtml(p.name) + '」，约 10–30 秒…</div>';
+    try {
+      const sys = '你是一位严谨、保守的股票投资分析师。基于你对该公司与所属行业的认知，对用户持仓给出未来 6–12 个月的保守评估。'
+        + '硬性要求：宁可低估胜率、高估风险；胜率不允许超过 70；空间用价格涨跌幅的正百分数。'
+        + '只输出一个 JSON 对象，不要任何多余文字、解释或代码块标记。格式：'
+        + '{"winRate":55,"upside":40,"downside":25,"bulls":["客观看多理由1","理由2"],"bears":["客观看空理由1","理由2"],"note":"一句话结论"}';
+      const user = `标的：${p.name}（代码 ${p.code || '无'}）\n`
+        + `底层驱动因子：${p.factor}；用户标注趋势：${p.trend || '未知'}；当前浮盈亏：${num(p.pnl).toFixed(1)}%；`
+        + `用户预估最大跌幅：${num(p.maxDrop) || '未填'}%；当前占总资产：${num(p.weight).toFixed(2)}%。\n`
+        + `请给出胜率(winRate)、上涨空间(upside)、下跌空间(downside)与各 2-4 条客观多空理由。`;
+      const j = await aiChatJSON(sys, user);
+
+      // 消毒：胜率封顶 70（防 AI 过度乐观），空间必须为正
+      const win = Math.min(70, Math.max(5, Math.round(num(j.winRate))));
+      const up = Math.max(1, num(j.upside));
+      const down = Math.max(1, num(j.downside));
+      const bulls = (j.bulls || []).map(x => String(x).trim()).filter(Boolean).slice(0, 4);
+      const bears = (j.bears || []).map(x => String(x).trim()).filter(Boolean).slice(0, 4);
+      const note = String(j.note || '').trim();
+
+      const prob = win / 100;
+      const ev = Calc.ev(prob, up, down);
+      const b = Calc.odds(up, down);
+      const f = Calc.kelly(prob, b);
+      const target = Math.max(0, f * frac * 100);          // 默认执行值（如 ¼ 凯利）
+      const capped = Math.min(target, s.singleCap);         // 不超过单股上限
+      const cur = num(p.weight);
+      const total = portfolioTotal();
+      const diff = capped - cur;
+      const diffMoney = total > 0 ? Math.abs(diff) / 100 * total : 0;
+
+      let advice;
+      if (ev < 0) {
+        advice = `<div class="alert red"><span class="icon">${icon('danger')}</span><div>
+          <strong>EV 为负（${ev.toFixed(1)}%）· 数学上不值得下注</strong><br>
+          按 AI 的保守估计，这笔交易期望值为负。纪律做法：不加仓，考虑减仓或离场；当前占 ${cur.toFixed(1)}%。</div></div>`;
+      } else if (f <= 0) {
+        advice = `<div class="alert amber"><span class="icon">${icon('warn')}</span><div>
+          <strong>赔率不足（满凯利 ≤ 0）</strong>：期望值虽非负，但赔率撑不起仓位，建议不参与或减仓。</div></div>`;
+      } else if (diff > 0.5) {
+        advice = `<div class="alert green"><span class="icon">${icon('check')}</span><div>
+          <strong>目标 ${capped.toFixed(1)}% vs 当前 ${cur.toFixed(1)}% → 有 ${diff.toFixed(1)} 个百分点空间（约 ${fmtMoney(diffMoney)}）</strong><br>
+          注意：加仓前必须过「⑤ 铁律校验」（浮亏加仓/下跌趋势加仓会被拦截）。</div></div>`;
+      } else if (diff < -0.5) {
+        advice = `<div class="alert amber"><span class="icon">${icon('warn')}</span><div>
+          <strong>目标 ${capped.toFixed(1)}% vs 当前 ${cur.toFixed(1)}% → 超配 ${(-diff).toFixed(1)} 个百分点（约 ${fmtMoney(diffMoney)}）</strong><br>
+          按凯利纪律应逐步减到目标附近，别一次性梭哈式调仓。</div></div>`;
+      } else {
+        advice = `<div class="alert green"><span class="icon">${icon('check')}</span><div>
+          <strong>当前 ${cur.toFixed(1)}% ≈ 目标 ${capped.toFixed(1)}%，仓位基本合理</strong>，保持并按纪律跟踪即可。</div></div>`;
+      }
+
+      out.innerHTML = `
+        <div class="result-box">
+          <div class="metric-row"><span class="k">AI 保守胜率 p</span><span class="v">${win}%</span></div>
+          <div class="metric-row"><span class="k">上涨空间 / 下跌空间</span><span class="v">+${up.toFixed(0)}% / −${down.toFixed(0)}%</span></div>
+          <div class="metric-row"><span class="k">期望值 EV</span><span class="v" style="color:${ev >= 0 ? 'var(--green-ink)' : 'var(--red-ink)'}">${ev >= 0 ? '+' : ''}${ev.toFixed(2)}%</span></div>
+          <div class="metric-row"><span class="k">净赔率 b · 满凯利 f</span><span class="v">${b.toFixed(2)} · ${(f * 100).toFixed(1)}%</span></div>
+          <div class="metric-row"><span class="k">${fracTxt} 凯利目标仓位（≤单股上限 ${s.singleCap}%）</span><span class="v" style="color:var(--accent-ink)">${capped.toFixed(1)}%${total > 0 ? '（约 ' + fmtMoney(capped / 100 * total) + '）' : ''}</span></div>
+        </div>
+        ${advice}
+        <div class="grid grid-2" style="margin-top:12px">
+          <div><div class="mini-label" style="color:var(--green-ink)">AI 看多理由</div>${bulls.map(t => `<p style="margin:4px 0;font-size:13px">· ${escapeHtml(t)}</p>`).join('') || '<p class="inline-note">无</p>'}</div>
+          <div><div class="mini-label" style="color:var(--red-ink)">AI 看空理由</div>${bears.map(t => `<p style="margin:4px 0;font-size:13px">· ${escapeHtml(t)}</p>`).join('') || '<p class="inline-note">无</p>'}</div>
+        </div>
+        ${note ? `<p class="inline-note" style="margin-top:8px">${icon('sparkles')} AI 结论：${escapeHtml(note)}</p>` : ''}
+        <p class="inline-note">参数已回填到下方计算器，可自行微调后重算。AI 生成内容仅供参考，不构成投资建议。</p>`;
+
+      // 回填手动计算器（含理由），方便微调
+      card.querySelector('#k-up').value = up.toFixed(0);
+      card.querySelector('#k-down').value = down.toFixed(0);
+      card.querySelector('#k-p').value = win;
+      bullBox.innerHTML = ''; bearBox.innerHTML = '';
+      const fill = (box, list) => {
+        const items = list.length >= 2 ? list : list.concat(['', '']).slice(0, 2);
+        items.forEach(t => { addReason(box); const inputs = box.querySelectorAll('input'); inputs[inputs.length - 1].value = t; });
+      };
+      fill(bullBox, bulls); fill(bearBox, bears);
+    } catch (err) {
+      out.innerHTML = `<div class="alert amber"><span class="icon">${icon('warn')}</span><div>
+        <strong>AI 评估暂不可用</strong>：${escapeHtml(err.message)}<br>
+        可先用下方计算器手动填参数；或稍后重试。</div></div>`;
+    } finally {
+      kaGo.disabled = false; kaGo.innerHTML = old;
+    }
+  };
 
   card.querySelector('#k-calc').onclick = () => {
     const resBox = card.querySelector('#k-result');
@@ -1960,7 +2087,22 @@ VIEWS.settings = function (app) {
 
   /* 数据管理 */
   const dataCard = el('<div class="card" style="margin-top:16px"><h3>数据管理</h3><p class="hint">全部数据（持仓、资产、设置、快照）都<strong>保存在你自己的服务器</strong>，多设备自动同步、清缓存后自动恢复；本机浏览器保留一份离线缓存，断网时先存本机、恢复后自动补传。数据仅你本人（访问密码后）可读写。</p></div>');
+  // 可按日期恢复的快照（带明细副本的才能整体还原），新日期在前
+  const restorable = (STATE.snapshots || []).filter(sn => sn.assets && sn.assets.length)
+    .slice().sort((a, b) => b.date.localeCompare(a.date));
   dataCard.appendChild(el(`
+    <div class="field" style="max-width:460px">
+      <label>恢复到某一天（用该日快照的资产明细整体还原）</label>
+      <div class="row" style="gap:8px">
+        <select id="dm-restore-date" ${restorable.length ? '' : 'disabled'}>
+          ${restorable.length
+            ? restorable.map(sn => `<option value="${sn.date}">${sn.date} · ${fmtMoney(sn.total)}</option>`).join('')
+            : '<option>暂无带明细的快照</option>'}
+        </select>
+        <button class="btn" id="dm-restore" style="flex:0 0 auto" ${restorable.length ? '' : 'disabled'}>${icon('refresh')} 恢复到该日</button>
+      </div>
+      <p class="inline-note">恢复只替换当前资产/持仓，趋势快照历史保持不动。数据算错时选一个正确的日期即可回退。</p>
+    </div>
     <div class="row" style="flex-wrap:wrap">
       <button class="btn secondary" id="dm-export" style="flex:0 0 auto">${icon('download')} 导出数据</button>
       <button class="btn secondary" id="dm-import" style="flex:0 0 auto">${icon('upload')} 导入数据</button>
@@ -1970,6 +2112,19 @@ VIEWS.settings = function (app) {
     <input type="file" id="dm-file" accept="application/json" style="display:none"/>
   `));
   app.appendChild(dataCard);
+  dataCard.querySelector('#dm-restore').onclick = async () => {
+    const d = dataCard.querySelector('#dm-restore-date').value;
+    const snap = (STATE.snapshots || []).find(sn => sn.date === d);
+    if (!snap) return;
+    if (!confirm(`用 ${d} 的快照明细覆盖当前资产与持仓？（快照历史不受影响）`)) return;
+    if (restoreFromSnapshot(snap)) {
+      await pushCloudNow();
+      alert(`已恢复到 ${d}`);
+      render();
+    } else {
+      alert('该快照没有明细副本，无法整体恢复');
+    }
+  };
   dataCard.querySelector('#dm-seed').onclick = () => {
     if (!confirm('用 7/19 资产汇总表覆盖当前全部数据？')) return;
     STATE = buildSeedState(); saveState(); render();
@@ -1994,6 +2149,7 @@ VIEWS.settings = function (app) {
         STATE.positions = imported.positions || [];
         STATE.assets = imported.assets || [];
         STATE.portfolio = Object.assign({ totalAssets: Math.round(SEED_TOTAL) }, imported.portfolio || {});
+        STATE.snapshots = imported.snapshots || STATE.snapshots || [];
         saveState(); alert('导入成功'); render();
       } catch (err) { alert('导入失败：文件格式不正确'); }
     };
@@ -2028,6 +2184,25 @@ function mdLite(t) {
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/^\s*[-•]\s*(.+)$/gm, '· $1')
     .replace(/\n/g, '<br>');
+}
+
+// 通用：调 DeepSeek 并要求返回 JSON（容忍 ```json 包裹等杂质，取第一个 {...} 解析）
+async function aiChatJSON(sys, user) {
+  const res = await fetch(AI_ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: AI_MODEL, stream: false, temperature: 0.3, max_tokens: 900,
+      messages: [{ role: 'system', content: sys }, { role: 'user', content: user }],
+    }),
+  });
+  if (!res.ok) { const t = await res.text(); throw new Error('接口返回 ' + res.status + '：' + t.slice(0, 160)); }
+  const data = await res.json();
+  const content = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
+  if (!content) throw new Error('AI 返回为空');
+  const m = String(content).match(/\{[\s\S]*\}/);
+  if (!m) throw new Error('AI 未返回有效 JSON');
+  return JSON.parse(m[0]);
 }
 
 async function aiReview(summaryText, box, btn) {
@@ -2157,8 +2332,47 @@ VIEWS.trends = function (app) {
       <button class="btn secondary" id="snap-sync" style="flex:0 0 auto">${icon('refresh')} 从云端同步</button>
       <button class="btn secondary" id="snap-export" style="flex:0 0 auto">${icon('download')} 导出(JSON)</button>
     </div>
+    <div class="section-divider"></div>
+    <div class="mini-label">快照修正（某天数值不对可直接改总资产，或删掉整条）</div>
+    <div class="table-scroll"><table id="snap-list">
+      <thead><tr><th>日期</th><th class="num">总资产</th><th class="num">含明细</th><th class="num">操作</th></tr></thead>
+      <tbody>${snaps.slice().reverse().map(s => `<tr>
+        <td>${s.date}</td>
+        <td class="num">${fmtMoney(s.total)}</td>
+        <td class="num">${s.assets && s.assets.length ? '<span class="pill green">可恢复</span>' : '<span class="pill gray">仅数值</span>'}</td>
+        <td class="num">
+          <button class="btn secondary small" data-snapfix="${s.date}">${icon('pencil')} 修正</button>
+          <button class="btn danger small" data-snapdel="${s.date}">${icon('trash')}</button>
+        </td>
+      </tr>`).join('')}</tbody>
+    </table></div>
+    <p class="inline-note">「修正」只改这一天记录的总资产数值（用于趋势图/阶段表）；「含明细＝可恢复」表示该快照存有当天的资产明细，可在「设置 → 数据管理」按日期整体恢复。</p>
   </div>`);
   app.appendChild(mgmt);
+
+  // 快照修正 / 删除
+  mgmt.querySelectorAll('[data-snapfix]').forEach(b => b.onclick = async () => {
+    const d = b.dataset.snapfix;
+    const snap = (STATE.snapshots || []).find(s => s.date === d);
+    if (!snap) return;
+    const input = prompt(`修正 ${d} 的总资产（元）：`, snap.total);
+    if (input == null) return;
+    const v = num(input);
+    if (!(v > 0)) { alert('请输入大于 0 的数字'); return; }
+    snap.total = Math.round(v);
+    snap.corrected = true;                     // 标记人工修正过
+    saveState();
+    await pushCloudNow();
+    render();
+  });
+  mgmt.querySelectorAll('[data-snapdel]').forEach(b => b.onclick = async () => {
+    const d = b.dataset.snapdel;
+    if (!confirm(`删除 ${d} 的快照？（不影响当前资产，只删这天的历史记录）`)) return;
+    STATE.snapshots = (STATE.snapshots || []).filter(s => s.date !== d);
+    saveState();
+    await pushCloudNow();
+    render();
+  });
 
   function aggregate(gran) {
     if (gran === 'day') return snaps.map(s => ({ label: s.date.slice(5), value: s.total, date: s.date }));

@@ -236,6 +236,9 @@ def make_snapshot(state, date):
         'interest': round(interest),
         'pnl': round(pnl),
         'fx': round(fx, 4),
+        # 当日明细副本（JSON 往返即深拷贝），供前端「恢复到某一天」使用
+        'assets': json.loads(json.dumps(assets)),
+        'positions': json.loads(json.dumps(state.get('positions') or [])),
     }
 
 
