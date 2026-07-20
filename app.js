@@ -1277,7 +1277,7 @@ VIEWS.kelly = function (app) {
   const kaPositions = kellyCandidates();
   const aiCard = el(`<div class="card" style="margin-bottom:16px">
     <h3>${icon('sparkles')} 傻瓜模式 · 选持仓，AI 帮你估参数</h3>
-    <p class="hint">不知道胜率/空间怎么填？选一只持仓，AI（DeepSeek）按它对该公司与行业的认知给出<strong>保守估计</strong>的胜率、上涨/下跌空间和多空理由，自动完成凯利计算，并把参数回填到下方计算器供你微调。<strong>AI 估计仅供参考，非投资建议，最终判断在你。</strong></p>
+    <p class="hint">选一只持仓/基金，AI（DeepSeek）给出<strong>保守估计</strong>的胜率、上涨/下跌空间与多空理由，并给<strong>综合评分</strong>。注意区分：<strong>个股</strong>用凯利定目标仓位；<strong>宽基/低波/红利/债等配置型基金</strong>凯利会系统性低估，改用「资产角色 + 策略权重区间」来定（详见结果里的说明）。参数会回填下方计算器供微调。<strong>AI 估计仅供参考，非投资建议。</strong></p>
     ${kaPositions.length ? `
     <div class="row" style="gap:8px;max-width:560px">
       <select id="ka-pos">${kaPositions.map(p => `<option value="${p.id}">${p.kind === '基金' ? '[基金] ' : ''}${escapeHtml(p.name)}${p.code ? '（' + escapeHtml(p.code) + '）' : ''} · 当前 ${(+num(p.weight)).toFixed(1)}%</option>`).join('')}</select>
@@ -1365,43 +1365,54 @@ VIEWS.kelly = function (app) {
       const ev = Calc.ev(prob, up, down);
       const b = Calc.odds(up, down);
       const f = Calc.kelly(prob, b);
-      const target = Math.max(0, f * frac * 100);          // 默认执行值（如 ¼ 凯利）
-      const capped = Math.min(target, s.singleCap);         // 不超过单股上限
       const cur = num(p.weight);
       const total = portfolioTotal();
-      const diff = capped - cur;
-      const diffMoney = total > 0 ? Math.abs(diff) / 100 * total : 0;
+      const rtype = holdingRiskType(p);
+      const score = betScore(ev, b, win);
+      const scoreColor = score >= 65 ? 'var(--green-ink)' : (score >= 45 ? 'var(--amber-ink)' : 'var(--red-ink)');
 
-      let advice;
-      if (ev < 0) {
-        advice = `<div class="alert red"><span class="icon">${icon('danger')}</span><div>
-          <strong>EV 为负（${ev.toFixed(1)}%）· 数学上不值得下注</strong><br>
-          按 AI 的保守估计，这笔交易期望值为负。纪律做法：不加仓，考虑减仓或离场；当前占 ${cur.toFixed(1)}%。</div></div>`;
-      } else if (f <= 0) {
-        advice = `<div class="alert amber"><span class="icon">${icon('warn')}</span><div>
-          <strong>赔率不足（满凯利 ≤ 0）</strong>：期望值虽非负，但赔率撑不起仓位，建议不参与或减仓。</div></div>`;
-      } else if (diff > 0.5) {
-        advice = `<div class="alert green"><span class="icon">${icon('check')}</span><div>
-          <strong>目标 ${capped.toFixed(1)}% vs 当前 ${cur.toFixed(1)}% → 有 ${diff.toFixed(1)} 个百分点空间（约 ${fmtMoney(diffMoney)}）</strong><br>
-          注意：加仓前必须过「⑤ 铁律校验」（浮亏加仓/下跌趋势加仓会被拦截）。</div></div>`;
-      } else if (diff < -0.5) {
-        advice = `<div class="alert amber"><span class="icon">${icon('warn')}</span><div>
-          <strong>目标 ${capped.toFixed(1)}% vs 当前 ${cur.toFixed(1)}% → 超配 ${(-diff).toFixed(1)} 个百分点（约 ${fmtMoney(diffMoney)}）</strong><br>
-          按凯利纪律应逐步减到目标附近，别一次性梭哈式调仓。</div></div>`;
+      let sizing = '', advice = '', caveat = '';
+      if (rtype === 'stock') {
+        // 个股/集中头寸：凯利适用
+        const target = Math.max(0, f * frac * 100);
+        const capped = Math.min(target, s.singleCap);
+        const diff = capped - cur;
+        const diffMoney = total > 0 ? Math.abs(diff) / 100 * total : 0;
+        sizing = `<div class="result-box"><div class="metric-row"><span class="k">${fracTxt} 凯利目标仓位（≤单股上限 ${s.singleCap}%）</span><span class="v" style="color:var(--accent-ink)">${capped.toFixed(1)}%${total > 0 ? '（约 ' + fmtMoney(capped / 100 * total) + '）' : ''}</span></div></div>`;
+        if (ev < 0) advice = `<div class="alert red"><span class="icon">${icon('danger')}</span><div><strong>EV 为负（${ev.toFixed(1)}%）· 数学上不值得下注</strong><br>纪律做法：不加仓，考虑减仓或离场；当前占 ${cur.toFixed(1)}%。</div></div>`;
+        else if (f <= 0) advice = `<div class="alert amber"><span class="icon">${icon('warn')}</span><div><strong>赔率不足（满凯利 ≤ 0）</strong>：期望值虽非负，但赔率撑不起仓位，建议不参与或减仓。</div></div>`;
+        else if (diff > 0.5) advice = `<div class="alert green"><span class="icon">${icon('check')}</span><div><strong>目标 ${capped.toFixed(1)}% vs 当前 ${cur.toFixed(1)}% → 有 ${diff.toFixed(1)} 个百分点空间（约 ${fmtMoney(diffMoney)}）</strong><br>加仓前必须过「⑤ 铁律校验」。</div></div>`;
+        else if (diff < -0.5) advice = `<div class="alert amber"><span class="icon">${icon('warn')}</span><div><strong>目标 ${capped.toFixed(1)}% vs 当前 ${cur.toFixed(1)}% → 超配 ${(-diff).toFixed(1)} 个百分点（约 ${fmtMoney(diffMoney)}）</strong><br>按凯利纪律应逐步减到目标附近，别一次性调仓。</div></div>`;
+        else advice = `<div class="alert green"><span class="icon">${icon('check')}</span><div><strong>当前 ${cur.toFixed(1)}% ≈ 目标 ${capped.toFixed(1)}%，仓位基本合理</strong>，保持并按纪律跟踪即可。</div></div>`;
       } else {
-        advice = `<div class="alert green"><span class="icon">${icon('check')}</span><div>
-          <strong>当前 ${cur.toFixed(1)}% ≈ 目标 ${capped.toFixed(1)}%，仓位基本合理</strong>，保持并按纪律跟踪即可。</div></div>`;
+        // 配置型基金：凯利会系统性低估，改用「资产角色 + 策略权重区间」
+        const band = ROLE_BAND[rtype];
+        const roleName = rtype === 'core' ? '宽基/低波/红利/债 —— 配置型核心' : '行业/主题基金 —— 卫星仓';
+        sizing = `<div class="result-box">
+          <div class="metric-row"><span class="k">资产角色</span><span class="v">${roleName}</span></div>
+          <div class="metric-row"><span class="k">建议策略权重区间</span><span class="v" style="color:var(--accent-ink)">${band[0]}–${band[1]}%${total > 0 ? '（约 ' + fmtMoney(band[0] / 100 * total) + '–' + fmtMoney(band[1] / 100 * total) + '）' : ''}</span></div>
+          <div class="metric-row"><span class="k">当前占比</span><span class="v">${cur.toFixed(1)}%</span></div>
+          <div class="metric-row"><span class="k">¼ 凯利测算（仅参考，会低估配置型）</span><span class="v" style="color:var(--muted)">${Math.max(0, f * frac * 100).toFixed(1)}%</span></div>
+        </div>`;
+        if (ev < 0) advice = `<div class="alert amber"><span class="icon">${icon('warn')}</span><div><strong>AI 保守看，短期期望值偏弱（EV ${ev.toFixed(1)}%）</strong><br>作为配置型资产不必据此清仓，但可暂缓加仓、等性价比更好时再补到区间内。</div></div>`;
+        else if (cur < band[0]) advice = `<div class="alert green"><span class="icon">${icon('check')}</span><div><strong>当前 ${cur.toFixed(1)}% 低于建议下沿 ${band[0]}%</strong><br>作为${rtype === 'core' ? '核心配置' : '卫星仓'}可考虑逐步补到区间内，分批而非一次到位。</div></div>`;
+        else if (cur > band[1]) advice = `<div class="alert amber"><span class="icon">${icon('warn')}</span><div><strong>当前 ${cur.toFixed(1)}% 高于建议上沿 ${band[1]}%</strong><br>可适度再平衡到 ${band[1]}% 以内（尤其若与其它持仓高度相关）。</div></div>`;
+        else advice = `<div class="alert green"><span class="icon">${icon('check')}</span><div><strong>当前 ${cur.toFixed(1)}% 在建议区间 ${band[0]}–${band[1]}% 内</strong>，属合理配置，保持并定期再平衡即可。</div></div>`;
+        caveat = `<div class="alert blue" style="margin-top:10px"><span class="icon">${icon('info')}</span><div>
+          <strong>为什么这里不用凯利定仓？</strong>凯利公式是给「单一、独立、可重复的方向性下注」算最优比例的；对宽基/低波/红利/债这类<strong>分散型配置资产</strong>会系统性<strong>低估</strong>——它们的价值在于分散与稳定（低相关），而非单标的的方向性赔率。所以这类资产按<strong>资产配置策略的目标权重</strong>来定，凯利只作参考。凯利更适合有明确催化剂的个股/集中头寸。</div></div>`;
       }
 
       out.innerHTML = `
         <div class="result-box">
+          <div class="metric-row"><span class="k">综合评分（越高越值得按纪律持有/下注）</span><span class="v" style="color:${scoreColor};font-size:20px">${score}<span style="font-size:13px;color:var(--muted)"> / 100</span></span></div>
           <div class="metric-row"><span class="k">AI 保守胜率 p</span><span class="v">${win}%</span></div>
           <div class="metric-row"><span class="k">上涨空间 / 下跌空间</span><span class="v">+${up.toFixed(0)}% / −${down.toFixed(0)}%</span></div>
           <div class="metric-row"><span class="k">期望值 EV</span><span class="v" style="color:${ev >= 0 ? 'var(--green-ink)' : 'var(--red-ink)'}">${ev >= 0 ? '+' : ''}${ev.toFixed(2)}%</span></div>
           <div class="metric-row"><span class="k">净赔率 b · 满凯利 f</span><span class="v">${b.toFixed(2)} · ${(f * 100).toFixed(1)}%</span></div>
-          <div class="metric-row"><span class="k">${fracTxt} 凯利目标仓位（≤单股上限 ${s.singleCap}%）</span><span class="v" style="color:var(--accent-ink)">${capped.toFixed(1)}%${total > 0 ? '（约 ' + fmtMoney(capped / 100 * total) + '）' : ''}</span></div>
         </div>
+        ${sizing}
         ${advice}
+        ${caveat}
         <div class="grid grid-2" style="margin-top:12px">
           <div><div class="mini-label" style="color:var(--green-ink)">AI 看多理由</div>${bulls.map(t => `<p style="margin:4px 0;font-size:13px">· ${escapeHtml(t)}</p>`).join('') || '<p class="inline-note">无</p>'}</div>
           <div><div class="mini-label" style="color:var(--red-ink)">AI 看空理由</div>${bears.map(t => `<p style="margin:4px 0;font-size:13px">· ${escapeHtml(t)}</p>`).join('') || '<p class="inline-note">无</p>'}</div>
@@ -1762,6 +1773,25 @@ function kellyCandidates() {
     list.push({ id: 'ast:' + a.id, name: a.name, code: a.code || '', factor: '基金', trend: '未知', pnl: pnlPct, weight: total > 0 ? +(vCny / total * 100).toFixed(2) : 0, maxDrop: 30, kind: '基金' });
   });
   return list;
+}
+
+// 判定持仓的风险角色：个股(凯利适用) / 配置型核心(宽基·低波·红利·债·货币) / 主题卫星
+function holdingRiskType(cand) {
+  if (!cand || cand.kind !== '基金') return 'stock';
+  const n = cand.name || '';
+  if (/红利|低波|沪深\s*300|中证\s*(500|800|1000|A?500|100)|上证\s*50|A50|标普|纳斯达克|道琼斯|宽基|指数|债券?|货币|余额|MSCI|全球|恒生(?!科技)/.test(n)) return 'core';
+  return 'theme';
+}
+// 配置型资产的建议策略权重区间（%），凯利不适用它们
+const ROLE_BAND = { core: [8, 30], theme: [3, 12] };
+
+// 下注/配置质量评分（0–100）：综合期望值、赔率、胜率，惩罚过度自信
+function betScore(ev, b, win) {
+  if (!isFinite(ev)) return 50;
+  if (ev < 0) return Math.max(5, Math.round(38 + ev * 4));      // EV<0 → 40 以下
+  let s = 50 + ev * 8 + (b - 1.2) * 18 + (win - 45) * 0.6;
+  if (win > 60) s -= (win - 60) * 2;                            // 过度乐观降分
+  return Math.max(5, Math.min(95, Math.round(s)));
 }
 
 // 汇总可选持仓（股票/基金）及其成本价、现价，供止损模块联动带出
@@ -2919,7 +2949,8 @@ VIEWS.help = function (app) {
     ['怎么用', '<p>或手动填赢/输情形的涨跌幅、胜率，并各写≥2 条看多/看空的客观理由；先过 EV 闸门，再看满/半/¼ 凯利三档，默认执行 ¼ 凯利。</p>'],
     ['计算逻辑', '<p>期望值 <code class="formula">EV = p×涨幅 − q×跌幅</code>，EV&lt;0 直接淘汰；净赔率 <code class="formula">b = 涨幅 ÷ 跌幅</code>；凯利 <code class="formula">f = (b×p − q) / b</code>；实战取 <code class="formula">f×0.25</code> 以降低参数误差。</p>'],
     ['理论', '<p><strong>凯利公式（Kelly Criterion）</strong>：在已知赔率与胜率下，使资金<strong>长期复利增长率最大</strong>的下注比例。半/四分之一凯利用来对冲主观胜率高估的风险。</p>'],
-    ['遵循的收益', '<p>长期看，按（分数）凯利下注比“凭感觉重仓/轻仓”获得更高的复利增长率，同时把爆仓概率压到极低——既不错失机会，也不被单笔击穿。</p>'],
+    ['适用边界(重要)', '<p>凯利是给<strong>单一、独立、可重复的方向性下注</strong>算最优比例的,适合<strong>有明确催化剂的个股/集中头寸</strong>。对<strong>宽基/低波/红利/债/货币等分散型配置资产</strong>会系统性<strong>低估</strong>——因为它们的价值在于分散与稳定(低相关),而非单标的的方向性赔率,且凯利在“边际很薄”时会把仓位压到近乎 0。所以本工具对配置型基金<strong>不用凯利定仓</strong>,改按<strong>资产角色 + 策略权重区间</strong>(核心 8–30%、主题卫星 3–12%),凯利仅作参考。</p>'],
+    ['遵循的收益', '<p>个股按（分数）凯利下注,长期比“凭感觉重仓/轻仓”获得更高复利、更低爆仓概率;配置资产按角色权重定,则保住分散与稳定的基本盘,两者各司其职。</p>'],
   ]);
 
   G('target', '② 组合分散 · 有效持仓数', [
