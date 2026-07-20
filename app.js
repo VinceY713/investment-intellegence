@@ -2033,11 +2033,17 @@ VIEWS.rules = function (app) {
 
   const card = el('<div class="card"><h3>拟加仓操作</h3></div>');
   card.appendChild(el(`
-    <div class="field"><label>选择标的</label>
-      <select id="r-pos">
-        <option value="">— 未在持仓列表？可手动输入 —</option>
-        ${options}
-      </select>
+    <div class="grid grid-2">
+      <div class="field"><label>选择标的（已有持仓）</label>
+        <select id="r-pos">
+          <option value="">— 手动输入（不在持仓列表）—</option>
+          ${options}
+        </select>
+      </div>
+      <div class="field"><label>或手动输入标的名称 / 代码</label>
+        <input id="r-name" placeholder="如 贵州茅台 / 600519 / TCOM"/>
+        <p class="inline-note">不在持仓里的标的可直接手填；下面的浮盈亏 / 占比 / 趋势 / 因子也都可手动填写。</p>
+      </div>
     </div>
     <div class="grid grid-3">
       <div class="field"><label>当前浮盈亏 %</label><input id="r-pnl" type="number" step="0.1" placeholder="-8"/></div>
@@ -2059,10 +2065,11 @@ VIEWS.rules = function (app) {
   `));
   app.appendChild(card);
 
-  // 选中已有持仓时自动填充
+  // 选中已有持仓时自动填充（含名称）；选「手动输入」则清空名称让用户自填
   card.querySelector('#r-pos').onchange = (e) => {
     const p = positions.find(x => x.id === e.target.value);
-    if (!p) return;
+    if (!p) { card.querySelector('#r-name').value = ''; return; }
+    card.querySelector('#r-name').value = p.name + (p.code ? '（' + p.code + '）' : '');
     card.querySelector('#r-pnl').value = p.pnl;
     card.querySelector('#r-trend').value = p.trend;
     card.querySelector('#r-cur').value = p.weight;
@@ -2102,6 +2109,7 @@ VIEWS.rules = function (app) {
     const lastAmt = num(card.querySelector('#r-lastamt').value);
     const factor = card.querySelector('#r-factor').value;
     const selId = card.querySelector('#r-pos').value;
+    const name = card.querySelector('#r-name').value.trim();
     const tot = portfolioTotal();
 
     // 金额优先：有加仓金额则由金额÷总资产算占比；否则回退到手填占比
@@ -2112,6 +2120,8 @@ VIEWS.rules = function (app) {
       box.appendChild(el(`<div class="alert amber"><span class="icon">${icon('warn')}</span><div>请填写本次加仓金额（元），或直接手填加仓占比 %。</div></div>`));
       return;
     }
+
+    if (name) box.appendChild(el(`<div class="mini-label" style="margin-bottom:8px">校验标的：<strong>${escapeHtml(name)}</strong></div>`));
 
     // 回显：金额 → 自动占比（让用户确认按金额算出的比例）
     if (addAmt > 0 && tot > 0) {
