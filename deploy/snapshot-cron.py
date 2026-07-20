@@ -129,7 +129,29 @@ def is_us_code(code):
     return bool(re.search(r'[A-Za-z]', code or ''))
 
 
+def fetch_fund_confirmed(code):
+    # 东方财富历史净值：与官方/同花顺一致的「确认净值」（DWJZ）与「涨跌%」（JZZZL）
+    txt = http_get('https://api.fund.eastmoney.com/f10/lsjz'
+                   '?fundCode=%s&pageIndex=1&pageSize=2' % code, 'utf-8',
+                   referer='https://fundf10.eastmoney.com/')
+    o = json.loads(txt)
+    lst = ((o.get('Data') or {}).get('LSJZList')) or []
+    if not lst:
+        raise ValueError('no confirmed nav')
+    nav = num(lst[0].get('DWJZ'))
+    day = num(lst[0].get('JZZZL')) if lst[0].get('JZZZL') not in (None, '') else None
+    prev = num(lst[1].get('DWJZ')) if len(lst) > 1 else 0
+    if nav <= 0:
+        raise ValueError('nav<=0')
+    return nav, (prev if prev > 0 else None), day
+
+
 def fetch_fund(code):
+    # 优先确认净值（准）；失败回退天天基金估值（盘中当日未公布 / 接口异常）
+    try:
+        return fetch_fund_confirmed(code)
+    except Exception:
+        pass
     txt = http_get('https://fundgz.1234567.com.cn/js/%s.js' % code, 'utf-8',
                    referer='https://fund.eastmoney.com/')
     m = re.search(r'jsonpgz\(\s*(\{.*?\})\s*\)', txt)

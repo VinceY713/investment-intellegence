@@ -1030,7 +1030,24 @@ async function fetchQuote(rawCode) {
    公募基金净值：天天基金实时估值（服务器 /api/fund 代理 fundgz.1234567.com.cn）
    返回 jsonpgz({fundcode,name,dwjz昨日净值,gsz估算净值,gszzl估算涨跌%,gztime})
    ------------------------------------------------------------------------- */
+// 确认净值（东方财富历史净值 lsjz）——与基金官方/同花顺完全一致（DWJZ 净值、JZZZL 涨跌%）。
+// 相比天天基金「估值(gsz)」是盘中近似、收盘后与官方有误差，确认净值才是最终真实值。
+async function fetchFundConfirmed(code) {
+  const res = await fetch('/api/fund_nav?code=' + encodeURIComponent(code), { cache: 'no-store' });
+  if (!res.ok) throw new Error('净值接口 ' + res.status);
+  const j = JSON.parse(await res.text());
+  const list = j && j.Data && j.Data.LSJZList;
+  if (!list || !list.length) throw new Error('无确认净值');
+  const nav = parseFloat(list[0].DWJZ);
+  const day = parseFloat(list[0].JZZZL);
+  const prev = list[1] ? parseFloat(list[1].DWJZ) : NaN;
+  if (!(nav > 0)) throw new Error('净值缺失');
+  return { nav, dayPct: isFinite(day) ? day : null, prevNav: prev > 0 ? prev : null, navDate: list[0].FSRQ || '' };
+}
+
 async function fetchFund(code) {
+  // 优先「确认净值」（准，和同花顺一致）；失败（盘中当日未公布 / 接口异常）回退天天基金估值
+  try { return await fetchFundConfirmed(code); } catch (e) { /* 回退估值 */ }
   const res = await fetch('/api/fund?code=' + encodeURIComponent(code), { cache: 'no-store' });
   if (!res.ok) throw new Error('基金接口 ' + res.status);
   const text = await res.text();
