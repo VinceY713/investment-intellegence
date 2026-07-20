@@ -17,6 +17,15 @@ const DEFAULT_SETTINGS = {
   perTradeRisk: 2,       // 单笔风险 %
   profitLockThreshold: 30, // 利润隔离阈值 %
   maxDrawdown: 15,       // 组合最大回撤阈值 %
+  equityTargetPct: 20,   // 弹性仓（股票）目标占总资产 %——博收益弹性的引擎
+  equityRiskLevel: '进取', // 弹性仓风险档：稳健/均衡/进取（决定弹性仓内部集中度容忍）
+  deepLossAdd: 20,       // 深套阈值 %（亏损加仓/减仓判定用）
+};
+// 弹性仓风险档 → 弹性仓内部集中度上限（占弹性仓 %，非占总资产）
+const EQUITY_RISK_LEVELS = {
+  '稳健': { single: 22, factor: 50, label: '稳健' },
+  '均衡': { single: 30, factor: 60, label: '均衡' },
+  '进取': { single: 40, factor: 75, label: '进取' },
 };
 
 // 底层驱动因子标签库（可自由扩展）
@@ -647,78 +656,92 @@ document.getElementById('tabs').addEventListener('click', e => {
 VIEWS.dashboard = function (app) {
   const s = STATE.settings;
   const positions = STATE.positions;
-  const totalWeight = positions.reduce((a, p) => a + num(p.weight), 0);
-  const cash = Math.max(0, 100 - totalWeight);
+  const equityPct = positions.reduce((a, p) => a + num(p.weight), 0);   // 弹性仓占总资产 %
+  const target = num(s.equityTargetPct, 20);
+  const level = EQUITY_RISK_LEVELS[s.equityRiskLevel] || EQUITY_RISK_LEVELS['进取'];
   const { effN, factorWeights } = Calc.effectiveBets(positions);
+  const nHoldings = positions.length;
 
-  // 回撤预算使用
-  const usedDrawdown = positions.reduce((a, p) =>
-    a + Calc.drawdownContribution(num(p.weight), num(p.maxDrop)), 0);
+  // 弹性仓对全组合的预估最大回撤贡献（= Σ 占总资产权重 × 各股最大跌幅）——核心风险口径
+  const equityDD = positions.reduce((a, p) => a + Calc.drawdownContribution(num(p.weight), num(p.maxDrop)), 0);
+  const ddOk = equityDD <= s.maxDrawdown;
 
-  // 因子最大集中度
+  // 因子最大集中度（factorWeights 已是"占弹性仓"的比例）
   let maxFactor = null, maxFactorW = 0;
-  Object.keys(factorWeights).forEach(f => {
-    if (factorWeights[f] > maxFactorW) { maxFactorW = factorWeights[f]; maxFactor = f; }
-  });
+  Object.keys(factorWeights).forEach(f => { if (factorWeights[f] > maxFactorW) { maxFactorW = factorWeights[f]; maxFactor = f; } });
+  const factorCap = level.factor / 100;
+  const concentrationOk = maxFactorW <= factorCap;
+
+  // 单股占弹性仓 % 上限（配置角色，可比整体上限宽）
+  const overSingle = positions.filter(p => equityPct > 0 && (num(p.weight) / equityPct * 100) > level.single + 1e-9);
+
+  // 深套需复核逻辑的股（不是自动卖）
+  const deep = positions.filter(p => num(p.pnl) <= -num(s.deepLossAdd, 20));
 
   app.appendChild(el(`
     <div class="view-head">
-      <h2>股票组合体检</h2>
-      <p>对已录入的股票持仓做四层纪律快照；整体资产配置见「投资组合」。绿色达标，红色需处理。</p>
+      <h2>股票体检 · 弹性引擎</h2>
+      <p>你的股票是<strong>博收益弹性</strong>的引擎（由基金/理财/黄金/现金压舱），所以这里体检的是——<strong>这台引擎的总风险是否可控、是否真分散、有没有该复核的深套</strong>，而不是每只是否"保守"。目标弹性仓占比、风险档可在「设置」调。</p>
     </div>
   `));
 
-  // 顶部四个统计
-  const ddOk = usedDrawdown <= s.maxDrawdown;
-  const concentrationOk = maxFactorW <= 0.6;
+  // 弹性引擎健康分（0–100，纯客观，不依赖 AI 猜胜率）
+  let score = 100;
+  if (!ddOk) score -= Math.min(35, (equityDD - s.maxDrawdown) / Math.max(1, s.maxDrawdown) * 45);
+  if (!concentrationOk) score -= Math.min(25, (maxFactorW - factorCap) * 100);
+  if (nHoldings >= 3 && effN > 0 && effN < 2.5) score -= Math.min(20, (2.5 - effN) * 10);
+  if (equityPct > target * 1.5) score -= Math.min(15, (equityPct - target * 1.5) * 1.2);  // 弹性仓过大→整体风险抬升
+  score = Math.max(5, Math.round(score));
+  const scoreColor = score >= 70 ? 'var(--green-ink)' : (score >= 50 ? 'var(--amber-ink)' : 'var(--red-ink)');
+
+  const sizeState = equityPct < target * 0.7 ? ['var(--amber-ink)', '偏低(弹性不足)'] : (equityPct > target * 1.5 ? ['var(--red-ink)', '偏高'] : ['var(--green-ink)', '合理']);
+
   app.appendChild(el(`
     <div class="stat-grid" style="margin-bottom:16px">
-      <div class="stat">
-        <div class="label">${icon('coins')} 股票仓位</div>
-        <div class="value">${fmtPct(totalWeight,1)}</div>
-        <div class="sub">占总资产 · ${positions.length} 只</div>
-      </div>
-      <div class="stat">
-        <div class="label">${icon('target')} 有效持仓数</div>
+      <div class="stat"><div class="label">${icon('gauge')} 弹性引擎健康分</div>
+        <div class="value" style="color:${scoreColor}">${score}<span style="font-size:14px;color:var(--muted)"> /100</span></div>
+        <div class="sub">纯客观，不依赖胜率预测</div></div>
+      <div class="stat"><div class="label">${icon('coins')} 弹性仓占比</div>
+        <div class="value" style="color:${sizeState[0]}">${fmtPct(equityPct,1)}</div>
+        <div class="sub">目标 ${target}% · ${sizeState[1]}</div></div>
+      <div class="stat"><div class="label">${icon('target')} 有效持仓数</div>
         <div class="value" style="color:${effN>=3?'var(--green-ink)':(effN>=2?'var(--amber-ink)':'var(--red-ink)')}">${effN?effN.toFixed(1):'—'}</div>
-        <div class="sub">实际独立赌注数</div>
-      </div>
-      <div class="stat">
-        <div class="label">${icon('pie')} 最大因子占比</div>
-        <div class="value" style="color:${concentrationOk?'var(--green-ink)':'var(--red-ink)'}">${maxFactorW?fmtPct(maxFactorW*100,0):'—'}</div>
-        <div class="sub">${maxFactor?maxFactor:'—'} · 上限 60%</div>
-      </div>
-      <div class="stat">
-        <div class="label">${icon('gauge')} 回撤预算已用</div>
-        <div class="value" style="color:${ddOk?'var(--green-ink)':'var(--red-ink)'}">${fmtPct(usedDrawdown,1)}</div>
-        <div class="sub">阈值 ${s.maxDrawdown}% ${ddOk?'达标':'超支'}</div>
-      </div>
+        <div class="sub">名义 ${nHoldings} 只 · 实际独立赌注</div></div>
+      <div class="stat"><div class="label">${icon('trenddown')} 弹性仓回撤贡献</div>
+        <div class="value" style="color:${ddOk?'var(--green-ink)':'var(--red-ink)'}">${fmtPct(equityDD,1)}</div>
+        <div class="sub">全组合可承受 ${s.maxDrawdown}% · ${ddOk?'可控':'超支'}</div></div>
     </div>
   `));
 
-  // 健康度检查清单
-  const checks = [];
-  if (!ddOk) checks.push(['red', `回撤预算超支：股票预估最大回撤 ${fmtPct(usedDrawdown,1)} > 阈值 ${s.maxDrawdown}%`]);
-  if (!concentrationOk && maxFactor) checks.push(['red', `因子「${maxFactor}」占 ${fmtPct(maxFactorW*100,0)} > 60%，过度集中于单一 beta`]);
-  positions.forEach(p => {
-    if (num(p.weight) > s.singleCap + 1e-9) checks.push(['amber', `${escapeHtml(p.name||'未命名')} 占 ${fmtPct(num(p.weight),1)} 超单股上限 ${s.singleCap}%`]);
-  });
-  if (effN > 0 && effN < 2 && positions.length >= 3) checks.push(['amber', `持有 ${positions.length} 只，但有效持仓数仅 ${effN.toFixed(1)}——假分散`]);
-  if (checks.length === 0 && positions.length > 0) checks.push(['green', '当前组合通过全部纪律检查']);
+  // 核心解读：把"弹性仓风险"放到全组合语境
+  app.appendChild(el(`<div class="card"><div class="alert ${ddOk?'blue':'red'}"><span class="icon">${ddOk?icon('info'):icon('danger')}</span><div>
+    ${ddOk
+      ? `<strong>关键结论：你的股票即便按各自最大跌幅同时回撤，对全组合的冲击约 ${fmtPct(equityDD,1)}，在你能承受的 ${s.maxDrawdown}% 之内。</strong>这正是"用小仓位博弹性、其余压舱"策略成立的依据——所以股票<strong>不必因为“单看每只都不够保守”就减</strong>，只要总风险可控、够分散即可。`
+      : `<strong>注意：股票按各自最大跌幅同时回撤，对全组合冲击约 ${fmtPct(equityDD,1)}，已超你设的 ${s.maxDrawdown}% 承受线。</strong>这才是真正需要处理的信号——优先降波动最大/占比最高的那几只，而不是无差别清仓。`}
+  </div></div></div>`));
 
-  const checklist = el('<div class="card"><h3>纪律体检</h3></div>');
-  if (positions.length === 0) {
-    checklist.appendChild(el(`<div class="empty"><div class="big">${icon('clipboard')}</div><p>还没有持仓。先到「持仓」页录入，或直接使用各计算器。</p></div>`));
+  // 纪律体检清单（合并原「组合分散」）
+  const checks = [];
+  if (!ddOk) checks.push(['red', `弹性仓回撤贡献 ${fmtPct(equityDD,1)} > 全组合承受 ${s.maxDrawdown}%——见「③ 回撤控制」降高波动持仓`]);
+  if (!concentrationOk && maxFactor) checks.push(['red', `因子「${maxFactor}」占弹性仓 ${fmtPct(maxFactorW*100,0)} > ${level.label}档上限 ${level.factor}%——过度押单一 beta`]);
+  overSingle.forEach(p => checks.push(['amber', `${escapeHtml(p.name||'未命名')} 占弹性仓 ${fmtPct(num(p.weight)/equityPct*100,0)} > ${level.label}档单股上限 ${level.single}%`]));
+  if (nHoldings >= 3 && effN > 0 && effN < nHoldings * 0.6) checks.push(['amber', `持 ${nHoldings} 只但有效持仓数仅 ${effN.toFixed(1)}——假分散(多只押同一方向)`]);
+  deep.forEach(p => checks.push(['amber', `${escapeHtml(p.name||'未命名')} 深套 ${fmtPct(num(p.pnl),1)}——请复核买入逻辑是否仍成立(见「⑤ 加减仓 → 减仓/退出」)，不是自动卖`]));
+  if (equityPct < target * 0.7) checks.push(['blue', `弹性仓仅 ${fmtPct(equityPct,1)} < 目标 ${target}%——若想要更高收益弹性，可在纪律内逐步补到目标附近`]);
+  if (checks.length === 0 && nHoldings > 0) checks.push(['green', '弹性引擎风险可控、分散达标，无需处理']);
+
+  const checklist = el('<div class="card" style="margin-top:16px"><h3>纪律体检 + 分散</h3></div>');
+  if (nHoldings === 0) {
+    checklist.appendChild(el(`<div class="empty"><div class="big">${icon('clipboard')}</div><p>还没有股票持仓。先到「持仓」页录入。</p></div>`));
   } else {
-    checks.forEach(([type, msg]) => {
-      checklist.appendChild(el(`<div class="alert ${type}"><span class="icon">${type==='red'?icon('danger'):type==='amber'?icon('warn'):icon('check')}</span><div>${msg}</div></div>`));
-    });
+    checks.forEach(([type, msg]) => checklist.appendChild(el(`<div class="alert ${type}"><span class="icon">${type==='red'?icon('danger'):type==='amber'?icon('warn'):type==='blue'?icon('info'):icon('check')}</span><div>${msg}</div></div>`)));
   }
   app.appendChild(checklist);
 
-  // 因子暴露饼图
-  if (positions.length > 0) {
-    const pieCard = el('<div class="card" style="margin-top:16px"><h3>因子暴露分布</h3><p class="hint">一眼看出组合真正押注的方向与集中度</p></div>');
+  // 因子暴露饼图（原「组合分散」核心图，合并到此）
+  if (nHoldings > 0) {
+    const pieCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('pie')} 因子暴露（真实分散度）</h3>
+      <p class="hint">一眼看清弹性仓真正押注的方向与集中度。有效持仓数 ${effN.toFixed(1)}／名义 ${nHoldings}——差距越大，说明"看着分散、实则押一个方向"。</p></div>`);
     pieCard.appendChild(buildPie(factorWeights));
     app.appendChild(pieCard);
   }
@@ -1058,7 +1081,7 @@ VIEWS.positions = function (app) {
   app.appendChild(el(`
     <div class="view-head">
       <h2>持仓管理</h2>
-      <p>录入的持仓将驱动「组合分散」「回撤控制」「铁律校验」等模块。数据仅存本地。</p>
+      <p>录入的持仓将驱动「股票体检」「回撤控制」「铁律校验」「加减仓计划」等模块，并随行情自动刷新占比/浮盈亏。数据仅存本地。</p>
     </div>
   `));
 
@@ -1532,106 +1555,6 @@ VIEWS.kelly = function (app) {
   };
 };
 
-/* =========================================================================
-   模块 2 — 相关性 / 有效持仓数（组合分散）
-   ========================================================================= */
-VIEWS.diversify = function (app) {
-  app.appendChild(el(`
-    <div class="view-head">
-      <h2>② 组合分散 · 有效持仓数</h2>
-      <p>戳破"假分散"——持有多只股票，但实际只押了少数几个独立赌注。</p>
-    </div>
-  `));
-
-  if (STATE.positions.length === 0) {
-    app.appendChild(el(`<div class="card"><div class="empty"><div class="big">${icon('pie')}</div>
-      <p>此模块基于你的持仓计算。请先到「持仓」页录入标的与因子标签。</p>
-      <button class="btn" id="goto-pos" style="margin-top:12px">前往录入持仓</button>
-    </div></div>`));
-    app.querySelector('#goto-pos').onclick = () => switchView('positions');
-    return;
-  }
-
-  const { effN, factorWeights, factorSum, total } = Calc.effectiveBets(STATE.positions);
-  const nHoldings = STATE.positions.length;
-
-  // 占比全为 0 时无法计算分散度，给出引导而非渲染无意义的 0
-  if (total <= 0) {
-    app.appendChild(el(`<div class="card"><div class="empty"><div class="big">${icon('pie')}</div>
-      <p>各持仓占比均为 0，无法计算有效持仓数。请到「持仓」页填写占比，或填「持股数量」自动计算。</p>
-      <button class="btn" id="goto-pos2" style="margin-top:12px">前往填写占比</button>
-    </div></div>`));
-    app.querySelector('#goto-pos2').onclick = () => switchView('positions');
-    return;
-  }
-
-  const card = el('<div class="card"></div>');
-  card.appendChild(el(`
-    <div class="stat-grid" style="grid-template-columns:1fr 1fr">
-      <div class="stat">
-        <div class="label">名义持仓数</div>
-        <div class="value">${nHoldings}</div>
-        <div class="sub">你以为分散到几只</div>
-      </div>
-      <div class="stat">
-        <div class="label">有效持仓数 (独立赌注)</div>
-        <div class="value" style="color:${effN>=3?'var(--green)':(effN>=2?'var(--amber)':'var(--red)')}">${effN.toFixed(1)}</div>
-        <div class="sub">实际押了几个独立方向</div>
-      </div>
-    </div>
-  `));
-
-  // 核心提示语
-  if (effN < nHoldings * 0.7) {
-    card.appendChild(el(`<div class="alert red" style="margin-top:16px"><span class="icon">${icon('target')}</span><div>
-      你持有 <strong>${nHoldings}</strong> 只标的，但有效持仓数仅 <strong>${effN.toFixed(1)}</strong>——你实际只押了约 ${Math.round(effN)} 个独立方向。这是典型的假分散。
-    </div></div>`));
-  } else {
-    card.appendChild(el(`<div class="alert green" style="margin-top:16px"><span class="icon">${icon('check')}</span><div>
-      有效持仓数 ${effN.toFixed(1)} 接近名义持仓数 ${nHoldings}，分散度较真实。
-    </div></div>`));
-  }
-  app.appendChild(card);
-
-  // 因子暴露
-  const pieCard = el('<div class="card" style="margin-top:16px"><h3>因子暴露饼图</h3><p class="hint">各底层因子占组合的比例</p></div>');
-  pieCard.appendChild(buildPie(factorWeights));
-
-  // 60% 集中度红色警告
-  const overFactors = Object.entries(factorWeights).filter(([f, w]) => w > 0.6);
-  overFactors.forEach(([f, w]) => {
-    pieCard.appendChild(el(`<div class="alert red" style="margin-top:14px"><span class="icon">${icon('danger')}</span><div>
-      因子「${escapeHtml(f)}」占组合 ${fmtPct(w*100,0)} > 60%——过度集中于单一 beta，系统性回调时将同步下跌。
-    </div></div>`));
-  });
-  app.appendChild(pieCard);
-
-  // 因子合并明细
-  const detail = el('<div class="card" style="margin-top:16px"><h3>因子分组明细</h3><p class="hint">同因子仓位合并 → 得出实际独立赌注</p></div>');
-  const scroll = el('<div class="table-scroll"></div>');
-  const factorGroups = {};
-  STATE.positions.forEach(p => {
-    const f = p.factor || '其它';
-    (factorGroups[f] = factorGroups[f] || []).push(p);
-  });
-  const rows = Object.entries(factorGroups)
-    .sort((a, b) => (factorSum[b[0]] || 0) - (factorSum[a[0]] || 0))
-    .map(([f, ps]) => {
-      const sum = ps.reduce((a, p) => a + num(p.weight), 0);
-      const share = total > 0 ? sum / total : 0;
-      return `<tr>
-        <td><span class="tag-chip">${escapeHtml(f)}</span></td>
-        <td>${ps.map(p => escapeHtml(p.name)).join('、')}</td>
-        <td class="num">${fmtPct(sum,1)}</td>
-        <td class="num" style="color:${share>0.6?'var(--red)':'inherit'}">${fmtPct(share*100,0)}</td>
-      </tr>`;
-    }).join('');
-  scroll.appendChild(el(`<table><thead><tr>
-    <th>因子</th><th>合并标的</th><th class="num">合计占比</th><th class="num">占组合</th>
-  </tr></thead><tbody>${rows}</tbody></table>`));
-  detail.appendChild(scroll);
-  app.appendChild(detail);
-};
 
 /* =========================================================================
    模块 3 — 最大回撤约束（总风险控制）
@@ -1923,7 +1846,7 @@ VIEWS.stoploss = function (app) {
 VIEWS.rules = function (app) {
   app.appendChild(el(`
     <div class="view-head">
-      <h2>⑤ 铁律校验 · 操作拦截引擎</h2>
+      <h2>② 铁律校验 · 操作拦截引擎</h2>
       <p>任何"加仓"操作前跑一遍校验。触发任一条即弹出必须二次确认才能越过的红色拦截。</p>
     </div>
   `));
@@ -2023,7 +1946,7 @@ VIEWS.rules = function (app) {
     }
 
     const planned = card.querySelector('#r-planned').checked;
-    const DEEP_LOSS = 20;                       // 深套阈值 %：超过即视为可能逻辑破坏
+    const DEEP_LOSS = num(s.deepLossAdd, 20);   // 深套阈值 %（设置里可调）
     const violations = [], softWarnings = [];
 
     // 铁律1 亏损加仓（分级，而非一刀切）：
@@ -2108,15 +2031,30 @@ VIEWS.rules = function (app) {
    模块 6 — 加仓计划器 + 利润隔离（执行辅助）
    ========================================================================= */
 VIEWS.planner = function (app) {
+  const s = STATE.settings;
   app.appendChild(el(`
     <div class="view-head">
-      <h2>⑥ 加仓计划器 + 利润隔离</h2>
-      <p>正金字塔分批买入（越低买越多）＋ 橄榄型仓位模板 ＋ 浮盈隔离提醒。</p>
+      <h2>⑤ 加减仓计划</h2>
+      <p>加仓：正金字塔分批（越低买越多）＋橄榄型模板＋浮盈隔离。减仓/退出：基于事实、剔除成本干扰的科学退出算法。</p>
     </div>
   `));
 
-  const s = STATE.settings;
+  const segCard = el(`<div class="card" style="padding:12px 16px;margin-bottom:16px"><div class="seg" id="pl-seg">
+    <button class="seg-btn active" data-t="add">加仓计划</button>
+    <button class="seg-btn" data-t="reduce">减仓 / 退出</button>
+  </div></div>`);
+  app.appendChild(segCard);
+  const body = el('<div id="pl-body"></div>');
+  app.appendChild(body);
+  const show = (t) => {
+    segCard.querySelectorAll('.seg-btn').forEach(b => b.classList.toggle('active', b.dataset.t === t));
+    body.innerHTML = '';
+    (t === 'reduce' ? renderReduce : renderAdd)(body);
+  };
+  segCard.querySelectorAll('.seg-btn').forEach(b => b.onclick = () => show(b.dataset.t));
+  show('add');
 
+  function renderAdd(app) {
   /* --- 橄榄型仓位模板 --- */
   app.appendChild(el(`<div class="card"><h3>橄榄型仓位模板</h3>
     <p class="hint">试水 → 趋势明确 → 泡沫期收缩，全程留现金池</p>
@@ -2244,6 +2182,132 @@ VIEWS.planner = function (app) {
       saveState(); render();
     });
   }
+  } // end renderAdd
+
+  /* --- 减仓 / 退出计划（科学退出算法，剔除成本干扰）--- */
+  function renderReduce(app) {
+    const positions = STATE.positions || [];
+    const total = portfolioTotal();
+    app.appendChild(el(`<div class="card"><div class="alert blue"><span class="icon">${icon('info')}</span><div>
+      卖出比买入更难,人性会被<strong>处置效应</strong>和<strong>沉没成本</strong>绑架。这套算法只看<strong>向前看的事实</strong>:逻辑是否破坏、是否跌破止损、是否超风险预算、"<strong>今天空仓还会不会买</strong>"——你的<strong>成本价不参与任何决策</strong>。它既防深套死扛,也防在低点恐慌割肉。</div></div></div>`));
+
+    if (!positions.length) {
+      app.appendChild(el(`<div class="card" style="margin-top:16px"><div class="empty"><div class="big">${icon('scissors')}</div><p>还没有股票持仓。先到「持仓」页录入。</p></div></div>`));
+      return;
+    }
+
+    const card = el('<div class="card" style="margin-top:16px"><h3>该不该减 · 怎么减</h3></div>');
+    card.appendChild(el(`
+      <div class="field"><label>选择持仓</label>
+        <select id="rd-pos">${positions.map(p => `<option value="${p.id}">${escapeHtml(p.name)}${p.code?'（'+escapeHtml(p.code)+'）':''} · 占 ${fmtPct(num(p.weight),1)} · 浮${num(p.pnl)>=0?'盈':'亏'} ${fmtPct(num(p.pnl),1)}</option>`).join('')}</select></div>
+      <div class="grid grid-3">
+        <div class="field"><label>当前价</label><input id="rd-price" type="number" step="0.01" placeholder="现价"/></div>
+        <div class="field"><label>计划止损价（可选）</label><input id="rd-stop" type="number" step="0.01" placeholder="跌破即减"/></div>
+        <div class="field"><label>成本价（仅展示，不参与决策）</label><input id="rd-cost" type="number" step="0.01" readonly style="background:var(--surface-soft);color:var(--muted)"/></div>
+      </div>
+      <div class="grid grid-2">
+        <div class="field"><label>① 当初买入的核心逻辑,现在还成立吗?</label>
+          <select id="rd-thesis"><option value="yes">仍成立(基本面/催化剂未变)</option><option value="unsure">不确定</option><option value="no">已破坏(基本面变差/逻辑证伪)</option></select></div>
+        <div class="field"><label>② 假设你空仓、手里是现金,今天会按现价买它吗?</label>
+          <select id="rd-buy"><option value="yes">会</option><option value="no">不会</option></select></div>
+      </div>
+      <button class="btn danger" id="rd-run">${icon('search')} 生成减仓/退出决策</button>
+      <div id="rd-result"></div>
+    `));
+    app.appendChild(card);
+
+    const fillFrom = (p) => {
+      if (!p) return;
+      if (num(p.price) > 0) card.querySelector('#rd-price').value = p.price;
+      // 成本价：优先 position.cost，否则由现价与浮盈亏% 反推
+      let cost = num(p.cost) > 0 ? num(p.cost) : null;
+      if (cost == null && num(p.price) > 0 && num(p.pnl) !== 0) cost = num(p.price) / (1 + num(p.pnl) / 100);
+      card.querySelector('#rd-cost').value = cost ? (+cost).toFixed(cost >= 100 ? 2 : 3) : '';
+    };
+    fillFrom(positions[0]);
+    card.querySelector('#rd-pos').onchange = (e) => fillFrom(positions.find(x => x.id === e.target.value));
+
+    card.querySelector('#rd-run').onclick = () => {
+      const box = card.querySelector('#rd-result'); box.innerHTML = '';
+      const p = positions.find(x => x.id === card.querySelector('#rd-pos').value);
+      if (!p) return;
+      const price = num(card.querySelector('#rd-price').value) || num(p.price);
+      const stop = num(card.querySelector('#rd-stop').value);
+      const thesis = card.querySelector('#rd-thesis').value;   // yes / unsure / no
+      const buyToday = card.querySelector('#rd-buy').value;      // yes / no
+      const w = num(p.weight);                                  // 占总资产 %
+      const pnl = num(p.pnl);
+      const md = num(p.maxDrop) || 40;
+      const equityPct = positions.reduce((a, x) => a + num(x.weight), 0);
+      const level = EQUITY_RISK_LEVELS[s.equityRiskLevel] || EQUITY_RISK_LEVELS['进取'];
+      const sleeveW = equityPct > 0 ? w / equityPct * 100 : 0;   // 占弹性仓 %
+      const posValue = total > 0 ? w / 100 * total : 0;
+
+      // 客观触发
+      const stopBroken = stop > 0 && price > 0 && price < stop;
+      const overCap = sleeveW > level.single + 1e-9;             // 超弹性仓单股上限
+      const deep = pnl <= -num(s.deepLossAdd, 20);
+
+      // 决策
+      let decision, targetW, reason, tone, mode;
+      if (thesis === 'no' || stopBroken) {
+        decision = '计划性退出'; targetW = 0; tone = 'red'; mode = 'exit';
+        reason = stopBroken ? `已跌破你的计划止损价 ${stop}(现价 ${price})——纪律止损,不找理由拖延。` : '你判断买入逻辑已破坏。逻辑没了就没有持有理由,认赔=买回选择权,不是"亏钱"。';
+      } else if (overCap) {
+        decision = '减到合规'; targetW = w * (level.single / sleeveW); tone = 'amber'; mode = 'trim';
+        reason = `逻辑仍成立,但它占弹性仓 ${fmtPct(sleeveW,0)} 超「${level.label}」档单股上限 ${level.single}%——只减超出部分,留下核心。`;
+      } else if (buyToday === 'no') {
+        decision = '减仓(处置效应警示)'; targetW = w * 0.6; tone = 'amber'; mode = 'trim';
+        reason = '逻辑没超预算,但你"今天不会按现价买它"——说明你持有的理由已偏向"不甘心/等回本"(处置效应)。至少减到你真正舒服的仓位。';
+      } else {
+        decision = '持有'; targetW = w; tone = 'green'; mode = 'hold';
+        if (deep) reason = `深套 ${fmtPct(pnl,1)},但你判断逻辑仍成立、今天还会买——这是波动而非逻辑破坏。<strong>别在情绪最低点割肉</strong>;若想补,走「加仓计划 / 铁律校验」按计划分批。`;
+        else reason = '逻辑成立、未超预算、你今天还会买——继续持有,按纪律跟踪即可。';
+      }
+      if (thesis === 'unsure' && mode === 'hold') { tone = 'amber'; reason += ' 你对逻辑"不确定"——给自己一个复核期限,到期仍不确定,按"不会买就减"处理。'; }
+
+      const reduceW = Math.max(0, w - targetW);
+      const reduceValue = total > 0 ? reduceW / 100 * total : 0;
+      const reduceShares = price > 0 ? reduceValue / price : 0;
+
+      box.appendChild(el(`<div class="alert ${tone}" style="margin-top:14px"><span class="icon">${tone==='red'?icon('danger'):tone==='amber'?icon('warn'):icon('check')}</span><div>
+        <strong>结论:${decision}</strong><br>${reason}</div></div>`));
+
+      box.appendChild(el(`<div class="result-box">
+        <div class="metric-row"><span class="k">当前占比 / 目标占比</span><span class="v">${fmtPct(w,1)} → ${fmtPct(targetW,1)}</span></div>
+        <div class="metric-row"><span class="k">建议减仓金额（约）</span><span class="v" style="color:var(--red-ink)">${mode==='hold'?'—':fmtMoney(reduceValue)}</span></div>
+        <div class="metric-row"><span class="k">对应股数（约）</span><span class="v">${mode==='hold'||!(reduceShares>0)?'—':Math.floor(reduceShares).toLocaleString()}</span></div>
+        <div class="metric-row"><span class="k">成本价（沉没成本,不参与决策）</span><span class="v" style="color:var(--muted)">${card.querySelector('#rd-cost').value||'—'}</span></div>
+      </div>`));
+
+      if (mode === 'hold') return;
+
+      // 分批减仓计划
+      if (mode === 'exit') {
+        // 逻辑破/破止损：分 3 批短窗口出，降低卖在最低点的择时风险，但不拖延
+        const parts = [0.4, 0.3, 0.3];
+        const rows = parts.map((f, i) => `<tr><td>第 ${i+1} 批（${i===0?'立即':'1–'+(i*2)+' 个交易日内'}）</td>
+          <td class="num">${fmtMoney(reduceValue*f)}</td><td class="num">${price>0?Math.floor(reduceValue*f/price).toLocaleString():'—'}</td><td class="num">${fmtPct(f*100,0)}</td></tr>`).join('');
+        box.appendChild(el(`<div class="table-scroll" style="margin-top:12px"><table>
+          <thead><tr><th>批次</th><th class="num">减仓金额</th><th class="num">股数</th><th class="num">占比</th></tr></thead>
+          <tbody>${rows}<tr class="total-row"><td>合计</td><td class="num">${fmtMoney(reduceValue)}</td><td></td><td class="num">100%</td></tr></tbody></table></div>`));
+        box.appendChild(el(`<div class="alert blue" style="margin-top:10px"><span class="icon">${icon('info')}</span><div>退出用 3 批短窗口出,既不拖泥带水(逻辑已破),也避免一把砸在瞬时低点。别因"想等回本"停下。</div></div>`));
+      } else {
+        // 减到合规/减仓：逢反弹分批减（反金字塔，越涨卖越多），减少割在低点
+        const n = 3;
+        const levels = [0, 0.03, 0.06];                          // 现价、+3%、+6%
+        const wts = [2, 3, 4]; const wsum = wts.reduce((a, b) => a + b, 0);
+        const rows = levels.map((lv, i) => {
+          const px = price * (1 + lv), amt = reduceValue * wts[i] / wsum;
+          return `<tr><td>第 ${i+1} 批</td><td class="num">${px>0?px.toFixed(px>=100?2:3):'—'}</td><td class="num">${fmtMoney(amt)}</td><td class="num">${px>0?Math.floor(amt/px).toLocaleString():'—'}</td><td class="num">${fmtPct(wts[i]/wsum*100,0)}</td></tr>`;
+        }).join('');
+        box.appendChild(el(`<div class="table-scroll" style="margin-top:12px"><table>
+          <thead><tr><th>批次</th><th class="num">价位</th><th class="num">减仓金额</th><th class="num">股数</th><th class="num">占比</th></tr></thead>
+          <tbody>${rows}<tr class="total-row"><td>合计</td><td></td><td class="num">${fmtMoney(reduceValue)}</td><td></td><td class="num">100%</td></tr></tbody></table></div>`));
+        box.appendChild(el(`<div class="alert blue" style="margin-top:10px"><span class="icon">${icon('ruler')}</span><div><strong>反金字塔减仓：逢反弹越涨卖越多</strong>(现价/+3%/+6%),把"减仓"尽量卖在相对高点,而不是恐慌市价砸出。逻辑没破的持仓不必一次清空。</div></div>`));
+      }
+    };
+  } // end renderReduce
 };
 
 /* =========================================================================
@@ -2273,6 +2337,14 @@ VIEWS.settings = function (app) {
         <input id="st-lock" type="number" step="5" value="${s.profitLockThreshold}"/></div>
       <div class="field"><label>最大回撤阈值 %（默认 15）</label>
         <input id="st-dd" type="number" step="1" value="${s.maxDrawdown}"/></div>
+      <div class="field"><label>弹性仓(股票)目标占比 %<span class="inline-note" style="display:inline"> 博弹性的引擎</span></label>
+        <input id="st-eqtarget" type="number" step="1" value="${num(s.equityTargetPct,20)}"/></div>
+      <div class="field"><label>弹性仓风险档</label>
+        <select id="st-eqlevel">${Object.keys(EQUITY_RISK_LEVELS).map(k=>`<option ${s.equityRiskLevel===k?'selected':''}>${k}</option>`).join('')}</select>
+        <p class="inline-note">决定弹性仓内部集中度容忍：进取=单股≤40%/因子≤75%(占弹性仓)；均衡 30/60；稳健 22/50。</p></div>
+      <div class="field"><label>深套阈值 %（默认 20）</label>
+        <input id="st-deep" type="number" step="1" value="${num(s.deepLossAdd,20)}"/>
+        <p class="inline-note">浮亏超此值：亏损加仓硬拦、体检提示复核逻辑、减仓计划触发。</p></div>
       <div class="field"><label>总资产${(STATE.assets||[]).length ? '（由投资组合自动汇总）' : ''}</label>
         <input id="st-total" type="number" step="1000" value="${portfolioTotal()>0?portfolioTotal():''}" placeholder="如 1000000" ${(STATE.assets||[]).length ? 'readonly style="background:rgba(120,120,128,0.08);color:var(--muted)"' : ''}/>
         ${(STATE.assets||[]).length ? '<p class="inline-note">总资产 = 「投资组合」各资产按当日中间价折算后自动求和，随你在投资组合里增删/修改资产实时变化，无需手填。</p>' : ''}</div>
@@ -2294,6 +2366,9 @@ VIEWS.settings = function (app) {
     s.perTradeRisk = num(card.querySelector('#st-risk').value, 2);
     s.profitLockThreshold = num(card.querySelector('#st-lock').value, 30);
     s.maxDrawdown = num(card.querySelector('#st-dd').value, 15);
+    s.equityTargetPct = num(card.querySelector('#st-eqtarget').value, 20);
+    s.equityRiskLevel = card.querySelector('#st-eqlevel').value || '进取';
+    s.deepLossAdd = num(card.querySelector('#st-deep').value, 20);
     // 有投资组合明细时总资产自动汇总，不用手填值覆盖；无明细时才用手填兜底
     if (!(STATE.assets || []).length) STATE.portfolio.totalAssets = num(card.querySelector('#st-total').value, 0);
     STATE.portfolio.fxRate = num(card.querySelector('#st-fx').value, FX_DEFAULT) || FX_DEFAULT;
@@ -2965,6 +3040,13 @@ VIEWS.help = function (app) {
     ['遵循的收益', '<p>一个均衡、不过度集中于单一大类或单一 beta 的组合，能在系统性回调中少受伤、在长期获得更稳的复利，避免“牛市财富逆向转移”。</p>'],
   ]);
 
+  G('gauge', '股票体检 · 弹性引擎（已合并「组合分散」）', [
+    ['定位', '<p>你的股票是<strong>博收益弹性</strong>的引擎,由基金/理财/黄金/现金压舱。所以体检的问题不是"每只是否够保守",而是"<strong>这台引擎的总风险是否可控、是否真分散、有没有该复核的深套</strong>"。目标弹性仓占比与风险档在「设置」里定。</p>'],
+    ['关键指标', '<p><strong>弹性仓回撤贡献</strong> = Σ(各股占总资产% × 各股最大跌幅),对比你能承受的最大回撤——只要在承受线内,说明"小仓博弹性"成立,股票不必因单看不够保守就减。另含<strong>有效持仓数</strong>(逆 HHI = 1/Σ因子权重²,戳破假分散)、因子集中度、弹性仓占比 vs 目标、深套复核提示,汇成一个<strong>纯客观健康分</strong>(不依赖 AI 猜胜率)。</p>'],
+    ['理论', '<p><strong>核心-卫星 + 风险预算</strong>:用稳定的核心(基金/理财/黄金/现金)托底,让小比例的卫星(股票)去博弹性;因为卫星只占一小块,即便它大幅回撤,对全组合冲击也有限——这正是敢在股票上进取的底气。分散的收益来自<strong>低相关</strong>而非数量。</p>'],
+    ['遵循的收益', '<p>把注意力从"每只涨不涨"移到"整台引擎的风险与分散",既不会因短期全红而错杀弹性,也不会让某一条 beta 或某只深套悄悄把风险堆到承受线之外。</p>'],
+  ]);
+
   G('pie', '① 凯利定注 · 单标的下注', [
     ['傻瓜模式(推荐)', '<p>顶部选一只<strong>持仓或基金</strong>→点「让 AI 评估」,DeepSeek 按对该标的的认知给出<strong>保守估计</strong>的胜率、上涨/下跌空间和多空理由,自动算出 ¼ 凯利目标仓位,并与你当前占比对比给出加/减仓空间(含金额)。参数会回填到下方计算器供微调。<strong>AI 估计每次可能略有出入,只作起点参考,非投资建议。</strong></p>'],
     ['怎么用', '<p>或手动填赢/输情形的涨跌幅、胜率，并各写≥2 条看多/看空的客观理由；先过 EV 闸门，再看满/半/¼ 凯利三档，默认执行 ¼ 凯利。</p>'],
@@ -2974,11 +3056,11 @@ VIEWS.help = function (app) {
     ['遵循的收益', '<p>个股按（分数）凯利下注,长期比“凭感觉重仓/轻仓”获得更高复利、更低爆仓概率;配置资产按角色权重定,则保住分散与稳定的基本盘,两者各司其职。</p>'],
   ]);
 
-  G('target', '② 组合分散 · 有效持仓数', [
-    ['怎么用', '<p>在「持仓」为每只标的打上底层因子标签，本页给出“有效持仓数”，戳破“假分散”，并用饼图显示因子暴露；任一因子&gt;60% 会红色告警。</p>'],
-    ['计算逻辑', '<p>按因子分组合并权重后，用逆 HHI：<code class="formula">有效持仓数 = 1 / Σ(因子权重²)</code>。持有 7 只但都在同一 beta 上，有效持仓数可能只有 2–3。</p>'],
-    ['理论', '<p><strong>相关性与真实分散</strong>：分散的收益来自<strong>低相关</strong>，而非标的数量。同涨同跌的多只标的，本质是一个赌注。</p>'],
-    ['遵循的收益', '<p>把有效持仓数提上去（押注真正独立的方向），能显著降低系统性回调时的整体回撤，让组合更抗单一 beta 崩塌。</p>'],
+  G('shield', '② 铁律校验 · 操作拦截引擎', [
+    ['怎么用', '<p>放在凯利定注之后:任何“加仓”前跑一遍校验。选已有持仓会带出<strong>最新占比/浮盈亏</strong>;加仓以<strong>金额优先</strong>;触发硬性铁律弹出必须二次确认的红色拦截,较轻的情况给黄色<strong>软提醒</strong>(不拦截)。</p>'],
+    ['亏损加仓为何“分级”而非一刀切', '<p>真正致命的不是“浮亏就加”,而是两种具体行为:<strong>接下跌的刀</strong>(还在跌就加)和<strong>深套摊平</strong>(超深套阈值还往里加、拒绝承认逻辑破坏)。而<strong>计划内分批/定投</strong>和<strong>企稳/反转后的底部补仓</strong>是合理的。所以:深套硬拦(需复核原逻辑);下跌趋势硬拦(接刀);浅亏且非计划内→软提醒;浅亏+勾选“计划内分批”+非下跌→放行。勾选框强制你分清“计划”还是“摊平”。</p>'],
+    ['计算逻辑', '<p>规则:亏损加仓(分级)、下跌趋势加仓、超单股上限、正金字塔(高位加仓额≥上次)、因子集中度&gt;60%、现金池&lt;下限、胜率&gt;60% 无充分理由。</p>'],
+    ['理论', '<p><strong>行为金融学 + 交易纪律</strong>：把处置效应、损失厌恶、沉没成本、追高等人性弱点,用规则在情绪化时刻拦下——但不误伤“有纪律的计划内分批”。</p>'],
   ]);
 
   G('gauge', '③ 回撤控制 · 最大回撤约束', [
@@ -2995,19 +3077,11 @@ VIEWS.help = function (app) {
     ['遵循的收益', '<p>单笔亏损被限制在总资产的固定小比例（如 2%），连续犯错也难伤筋动骨，保证你“留在牌桌上”等到属于自己的大机会。</p>'],
   ]);
 
-  G('shield', '⑤ 铁律校验 · 操作拦截引擎', [
-    ['怎么用', '<p>放在凯利定注之后:任何“加仓”前跑一遍校验。选已有持仓会带出<strong>最新占比/浮盈亏</strong>;加仓以<strong>金额优先</strong>;触发硬性铁律弹出必须二次确认的红色拦截,较轻的情况给黄色<strong>软提醒</strong>(不拦截)。</p>'],
-    ['亏损加仓为何“分级”而非一刀切', '<p>真正致命的不是“浮亏就加”,而是两种具体行为:<strong>接下跌的刀</strong>(还在跌就加)和<strong>深套摊平</strong>(−20% 以上还往里加、拒绝承认逻辑破坏)。而<strong>计划内分批/定投</strong>(正是本工具⑥所提倡)和<strong>企稳/反转后的底部补仓</strong>是合理的。所以规则改为:深套硬拦(需复核原逻辑);下跌趋势硬拦(接刀);浅亏且非计划内→软提醒;浅亏+勾选“计划内分批”+非下跌→放行。勾选框强制你分清“计划”还是“摊平”。</p>'],
-    ['计算逻辑', '<p>规则:亏损加仓(分级)、下跌趋势加仓、超单股上限、正金字塔(高位加仓额≥上次)、因子集中度&gt;60%、现金池&lt;下限、胜率&gt;60% 无充分理由。</p>'],
-    ['理论', '<p><strong>行为金融学 + 交易纪律</strong>：把处置效应、损失厌恶、沉没成本、追高等人性弱点,用规则在情绪化时刻拦下——但不误伤“有纪律的计划内分批”。</p>'],
-    ['遵循的收益', '<p>躲开散户最典型的致命操作(接下跌的刀、深套摊平、追高头重脚轻、满仓无现金),同时保留“底部分批/定投”这类正确的逆向操作空间。</p>'],
-  ]);
-
-  G('ruler', '⑥ 加仓计划器 + 利润隔离', [
-    ['怎么用', '<p>可先输入<strong>标的代码</strong>点「获取现价」,自动把现价填入「最高价」、按 −15% 预填「最低价」(可改);再填总投入,生成“越低买越多”的正金字塔分批。用橄榄型模板规划试水→主力→收缩;浮盈超阈值(默认 +30%)提醒隔离部分利润。</p>'],
-    ['计算逻辑', '<p>正金字塔按“越低价权重越大”线性分配买入额；利润隔离建议把浮盈的一半转入货基/债/黄金等安全资产并记录。</p>'],
-    ['理论', '<p><strong>正金字塔加仓 + 落袋为安</strong>：摊薄成本、避免高位头重脚轻；把账面利润变成已实现的安全垫。</p>'],
-    ['遵循的收益', '<p>降低平均持仓成本、抬高盈亏平衡点的安全边际，并在泡沫期锁住部分胜利果实，避免坐了一轮过山车回到原点。</p>'],
+  G('ruler', '⑤ 加减仓计划（加仓 / 减仓·退出 两个标签）', [
+    ['加仓计划', '<p>输入标的代码点「获取现价」,自动填价位区间;生成“越低买越多”的<strong>正金字塔</strong>分批。橄榄型模板规划试水→主力→收缩;浮盈超阈值(默认 +30%)提醒隔离部分利润(落袋为安)。</p>'],
+    ['减仓/退出(科学退出算法)', '<p>卖出被<strong>处置效应</strong>与<strong>沉没成本</strong>绑架,所以只看向前看的事实、<strong>成本价不参与决策</strong>。两个开关:①原逻辑是否仍成立 ②今天空仓会不会按现价买。决策树:<br>· 逻辑已破 / 跌破止损 → <strong>计划性退出</strong>(目标 0,3 批短窗口出);<br>· 逻辑成立但超弹性仓单股上限 → <strong>减到合规</strong>(只减超出部分,逢反弹分批);<br>· 逻辑成立、没超预算,但“今天不会买” → <strong>减仓</strong>(处置效应警示);<br>· 逻辑成立、今天还会买 → <strong>持有</strong>(深套也别在低点割)。</p>'],
+    ['理论', '<p><strong>“今天还会买吗”测试</strong>是破解深套死扛的关键:它把问题从"我亏了多少舍不舍得割"(向后看、被成本绑架)翻成"它未来还值不值得占这笔钱"。<strong>成本是沉没成本,市场不知道也不在乎你买在多少。</strong>研究亦表明投资者卖出决策质量普遍差,故用规则化退出。</p>'],
+    ['遵循的收益', '<p>深套逻辑破了能果断认赔(=买回选择权),逻辑没破又能避免恐慌割在低点;加仓摊薄成本、减仓卖在相对高点,一进一出都有纪律。</p>'],
   ]);
 
   app.appendChild(el(`<div class="card"><div class="alert amber"><span class="icon">${icon('warn')}</span><div>
