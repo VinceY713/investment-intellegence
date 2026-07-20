@@ -1427,6 +1427,10 @@ VIEWS.positions = function (app) {
 /* =========================================================================
    模块 1 — 凯利公式计算器（单标的下注）
    ========================================================================= */
+// 凯利 AI 评估的会话内缓存：{ "code|日期": {win,up,down,bulls,bears,note} }
+// 同一标的当日重复评估复用同一结果，保证一致（刷新页面或次日自动失效重评）
+const KELLY_EVAL_CACHE = {};
+
 VIEWS.kelly = function (app) {
   const s = STATE.settings;
   const frac = Math.min(1, Math.max(0.05, num(s.kellyFraction, 0.25)));
@@ -1513,25 +1517,34 @@ VIEWS.kelly = function (app) {
     evalBtns.forEach(b => b.disabled = true);
     out.innerHTML = '<div class="inline-note" style="margin-top:10px">' + icon('refresh', 'spin') + ' 正在请求 DeepSeek 评估「' + escapeHtml(p.name) + '」，约 10–30 秒…</div>';
     try {
-      const sys = '你是一位严谨、保守的投资分析师，评估对象可能是股票或基金。基于你对该标的（公司/行业/指数/主题）的认知，给出未来 6–12 个月的保守评估。'
-        + '一致性要求：请给出你最有把握的【单一保守中枢估计】，不要给区间、不要发散；相同输入应尽量得到相近结论。'
-        + '硬性要求：宁可低估胜率、高估风险；胜率必须在 30–65 之间；空间用价格涨跌幅的正百分数，下跌空间不小于上涨空间的一半。'
-        + '基金按其跟踪的指数/主题整体评估，波动通常小于个股，空间相应收敛。'
-        + '只输出一个 JSON 对象，不要任何多余文字、解释或代码块标记。格式：'
-        + '{"winRate":52,"upside":35,"downside":25,"bulls":["客观看多理由1","理由2"],"bears":["客观看空理由1","理由2"],"note":"一句话结论"}';
-      const user = `标的：${p.name}（代码 ${p.code || '无'}）\n`
-        + `底层驱动因子：${p.factor}；用户标注趋势：${p.trend || '未知'}；当前浮盈亏：${num(p.pnl).toFixed(1)}%；`
-        + `用户预估最大跌幅：${num(p.maxDrop) || '未填'}%；当前占总资产：${num(p.weight).toFixed(2)}%。\n`
-        + `请给出胜率(winRate)、上涨空间(upside)、下跌空间(downside)与各 2-4 条客观多空理由。`;
-      const j = await aiChatJSON(sys, user);
-
-      // 消毒：胜率夹到 30–65（防 AI 过度乐观/发散），空间为正，下跌空间≥上涨空间一半
-      const win = Math.min(65, Math.max(30, Math.round(num(j.winRate))));
-      const up = Math.max(1, num(j.upside));
-      const down = Math.max(1, Math.max(num(j.downside), up * 0.5));
-      const bulls = (j.bulls || []).map(x => String(x).trim()).filter(Boolean).slice(0, 4);
-      const bears = (j.bears || []).map(x => String(x).trim()).filter(Boolean).slice(0, 4);
-      const note = String(j.note || '').trim();
+      // 会话内缓存：同一标的（同日）重复评估直接复用，保证结果完全一致（消除“每次差很多”）
+      const cacheKey = ((p.code || p.name || '').toLowerCase()) + '|' + todayStr();
+      let cached = KELLY_EVAL_CACHE[cacheKey], win, up, down, bulls, bears, note, fromCache = false;
+      if (cached) {
+        ({ win, up, down, bulls, bears, note } = cached); fromCache = true;
+      } else {
+        const sys = '你是一位严谨、保守的投资分析师，评估对象可能是股票或基金。基于你对该标的（公司/行业/指数/主题）的认知，给出未来 6–12 个月的保守评估。'
+          + '一致性要求：请给出你最有把握的【单一保守中枢估计】，不要给区间、不要发散；相同输入应得到相同结论。'
+          + '硬性要求：宁可低估胜率、高估风险；胜率必须在 30–65 之间；空间用价格涨跌幅的正百分数，下跌空间不小于上涨空间的一半。'
+          + '基金按其跟踪的指数/主题整体评估，波动通常小于个股，空间相应收敛。'
+          + '关键：胜率(winRate)按 5 的整数倍给（如 40/45/50/55/60）；上涨/下跌空间(upside/downside)也按 5 的整数倍给，这样多次评估结果稳定一致。'
+          + '只输出一个 JSON 对象，不要任何多余文字、解释或代码块标记。格式：'
+          + '{"winRate":50,"upside":35,"downside":25,"bulls":["客观看多理由1","理由2"],"bears":["客观看空理由1","理由2"],"note":"一句话结论"}';
+        const user = `标的：${p.name}（代码 ${p.code || '无'}）\n`
+          + `底层驱动因子：${p.factor}；用户标注趋势：${p.trend || '未知'}；当前浮盈亏：${num(p.pnl).toFixed(1)}%；`
+          + `用户预估最大跌幅：${num(p.maxDrop) || '未填'}%；当前占总资产：${num(p.weight).toFixed(2)}%。\n`
+          + `请给出胜率(winRate)、上涨空间(upside)、下跌空间(downside)与各 2-4 条客观多空理由。`;
+        // 温度 0 + 5 分桶：把 AI 细小波动吸收掉，稳定评分与凯利结果
+        const j = await aiChatJSON(sys, user, { temperature: 0 });
+        const round5 = x => Math.round(num(x) / 5) * 5;
+        win = Math.min(65, Math.max(30, round5(j.winRate)));
+        up = Math.max(5, round5(j.upside));
+        down = Math.max(5, Math.max(round5(j.downside), up * 0.5));
+        bulls = (j.bulls || []).map(x => String(x).trim()).filter(Boolean).slice(0, 4);
+        bears = (j.bears || []).map(x => String(x).trim()).filter(Boolean).slice(0, 4);
+        note = String(j.note || '').trim();
+        KELLY_EVAL_CACHE[cacheKey] = { win, up, down, bulls, bears, note };
+      }
 
       const prob = win / 100;
       const ev = Calc.ev(prob, up, down);
@@ -1590,7 +1603,11 @@ VIEWS.kelly = function (app) {
           <div><div class="mini-label" style="color:var(--red-ink)">AI 看空理由</div>${bears.map(t => `<p style="margin:4px 0;font-size:13px">· ${escapeHtml(t)}</p>`).join('') || '<p class="inline-note">无</p>'}</div>
         </div>
         ${note ? `<p class="inline-note" style="margin-top:8px">${icon('sparkles')} AI 结论：${escapeHtml(note)}</p>` : ''}
-        <p class="inline-note">参数已回填到下方计算器，可自行微调后重算。AI 生成内容仅供参考，不构成投资建议。</p>`;
+        <p class="inline-note">${fromCache ? '本次会话已评估过该标的，复用一致结果（<a href="#" id="ka-recompute" style="color:var(--accent-ink)">重新评估</a>）。' : ''}参数已回填到下方计算器，可自行微调后重算。AI 生成内容仅供参考，不构成投资建议。</p>`;
+
+      // “重新评估”：清掉该标的缓存后重跑（用于确需刷新 AI 观点时）
+      const recompute = out.querySelector('#ka-recompute');
+      if (recompute) recompute.onclick = (e) => { e.preventDefault(); delete KELLY_EVAL_CACHE[((p.code || p.name || '').toLowerCase()) + '|' + todayStr()]; evaluateCandidate(p); };
 
       // 回填手动计算器（含理由），方便微调
       card.querySelector('#k-up').value = up.toFixed(0);
@@ -1734,6 +1751,15 @@ VIEWS.kelly = function (app) {
 /* =========================================================================
    模块 3 — 最大回撤约束（总风险控制）
    ========================================================================= */
+// 当前浮盈亏对整个组合的贡献（占总资产%，带正负）
+//   市值 = 占比×总资产；成本 = 市值/(1+浮盈亏%)；盈亏 = 市值−成本
+//   贡献% = 盈亏/总资产×100 = 占比 × 浮盈亏 /(100+浮盈亏)
+function pnlContribOf(weightPct, pnlPct) {
+  const denom = 100 + pnlPct;
+  if (denom <= 0) return weightPct * pnlPct / 100;   // 极端兜底（浮亏≈−100%）
+  return weightPct * pnlPct / denom;
+}
+
 VIEWS.drawdown = function (app) {
   app.appendChild(el(`
     <div class="view-head">
@@ -1797,6 +1823,8 @@ VIEWS.drawdown = function (app) {
     const cap = md > 0 ? (threshold / md) * 100 : Infinity; // 单股独占预算时的上限占比
     const over = w > cap;
     const pnl = num(p.pnl);
+    // 当前盈亏对组合的贡献（占总资产%，带正负）= 占比 × 浮盈亏% ÷ (100+浮盈亏%)
+    const pnlContrib = pnlContribOf(w, pnl);
     const day = (p.dayPct != null && isFinite(p.dayPct)) ? `<span class="pill ${p.dayPct>=0?'green':'red'}">${p.dayPct>=0?'+':''}${fmtPct(p.dayPct,2)}</span>` : '—';
     return `<tr data-ddrow="${i}" style="cursor:pointer">
       <td>${escapeHtml(p.name)}</td>
@@ -1804,19 +1832,30 @@ VIEWS.drawdown = function (app) {
       <td class="num" style="color:${pnl>=0?'var(--green-ink)':'var(--red-ink)'}">${pnl>=0?'+':''}${fmtPct(pnl,1)}</td>
       <td class="num">${day}</td>
       <td class="num">${fmtPct(md,0)}</td>
-      <td class="num">${fmtPct(contrib,2)}</td>
+      <td class="num" style="color:var(--red-ink)">${fmtPct(contrib,2)}</td>
+      <td class="num" style="color:${pnlContrib>=0?'var(--green-ink)':'var(--red-ink)'}">${pnlContrib>=0?'+':'−'}${fmtPct(Math.abs(pnlContrib),2)}</td>
       <td class="num">${isFinite(cap)?fmtPct(cap,1):'—'}</td>
       <td>${over
         ? `<span class="pill red">超预算</span>`
         : `<span class="pill green">预算内</span>`}</td>
     </tr>`;
   }).join('');
+  const pnlContribTotal = positions.reduce((a, p) => a + pnlContribOf(num(p.weight), num(p.pnl)), 0);
   scroll.appendChild(el(`<table><thead><tr>
     <th>名称</th><th class="num">当前占比</th><th class="num">浮盈亏</th><th class="num">今日</th><th class="num">最大跌幅</th>
-    <th class="num">回撤贡献</th><th class="num">理论上限*</th><th>判定</th>
-  </tr></thead><tbody>${rows}</tbody></table>`));
+    <th class="num" title="潜在下行：占比×最大跌幅，恒为正，与盈亏无关">回撤贡献(潜在)</th>
+    <th class="num" title="当前浮盈亏对整个组合的贡献，带正负">盈亏贡献(当前)</th>
+    <th class="num">理论上限*</th><th>判定</th>
+  </tr></thead><tbody>${rows}
+    <tr class="total-row"><td>合计</td><td class="num">${fmtPct(positions.reduce((a,p)=>a+num(p.weight),0),1)}</td><td></td><td></td><td></td>
+      <td class="num" style="color:var(--red-ink)">${fmtPct(used,2)}</td>
+      <td class="num" style="color:${pnlContribTotal>=0?'var(--green-ink)':'var(--red-ink)'}">${pnlContribTotal>=0?'+':'−'}${fmtPct(Math.abs(pnlContribTotal),2)}</td>
+      <td></td><td></td></tr>
+  </tbody></table>`));
   detail.appendChild(scroll);
-  detail.appendChild(el(`<p class="inline-note">*理论上限 = 回撤阈值 ÷ 该股最大跌幅（即该股独占全部回撤预算时的占比）。多股共享预算时应更保守。<strong>点表格任意一行查看该股的回撤解读。</strong></p>`));
+  detail.appendChild(el(`<p class="inline-note">*理论上限 = 回撤阈值 ÷ 该股最大跌幅（即该股独占全部回撤预算时的占比）。多股共享预算时应更保守。<br>
+    <strong>回撤贡献(潜在)</strong> = 占比 × 最大跌幅，恒为正，衡量「未来若跌到最坏，拖累组合多少」；
+    <strong>盈亏贡献(当前)</strong> = 占比 × 浮盈亏 ÷(100+浮盈亏)，带正负，衡量「现在这只赚/亏，对组合贡献多少」。两者一个看未来风险、一个看当前损益。<strong>点任意一行查看该股解读。</strong></p>`));
 
   // 点哪只显示哪只（默认回撤贡献最大的一只）
   const summaryBox = el('<div id="dd-summary" style="margin-top:12px"></div>');
@@ -2701,14 +2740,19 @@ function mdLite(t) {
 }
 
 // 通用：调 DeepSeek 并要求返回 JSON（容忍 ```json 包裹等杂质，取第一个 {...} 解析）
-async function aiChatJSON(sys, user) {
+async function aiChatJSON(sys, user, opts) {
+  opts = opts || {};
+  const body = {
+    model: AI_MODEL, stream: false,
+    temperature: opts.temperature != null ? opts.temperature : 0.15,
+    max_tokens: 900,
+    messages: [{ role: 'system', content: sys }, { role: 'user', content: user }],
+  };
+  if (opts.seed != null) body.seed = opts.seed;   // 固定种子 → 同输入尽量同输出（降低波动）
   const res = await fetch(AI_ENDPOINT, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: AI_MODEL, stream: false, temperature: 0.15, max_tokens: 900,
-      messages: [{ role: 'system', content: sys }, { role: 'user', content: user }],
-    }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) { const t = await res.text(); throw new Error('接口返回 ' + res.status + '：' + t.slice(0, 160)); }
   const data = await res.json();
