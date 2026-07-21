@@ -20,6 +20,11 @@ const DEFAULT_SETTINGS = {
   equityTargetPct: 20,   // 弹性仓（股票）目标占总资产 %——博收益弹性的引擎
   equityRiskLevel: '进取', // 弹性仓风险档：稳健/均衡/进取（决定弹性仓内部集中度容忍）
   deepLossAdd: 20,       // 深套阈值 %（亏损加仓/减仓判定用）
+  // 个人目标语境（AI 组合点评据此给"目标相对"的建议，而非泛泛而谈）
+  profileHorizon: '',    // 投资期限：'<1y' | '1-3y' | '3-5y' | '5y+'
+  profileRisk: '',       // 风险承受：'保守' | '均衡' | '进取'
+  profileLiquidity: '',  // 近1年是否需动用：'no' | 'part' | 'yes'
+  profileGoal: '',       // 一句话目标（自由文本）
 };
 // 弹性仓风险档 → 弹性仓内部集中度上限（占弹性仓 %，非占总资产）
 const EQUITY_RISK_LEVELS = {
@@ -2360,6 +2365,33 @@ const ROLE_BAND = { core: [8, 30], theme: [3, 12] };
 // 下注/配置质量评分（0–100）：连续、单调、在 EV=0 处不断裂，且用有界压缩避免高分段饱和。
 // 说明：原实现在 EV=0 处从 ~38 跳到 ~60（12–28 分断崖），且 ev×8 让好票几乎都顶到 95、
 // 高分段无分辨率——AI 的 5 档估计一旦在 EV=0 两侧摆动，评分就会剧烈跳变。这里改用 tanh 压缩。
+// 组合健康分（确定性、可复现）：由代码按明确规则算出，AI 只负责解释——
+// 取代原来"让 LLM 每次凭空发明一个不稳定的分数"。0–100，越高越健康。
+function computePortfolioHealth(m) {
+  let score = 100;
+  const rows = [];
+  const liqFloor = num(m.cashFloor, 10);
+  // 1 流动性（可用现金，已排除锁定理财/定存）
+  if (m.liqPct < liqFloor) { score -= Math.min(22, (liqFloor - m.liqPct) * 1.6); rows.push(['bad', '流动性', `可用现金 ${m.liqPct.toFixed(1)}% < 下限 ${liqFloor}%——回调加仓/应急能力不足`]); }
+  else rows.push(['ok', '流动性', `可用现金 ${m.liqPct.toFixed(1)}% ≥ 下限 ${liqFloor}%`]);
+  // 2 大类集中（最大大类占比）
+  if (m.maxBigPct > 70) { score -= Math.min(20, (m.maxBigPct - 70) * 0.8); rows.push(['bad', '大类集中', `最大单一大类占 ${m.maxBigPct.toFixed(0)}% > 70%——大类分散不足`]); }
+  else rows.push(['ok', '大类均衡', `最大单一大类占 ${m.maxBigPct.toFixed(0)}%`]);
+  // 3 股票子组合真实分散
+  if (m.nStocks >= 3 && m.corrEffN > 0 && m.corrEffN < 2) { score -= Math.min(15, (2 - m.corrEffN) * 10); rows.push(['bad', '股票分散', `相关性有效持仓数仅 ${m.corrEffN.toFixed(1)}（${m.corrSrc}）——多只同涨同跌`]); }
+  else if (m.nStocks > 0) rows.push(['ok', '股票分散', `相关性有效持仓数 ${m.corrEffN ? m.corrEffN.toFixed(1) : '—'}（${m.corrSrc}）`]);
+  // 4 回撤敞口
+  if (m.equityDD > m.maxDD) { score -= Math.min(20, (m.equityDD - m.maxDD) / Math.max(1, m.maxDD) * 30); rows.push(['bad', '回撤敞口', `弹性仓回撤贡献 ${m.equityDD.toFixed(1)}% > 承受线 ${m.maxDD}%`]); }
+  else rows.push(['ok', '回撤敞口', `弹性仓回撤贡献 ${m.equityDD.toFixed(1)}% ≤ ${m.maxDD}%`]);
+  // 5 因子集中
+  if (m.nStocks > 0 && m.maxFactorW * 100 > m.factorCap) { score -= Math.min(15, (m.maxFactorW * 100 - m.factorCap) * 0.5); rows.push(['bad', '因子集中', `最大因子占弹性仓 ${(m.maxFactorW * 100).toFixed(0)}% > ${m.factorCap}%`]); }
+  else if (m.nStocks > 0) rows.push(['ok', '因子集中', `最大因子 ${(m.maxFactorW * 100).toFixed(0)}% ≤ ${m.factorCap}%`]);
+  // 6 币种敞口（美元）——偏高提示汇率风险
+  if (m.usdPct > 60) { score -= Math.min(10, (m.usdPct - 60) * 0.3); rows.push(['warn', '币种敞口', `美元敞口 ${m.usdPct.toFixed(0)}% 偏高，人民币口径汇率风险集中`]); }
+  else rows.push(['ok', '币种敞口', `美元敞口 ${m.usdPct.toFixed(0)}%`]);
+  return { score: Math.max(5, Math.min(100, Math.round(score))), rows };
+}
+
 function betScore(ev, b, win) {
   if (!isFinite(ev)) return 50;
   const bb = isFinite(b) ? Math.min(b, 5) : 1.5;               // 赔率封顶，避免极端 b 拉爆分数
@@ -3374,41 +3406,49 @@ async function aiChatJSON(sys, user, opts) {
   return JSON.parse(m[0]);
 }
 
-async function aiReview(summaryText, box, btn) {
-  const sys = '你是一位严谨、以风险控制为先的个人投资组合顾问。基于用户的真实资产配置数据，用中文给出：'
-    + '（1）组合健康度评分（0–100）与一句话总体结论；'
-    + '（2）三到四条结构性风险（如大类失衡、单一因子/beta集中、币种敞口、回撤敞口、现金是否充足等）；'
-    + '（3）下一步 3–5 条具体、可执行的调整建议，尽量落到大类或标的层面。'
-    + '严格要求：不预测涨跌、不荐股、不承诺收益，只聚焦仓位结构与风险纪律。用简洁的小标题分段，语言精炼。';
+const AI_REVIEW_CACHE = {};   // 会话内缓存：同一摘要复用，保证同日同组合点评一致（可复现）
+async function aiReview(summaryText, computedScore, box, btn) {
+  const sys = '你是一位严谨、以风险控制为先、擅长资产配置的个人投资组合顾问。'
+    + '下面给你【工具已算好的客观事实与健康分】和【用户目标语境】。请用中文给出：'
+    + '（1）用 1–2 句解释这个健康分为什么是 ' + computedScore + '（引用给定的扣分/达标项，不要另造分数、不要自己重新打分）；'
+    + '（2）结合用户的期限/风险承受/流动性需求，给出 3–4 条最关键的结构性风险（大类失衡、单一因子/beta 集中、币种/汇率敞口、回撤敞口、流动性等），并说明为什么对"这个用户"重要；'
+    + '（3）3–5 条具体、可执行的调整建议，尽量落到大类或标的层面，并与用户目标挂钩。'
+    + '硬性要求：只依据给定数据推理，不得编造任何数字或事实，缺少的信息就直说"数据不足"；不预测涨跌、不荐股、不承诺收益；用简洁小标题分段。';
+  // 会话缓存键：摘要+分数（同输入→同输出，消除"每次点评都不一样"）
+  const cacheKey = computedScore + '|' + summaryText;
   btn.disabled = true;
   const oldHtml = btn.innerHTML;
   btn.innerHTML = icon('refresh', 'spin') + ' 正在分析…';
   box.innerHTML = '<div class="inline-note">正在请求 DeepSeek 分析你的组合，请稍候（约 10–30 秒）…</div>';
   try {
-    const res = await fetch(AI_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: AI_MODEL,
-        stream: false,
-        temperature: 0.5,
-        max_tokens: 1800,
-        messages: [
-          { role: 'system', content: sys },
-          { role: 'user', content: summaryText },
-        ],
-      }),
-    });
-    if (!res.ok) {
-      const t = await res.text();
-      throw new Error('接口返回 ' + res.status + '：' + t.slice(0, 200));
+    let content = AI_REVIEW_CACHE[cacheKey];
+    if (!content) {
+      const res = await fetch(AI_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: AI_MODEL,
+          stream: false,
+          temperature: 0.2,       // 低温 → 稳定可复现
+          max_tokens: 1800,
+          messages: [
+            { role: 'system', content: sys },
+            { role: 'user', content: summaryText },
+          ],
+        }),
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error('接口返回 ' + res.status + '：' + t.slice(0, 200));
+      }
+      const data = await res.json();
+      content = data && data.choices && data.choices[0] &&
+        data.choices[0].message && data.choices[0].message.content;
+      if (!content) throw new Error('返回内容为空');
+      AI_REVIEW_CACHE[cacheKey] = content;
     }
-    const data = await res.json();
-    const content = data && data.choices && data.choices[0] &&
-      data.choices[0].message && data.choices[0].message.content;
-    if (!content) throw new Error('返回内容为空');
-    box.innerHTML = `<div class="alert green"><span class="icon">${icon('sparkles')}</span>
-      <div><strong>DeepSeek 组合点评</strong>（AI 生成，仅供参考，非投资建议）</div></div>
+    box.innerHTML = `<div class="alert blue"><span class="icon">${icon('sparkles')}</span>
+      <div><strong>DeepSeek 组合点评</strong>（解读上方客观健康分 ${computedScore}/100 · AI 生成仅供参考、非投资建议）</div></div>
       <div class="ai-output">${mdLite(content)}</div>`;
   } catch (e) {
     box.innerHTML = `<div class="alert amber"><span class="icon">${icon('warn')}</span><div>
@@ -3854,32 +3894,70 @@ VIEWS.portfolio = function (app) {
     mgmt.scrollIntoView({ behavior: 'smooth', block: 'center' });
   });
 
-  // AI 深度点评
-  const aiCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('sparkles')} AI 深度点评</h3>
-    <p class="hint">由 DeepSeek 依据你的真实配置给出健康度评分与下一步建议。数据经服务器代理调用，密钥不出前端。</p></div>`);
+  // —— 客观量化指标（工具已算好，喂给点评并用于确定性健康分）——
+  const s = STATE.settings;
+  const positions = STATE.positions || [];
+  const eff = Calc.effectiveBets(positions);
+  const corrFn = corrResolver(STATE.corrCache);
+  const corrEffN = Calc.corrEffectiveBets(positions, corrFn);
+  const corrSrc = corrFn ? '实测' : '先验';
+  const equityDD = positions.reduce((a, p) => a + Calc.drawdownContribution(num(p.weight), num(p.maxDrop)), 0);
+  const level = EQUITY_RISK_LEVELS[s.equityRiskLevel] || EQUITY_RISK_LEVELS['进取'];
+  let maxFactor = null, maxFactorW = 0;
+  Object.entries(eff.factorWeights || {}).forEach(([f, w]) => { if (w > maxFactorW) { maxFactorW = w; maxFactor = f; } });
+  const cashLiquid = cashAssetsCny();
+  const liqPct = total > 0 ? cashLiquid / total * 100 : 0;
+  const maxBigPct = Object.values(byBig).length ? Math.max.apply(null, Object.values(byBig)) / total * 100 : 0;
+  const usdPct = pct(usdCny);
+  const nStocks = positions.length;
+  const health = computePortfolioHealth({ cashFloor: s.cashFloor, liqPct, maxBigPct, corrEffN, corrSrc, nStocks, equityDD, maxDD: num(s.maxDrawdown, 15), maxFactorW, factorCap: level.factor, usdPct });
+
+  // —— 确定性健康分卡片（规则算出、可复现，不依赖 AI）——
+  const healthCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('gauge')} 组合健康分（客观规则算出 · 非 AI 猜测 · 可复现）</h3></div>`);
+  healthCard.appendChild(el(`<div class="metric-row"><span class="k">健康分（越高越健康）</span><span class="v" style="font-size:22px;color:${health.score>=70?'var(--green-ink)':health.score>=50?'var(--amber-ink)':'var(--red-ink)'}">${health.score}<span style="font-size:13px;color:var(--muted)"> /100</span></span></div>`));
+  health.rows.forEach(([st, label, detail]) => healthCard.appendChild(el(`<div class="alert ${st==='bad'?'red':st==='warn'?'amber':'green'}" style="margin-top:8px"><span class="icon">${st==='bad'?icon('danger'):st==='warn'?icon('warn'):icon('check')}</span><div><strong>${label}</strong>：${escapeHtml(detail)}</div></div>`)));
+  app.appendChild(healthCard);
+
+  // —— AI 深度点评（解读健康分 + 目标相对建议）——
+  const HZ = [['','未填'],['<1y','1年内'],['1-3y','1–3年'],['3-5y','3–5年'],['5y+','5年以上']];
+  const RK = [['','未填'],['保守','保守'],['均衡','均衡'],['进取','进取']];
+  const LQ = [['','未填'],['no','近1年不需动用'],['part','可能部分动用'],['yes','近1年需要动用']];
+  const opt = (arr, cur) => arr.map(([v, t]) => `<option value="${v}" ${cur===v?'selected':''}>${t}</option>`).join('');
+  const aiCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('sparkles')} AI 深度点评（解读健康分 + 目标相对建议）</h3>
+    <p class="hint">先填你的目标语境，AI 才能给"目标相对"的建议而非泛泛而谈。健康分由上方规则算出，<strong>AI 只解释、不另造数字</strong>；数据经服务器代理，密钥不出前端。</p></div>`);
+  aiCard.appendChild(el(`<div class="grid grid-2">
+    <div class="field"><label>投资期限</label><select id="pf-h">${opt(HZ, s.profileHorizon)}</select></div>
+    <div class="field"><label>风险承受</label><select id="pf-r">${opt(RK, s.profileRisk)}</select></div>
+    <div class="field"><label>这笔钱近 1 年是否需要动用</label><select id="pf-l">${opt(LQ, s.profileLiquidity)}</select></div>
+    <div class="field"><label>一句话目标（可选）</label><input id="pf-g" value="${escapeHtml(s.profileGoal||'')}" placeholder="如：5年内稳健增值、不大亏"/></div>
+  </div>`));
   aiCard.appendChild(el(`<button class="btn" id="pf-ai">${icon('sparkles')} 生成 AI 组合诊断</button><div id="pf-ai-out" style="margin-top:12px"></div>`));
   app.appendChild(aiCard);
+  const saveProfile = () => {
+    s.profileHorizon = aiCard.querySelector('#pf-h').value;
+    s.profileRisk = aiCard.querySelector('#pf-r').value;
+    s.profileLiquidity = aiCard.querySelector('#pf-l').value;
+    s.profileGoal = aiCard.querySelector('#pf-g').value.trim();
+    saveState();
+  };
+  ['#pf-h', '#pf-r', '#pf-l'].forEach(sel => aiCard.querySelector(sel).onchange = saveProfile);
+  aiCard.querySelector('#pf-g').onchange = saveProfile;
 
-  // 组装给 AI 的组合摘要（含工具算出的量化指标）
-  const eff = Calc.effectiveBets(STATE.positions || []);
-  const bigLines = Object.entries(byBig).map(([k, v]) => `${k} ${fmtPct(pct(v),1)}（${fmtMoney(v)}）`).join('；');
-  const catLines = Object.entries(byCat).sort((a,b)=>b[1]-a[1]).map(([k, v]) => `${k} ${fmtPct(pct(v),1)}`).join('、');
+  // 组装摘要：喂"工具已算好的客观事实 + 健康分 + 目标语境"（不再喂缩水指标/编造假设）
+  const bigLines = Object.entries(byBig).sort((a,b)=>b[1]-a[1]).map(([k, v]) => `${k} ${fmtPct(pct(v),1)}`).join('；');
   const topHold = assets.slice().sort((a,b)=>cnyOf(b)-cnyOf(a)).slice(0, 10)
-    .map(a => `${a.name}(${a.category},${fmtPct(pct(cnyOf(a)),1)}${a.pnl!=null?','+(num(a.pnl)>=0?'盈':'亏')+Math.abs(Math.round(num(a.pnl))):''})`).join('；');
-  const factorTop = Object.entries(eff.factorWeights || {}).sort((a,b)=>b[1]-a[1]).slice(0,3)
-    .map(([f,w]) => `${f} ${fmtPct(w*100,0)}`).join('、');
-  const summary =
+    .map(a => `${a.name}(${a.category},${fmtPct(pct(cnyOf(a)),1)})`).join('；');
+  const lqTxt = s.profileLiquidity === 'yes' ? '近1年需要动用' : s.profileLiquidity === 'part' ? '可能部分动用' : s.profileLiquidity === 'no' ? '近1年不需动用' : '未填';
+  const buildSummary = () =>
 `【个人投资组合，截止${STATE.portfolio.asOfDate||'今日'}，美元/人民币中间价 ${fx.toFixed(4)}】
-总资产：${fmtMoney(total)}（折合人民币）。
-大类配置：${bigLines}。
-按类别：${catLines}。
-币种敞口：人民币 ${fmtPct(pct(byCur['CNY']||0),0)}，美元 ${fmtPct(pct(usdCny),0)}。
-理财/存款年化利息合计约 ${fmtMoney(interestTotal)}（美元按 3%、人民币按实际利率，美元已折人民币）；股票/基金/黄金浮盈亏合计 ${pnlTotal>=0?'+':''}${fmtMoney(pnlTotal)}。
-主要持仓（占比/盈亏，占比为占总资产）：${topHold}。
-股票子组合的“有效独立赌注数”约 ${eff.effN?eff.effN.toFixed(1):'-'}（名义 ${(STATE.positions||[]).length} 只），因子集中度前三：${factorTop||'无'}。
-请据此诊断健康度并给出下一步建议。`;
+总资产：${fmtMoney(total)}（折合人民币）。大类配置：${bigLines}。
+可用现金(已排除锁定理财/定存)：${liqPct.toFixed(1)}%（现金下限 ${s.cashFloor}%）。美元敞口：${usdPct.toFixed(0)}%（人民币口径含汇率风险）。
+股票子组合：名义 ${nStocks} 只，相关性有效持仓数 ${corrEffN?corrEffN.toFixed(1):'—'}（${corrSrc}口径），最大因子「${maxFactor||'无'}」占弹性仓 ${(maxFactorW*100).toFixed(0)}%（该风险档上限 ${level.factor}%）；弹性仓回撤贡献 ${equityDD.toFixed(1)}%（承受线 ${s.maxDrawdown}%）。
+理财/存款利息约 ${fmtMoney(interestTotal)}（注：美元固收按 3% 假设估算、非实际数）；权益/黄金浮盈亏约 ${fmtMoney(pnlTotal)}（人民币口径）。主要持仓：${topHold}。
+【工具已算出的客观健康分】${health.score}/100，逐项：${health.rows.map(r=>r[1]+(r[0]==='bad'?'⚠':r[0]==='warn'?'△':'✓')).join('、')}。
+【用户目标语境】期限：${s.profileHorizon||'未填'}；风险承受：${s.profileRisk||'未填'}；流动性：${lqTxt}；目标：${s.profileGoal||'未填'}。`;
 
-  aiCard.querySelector('#pf-ai').onclick = (e) => aiReview(summary, aiCard.querySelector('#pf-ai-out'), e.currentTarget.closest('button'));
+  aiCard.querySelector('#pf-ai').onclick = (e) => { saveProfile(); aiReview(buildSummary(), health.score, aiCard.querySelector('#pf-ai-out'), e.currentTarget.closest('button')); };
 };
 
 /* =========================================================================
