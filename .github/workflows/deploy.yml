@@ -25,6 +25,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Inject build id and generate version.json
+        run: |
+          sed -i "s/__BUILD__/${GITHUB_SHA}/" index.html
+          printf '{"build":"%s","time":"%s"}\n' "${GITHUB_SHA}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > version.json
+
       - name: Copy static files to ECS (SCP)
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -32,7 +37,7 @@ jobs:
           username: ${{ secrets.ECS_USERNAME }}
           key: ${{ secrets.ECS_SSH_KEY }}
           port: ${{ secrets.ECS_PORT || '22' }}
-          source: "index.html,styles.css,app.js,README.md,deploy/snapshot-cron.py"
+          source: "index.html,styles.css,app.js,version.json,README.md,deploy/snapshot-cron.py"
           target: "/var/www/investment-intelligence"
           overwrite: true
 

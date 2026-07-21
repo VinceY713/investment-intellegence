@@ -3994,6 +3994,34 @@ centerActiveTab();
 if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => centerActiveTab());
 window.addEventListener('load', () => centerActiveTab());
 
+// 版本自检：服务器部署了新代码、而本页还是旧代码时（SPA 长期不关页/浏览器恢复标签页
+// 都不会自动拿新文件），弹「点此更新」。构建号在部署时写进 index.html 的 meta[name=build]。
+const BUILD_ID = (document.querySelector('meta[name="build"]') || {}).content || '__BUILD__';
+let updateToastShown = false;
+async function checkForUpdate() {
+  if (!BUILD_ID || BUILD_ID === '__BUILD__') return;   // 本地开发无构建号，跳过
+  try {
+    const r = await fetch('version.json?_=' + Date.now(), { cache: 'no-store' });
+    if (!r.ok) return;
+    const j = await r.json();
+    if (j && j.build && j.build !== BUILD_ID && !updateToastShown) {
+      updateToastShown = true;
+      const t = document.createElement('div');
+      t.id = 'update-toast';
+      t.textContent = '已有新版本，点此更新';
+      t.title = '服务器上的代码比当前页面新，点击刷新以加载最新版';
+      t.onclick = () => location.reload();
+      document.body.appendChild(t);
+    }
+  // 离线或无 version.json（本地开发）时静默跳过
+  } catch (_) {}
+}
+checkForUpdate();
+setInterval(checkForUpdate, 10 * 60 * 1000);                       // 每 10 分钟自检
+document.addEventListener('visibilitychange', () => {              // 切回标签页时自检
+  if (!document.hidden) checkForUpdate();
+});
+
 // 启动后台任务：先与云端对账（取较新者）→ 刷新基金/股票估值 → 记录今日快照
 (async () => {
   const { changed } = await initCloudSync();       // 拉云端整份数据并对账

@@ -3,6 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- 构建号：部署时由 GitHub Actions 替换为提交 SHA，用于「新版本提示」自检；本地开发保持 __BUILD__ 即跳过 -->
+  <meta name="build" content="__BUILD__" />
   <title>理性仓位管理工具</title>
   <script>
     // 尽早设置主题，避免刷新时白/黑闪烁
