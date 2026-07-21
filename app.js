@@ -960,7 +960,13 @@ function showBlockingModal({ title, lines, confirmText = '我已知晓风险，�
    4. 视图路由
    ------------------------------------------------------------------------- */
 const VIEWS = {};
-let currentView = 'portfolio';
+// 支持 ?view=xxx 直达某个模块（分享链接/书签/移动端测试都可用）
+let currentView = (() => {
+  try {
+    const v = new URLSearchParams(location.search).get('view');
+    return v && typeof v === 'string' ? v : 'portfolio';
+  } catch (_) { return 'portfolio'; }
+})();
 
 function render() {
   syncPositionsFromAssets();        // 渲染前先把持仓与最新资产对齐，各模块联动实时数据
@@ -969,10 +975,20 @@ function render() {
   (VIEWS[currentView] || VIEWS.dashboard)(app);
 }
 
+// 移动端：把激活标签滚动进视野（11 个标签在手机上默认只露前几个）。
+// 注意：网页字体加载完成后标签宽度会变，过早居中会"差一截"，
+// 因此启动时除了立即居中，还要在 fonts.ready / load 后再补一次（见启动段）。
+function centerActiveTab(behavior = 'auto') {
+  const act = document.querySelector('.tab.active');
+  if (act && act.scrollIntoView) act.scrollIntoView({ block: 'nearest', inline: 'center', behavior });
+}
+
 function switchView(v) {
   currentView = v;
+  try { history.replaceState(null, '', '?view=' + v); } catch (_) {}
   document.querySelectorAll('.tab').forEach(t =>
     t.classList.toggle('active', t.dataset.view === v));
+  centerActiveTab('smooth');
   render();
 }
 
@@ -3958,6 +3974,11 @@ function backfillPositionAssets() {
    启动
    ------------------------------------------------------------------------- */
 applyTheme(currentTheme());
+// ?theme=dark|light 可强制指定主题（测试/分享链接用，不写入偏好）
+{
+  const qt = (() => { try { return new URLSearchParams(location.search).get('theme'); } catch (_) { return null; } })();
+  if (qt === 'dark' || qt === 'light') applyTheme(qt);
+}
 const themeBtn = document.getElementById('theme-toggle');
 if (themeBtn) {
   themeBtn.innerHTML = themeToggleInner(currentTheme());
@@ -3965,6 +3986,13 @@ if (themeBtn) {
 }
 render();                        // 先用本机缓存渲染（离线也能用）
 updateCloudBadges();
+// 初始化标签高亮（配合 ?view= 直达参数），并把激活标签滚动进视野
+document.querySelectorAll('.tab').forEach(t =>
+  t.classList.toggle('active', t.dataset.view === currentView));
+centerActiveTab();
+// 字体/资源加载后标签宽度会变，需补居中，否则激活标签仍可能露不出来
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => centerActiveTab());
+window.addEventListener('load', () => centerActiveTab());
 
 // 启动后台任务：先与云端对账（取较新者）→ 刷新基金/股票估值 → 记录今日快照
 (async () => {

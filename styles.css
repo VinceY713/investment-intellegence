@@ -4,6 +4,7 @@
    ========================================================================= */
 
 :root, :root[data-theme="light"] {
+  --card-solid: #f7f8fc;   /* 玻璃卡片的不透明近似色，滚动阴影封面用 */
   --accent: #0a84ff;
   --accent-ink: #0060df;
   --green: #34c759;
@@ -51,6 +52,7 @@
 
 /* ---------- 黑夜模式 ---------- */
 :root[data-theme="dark"] {
+  --card-solid: #171a21;
   --accent: #0a84ff;
   --accent-ink: #64b4ff;
   --green: #30d158;
@@ -307,7 +309,18 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-sp
 tr.total-row td { font-weight: 700; border-top: 1.5px solid var(--line-strong); }
 tr.total-row td.num { white-space: normal; }   /* 合计行可在 token 间换行，不撑宽表格 */
 .nowrap { white-space: nowrap; }
-.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch;
+  /* 滚动阴影：哪侧还有内容哪侧显示渐影，给移动端"可以横滑"的视觉提示 */
+  background-image:
+    linear-gradient(to right, var(--card-solid), var(--card-solid)),
+    linear-gradient(to right, var(--card-solid), var(--card-solid)),
+    linear-gradient(to right, rgba(90, 90, 110, 0.30), rgba(90, 90, 110, 0)),
+    linear-gradient(to left, rgba(90, 90, 110, 0.30), rgba(90, 90, 110, 0));
+  background-position: left center, right center, left center, right center;
+  background-repeat: no-repeat;
+  background-size: 22px 100%, 22px 100%, 11px 100%, 11px 100%;
+  background-attachment: local, local, scroll, scroll;
+}
 
 /* ---------- Stats ---------- */
 .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
@@ -387,6 +400,7 @@ tr.total-row td.num { white-space: normal; }   /* 合计行可在 token 间换�
   display: inline-flex; align-items: center; gap: 4px;
   background: rgba(10, 132, 255, 0.12); color: var(--accent-ink);
   padding: 3px 9px; border-radius: 7px; font-size: 12px; font-weight: 600;
+  white-space: nowrap;   /* 窄表格里不再竖排断行 */
 }
 
 .section-divider { height: 1px; background: var(--line); margin: 20px 0; }
@@ -443,6 +457,13 @@ code.formula { background: rgba(10,132,255,0.10); padding: 2px 7px; border-radiu
   .topbar { padding: 14px 16px; }
   .tagline { display: none; }
   .row { flex-direction: column; gap: 10px; }
+  /* iOS Safari：输入框字号 <16px 聚焦时会自动放大页面，强制 16px 避免 */
+  input, select, textarea { font-size: 16px; }
+  /* 标签页/分段切换器：右缘渐隐，提示"后面还有内容，可以横滑" */
+  .tabs, .seg {
+    mask-image: linear-gradient(to right, #000 88%, rgba(0, 0, 0, 0.25));
+    -webkit-mask-image: linear-gradient(to right, #000 88%, rgba(0, 0, 0, 0.25));
+  }
 }
 @media (max-width: 460px) {
   .stat-grid { grid-template-columns: 1fr 1fr; }
