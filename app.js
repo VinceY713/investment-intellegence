@@ -4102,27 +4102,49 @@ async function fetchJin10(attrId) {
   if (!isFinite(v)) throw new Error('无值');
   return v;
 }
+// 通用取原始文本（诊断用）：返回 { ok, status, text }
+async function fetchRaw(url) {
+  const res = await fetch(url, { cache: 'no-store' });
+  let text = '';
+  try { text = await res.text(); } catch (e) { text = '(读取失败)'; }
+  return { ok: res.ok, status: res.status, text };
+}
 async function autoPullMacro() {
   const m = STATE.macro; m.market = m.market || {}; m.ind = m.ind || {};
-  const detail = []; let ok = 0, fail = 0;
+  const detail = []; const diag = []; let ok = 0, fail = 0;
+  const clip = s => String(s == null ? '' : s).replace(/\s+/g, ' ').slice(0, 120);
   // 市场温度（指数）
   await Promise.all(MACRO_MARKET.map(async it => {
     try { const q = await fetchIndexQuote(it); if (isFinite(q.price)) { m.market[it.key] = { price: q.price, changePct: q.changePct, date: todayStr() }; } } catch (e) { /* 保留旧值 */ }
   }));
-  // 宏观指标（逐项，失败不覆盖）
+  // 宏观指标（逐项，失败不覆盖）——每项都记录原始返回片段，便于精确校准
   for (const a of MACRO_AUTO) {
+    let v = null, url = '', raw = '';
     try {
-      let v = null;
-      if (a.kind === 'sina') { const f = await sinaFields(a.sym); v = parseFloat(f[a.field]); if (a.div) v = v / a.div; }
-      else if (a.kind === 'em') { const row = await fetchEmMacro(a.report, a.sort); for (const key of a.pick) { const x = parseFloat(row[key]); if (isFinite(x)) { v = x; break; } } }
-      else if (a.kind === 'emus') { v = await fetchEmUsMacro(a.ind); }
-      else if (a.kind === 'jin10') { v = await fetchJin10(a.attr); }
-      if (v != null && isFinite(v)) { m.ind[a.key] = { value: +v.toFixed(2), date: todayStr() }; ok++; detail.push(a.label + '✓'); }
-      else { fail++; detail.push(a.label + '✗'); }
-    } catch (e) { fail++; detail.push(a.label + '✗'); }
+      if (a.kind === 'sina') {
+        url = '/api/quote_sina?code=' + encodeURIComponent(a.sym);
+        const r = await fetchRaw(url); raw = 'HTTP' + r.status + ' ' + clip(r.text);
+        const mm = r.text.match(/"([^"]*)"/); const f = mm ? mm[1].split(',') : [];
+        v = parseFloat(f[a.field]); if (a.div && isFinite(v)) v = v / a.div;
+      } else if (a.kind === 'em') {
+        url = '/api/emmacro?reportName=' + a.report + '&columns=ALL&pageSize=1&sortColumns=' + a.sort + '&sortTypes=-1&source=WEB&client=WEB';
+        const r = await fetchRaw(url); raw = 'HTTP' + r.status + ' ' + clip(r.text);
+        try { const row = JSON.parse(r.text).result.data[0]; for (const key of a.pick) { const x = parseFloat(row[key]); if (isFinite(x)) { v = x; break; } } } catch (e) {}
+      } else if (a.kind === 'emus') {
+        url = '/api/emmacro?reportName=RPT_ECONOMICVALUE_USA&columns=ALL&pageSize=1&filter=' + encodeURIComponent('(INDICATOR_ID="' + a.ind + '")') + '&sortColumns=REPORT_DATE&sortTypes=-1&source=WEB&client=WEB';
+        const r = await fetchRaw(url); raw = 'HTTP' + r.status + ' ' + clip(r.text);
+        try { v = parseFloat(JSON.parse(r.text).result.data[0].VALUE); } catch (e) {}
+      } else if (a.kind === 'jin10') {
+        url = '/api/jin10?category=ec&attr_id=' + a.attr + '&max_date=&_=' + Date.now();
+        const r = await fetchRaw(url); raw = 'HTTP' + r.status + ' ' + clip(r.text);
+        try { v = parseFloat(JSON.parse(r.text).data.values[0][1]); } catch (e) {}
+      }
+    } catch (e) { raw = '异常:' + clip(e.message); }
+    if (v != null && isFinite(v)) { m.ind[a.key] = { value: +v.toFixed(2), date: todayStr() }; ok++; detail.push(a.label + '✓'); diag.push({ label: a.label, ok: true, raw: String(+v.toFixed(2)) }); }
+    else { fail++; detail.push(a.label + '✗'); diag.push({ label: a.label, ok: false, raw: raw || '无返回' }); }
   }
-  m.updatedAt = todayStr(); saveState();
-  return { ok, fail, detail };
+  m.updatedAt = todayStr(); m.lastPull = { date: todayStr(), diag }; saveState();
+  return { ok, fail, detail, diag };
 }
 
 // 确定性 regime 信号：读已填指标，输出对「你这种组合」的含义。无 AI、可复现、不臆造。
@@ -4224,6 +4246,18 @@ VIEWS.macro = function (app) {
       note.innerHTML = `${icon('warn')} 自动拉取失败：${escapeHtml(e.message)}——可继续手填`;
     } finally { btn.disabled = false; }
   };
+
+  // —— 自动拉取诊断（显示每项原始返回，便于精确校准失败的符号/参数）——
+  if (m.lastPull && Array.isArray(m.lastPull.diag) && m.lastPull.diag.length) {
+    const dcard = el(`<div class="card" style="margin-top:12px"><h3>${icon('search')} 自动拉取诊断（${escapeHtml(m.lastPull.date)}）</h3>
+      <p class="hint">失败项的<strong>原始返回</strong>列在这里。把这张表截图发我，我按真实返回一次改对符号/参数。</p></div>`);
+    const ds = el('<div class="table-scroll"></div>');
+    ds.appendChild(el(`<table><thead><tr><th>指标</th><th>结果</th><th>原始返回 / 值</th></tr></thead><tbody>${
+      m.lastPull.diag.map(d => `<tr><td style="white-space:nowrap">${escapeHtml(d.label)}</td><td>${d.ok ? '<span class="pill green">成功</span>' : '<span class="pill red">失败</span>'}</td><td style="font-size:11px;font-family:monospace;word-break:break-all">${escapeHtml(d.raw)}</td></tr>`).join('')
+    }</tbody></table>`));
+    dcard.appendChild(ds);
+    app.appendChild(dcard);
+  }
 
   // —— 手动关键指标 ——
   MACRO_GROUPS.forEach(grp => {
