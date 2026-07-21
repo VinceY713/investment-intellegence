@@ -35,6 +35,27 @@ const FACTORS = [
   '新能源车', '军工', '地产', '其它'
 ];
 
+// 按名称粗分类底层因子，避免用户手选默认「AI算力」而错标。命中即返回，否则「其它」。
+function guessFactor(name) {
+  const s = String(name || '');
+  const rules = [
+    [/银行/, '银行'],
+    [/黄金|金矿|金业|山东黄金|中金黄金|招金|赤峰|白银/, '黄金'],
+    [/半导体|芯片|集成电路|中芯|华虹|北方华创|光刻|存储|封测/, '半导体'],
+    [/机器人/, '机器人'],
+    [/新能源|锂电|锂矿|电池|宁德|比亚迪|整车|汽车|车/, '新能源车'],
+    [/医药|生物|制药|医疗|药业|创新药|疫苗|药明|恒瑞|百济|CXO/i, '创新药'],
+    [/白酒|茅台|五粮液|泸州|食品|饮料|乳业|伊利|蒙牛|家电|美的|格力|海尔|零售|免税|消费/, '消费'],
+    [/军工|航空|航天|兵器|船舶|国防|导弹/, '军工'],
+    [/地产|置业|万科|保利|招商蛇口|华润置地/, '地产'],
+    [/煤|石油|石化|油气|燃气|能源|矿业|有色|铜|铝|钢|稀土|化工|锌|铅|镍|电力|电网|水电|核电|风电|光伏/, '能源'],
+    [/算力|光模块|服务器|数据中心|CPO|GPU|人工智能|英伟达|NVDA/i, 'AI算力'],
+    [/软件|云计算|互联网|传媒|游戏|SaaS|应用|平台/i, 'AI应用'],
+  ];
+  for (const [re, f] of rules) if (re.test(s)) return f;
+  return '其它';
+}
+
 // 趋势状态
 const TRENDS = ['加速下跌', '下跌', '震荡', '向上', '加速上涨'];
 
@@ -1545,6 +1566,16 @@ VIEWS.positions = function (app) {
   ['#np-shares', '#np-price', '#np-cost'].forEach(s => $(s).addEventListener('input', () => { weightDirty = false; recalc(); }));
   $('#np-weight').addEventListener('input', () => { weightDirty = true; recalc(); });
 
+  // 因子：按名称自动识别，避免默认「AI算力」错标；用户手动改过则不再自动覆盖
+  let factorDirty = false;
+  const autoFactor = () => {
+    if (factorDirty) return;
+    const g = guessFactor($('#np-name').value);
+    if (g !== '其它') $('#np-factor').value = g;
+  };
+  $('#np-factor').addEventListener('change', () => { factorDirty = true; });
+  $('#np-name').addEventListener('input', autoFactor);
+
   // 「获取」：按代码拉取名称与最新价
   $('#np-fetch').onclick = async () => {
     const note = $('#np-code-note');
@@ -1554,6 +1585,7 @@ VIEWS.positions = function (app) {
       const q = await fetchQuote(code);
       if (!$('#np-name').value.trim()) $('#np-name').value = q.name;
       $('#np-price').value = q.price;
+      autoFactor();                        // 拉到名称后自动识别因子
       note.textContent = `✓ ${q.name}  现价 ${q.price}`; note.style.color = 'var(--green)';
       recalc();
     } catch (e) {
@@ -2471,8 +2503,14 @@ VIEWS.rules = function (app) {
     card.querySelector('#r-pnl').value = p.pnl;
     card.querySelector('#r-trend').value = p.trend;
     card.querySelector('#r-cur').value = p.weight;
-    card.querySelector('#r-factor').value = p.factor;
+    // 因子：尊重已标注的非默认因子；若是默认「AI算力」（很可能是没改的默认值）则按名称智能识别
+    card.querySelector('#r-factor').value = (p.factor && p.factor !== 'AI算力') ? p.factor : guessFactor(p.name);
   };
+  // 手动输入名称/代码时，按名称自动识别因子（减少手选错标）
+  card.querySelector('#r-name').addEventListener('input', (e) => {
+    const g = guessFactor(e.target.value);
+    if (g !== '其它') card.querySelector('#r-factor').value = g;
+  });
 
   // 加仓金额 → 自动算占比（金额优先，符合操作习惯）
   card.querySelector('#r-addamt').addEventListener('input', (e) => {
