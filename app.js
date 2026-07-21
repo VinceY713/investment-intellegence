@@ -4297,15 +4297,16 @@ VIEWS.macro = function (app) {
     } finally { btn.disabled = false; }
   };
 
-  // —— 自动拉取诊断（显示每项原始返回，便于精确校准失败的符号/参数）——
+  // —— 自动拉取诊断（默认折叠，省地方；失败项的原始返回便于校准）——
   if (m.lastPull && Array.isArray(m.lastPull.diag) && m.lastPull.diag.length) {
-    const dcard = el(`<div class="card" style="margin-top:12px"><h3>${icon('search')} 自动拉取诊断（${escapeHtml(m.lastPull.date)}）</h3>
-      <p class="hint">失败项的<strong>原始返回</strong>列在这里。把这张表截图发我，我按真实返回一次改对符号/参数。</p></div>`);
-    const ds = el('<div class="table-scroll"></div>');
-    ds.appendChild(el(`<table><thead><tr><th>指标</th><th>结果</th><th>原始返回 / 值</th></tr></thead><tbody>${
-      m.lastPull.diag.map(d => `<tr><td style="white-space:nowrap">${escapeHtml(d.label)}</td><td>${d.ok ? '<span class="pill green">成功</span>' : '<span class="pill red">失败</span>'}</td><td style="font-size:11px;font-family:monospace;word-break:break-all">${escapeHtml(d.raw)}</td></tr>`).join('')
-    }</tbody></table>`));
-    dcard.appendChild(ds);
+    const okN = m.lastPull.diag.filter(d => d.ok).length, failN = m.lastPull.diag.length - okN;
+    const rows = m.lastPull.diag.map(d => `<tr><td style="white-space:nowrap">${escapeHtml(d.label)}</td><td>${d.ok ? '<span class="pill green">成功</span>' : '<span class="pill red">失败</span>'}</td><td style="font-size:11px;font-family:monospace;word-break:break-all">${escapeHtml(d.raw)}</td></tr>`).join('');
+    const dcard = el(`<div class="card" style="margin-top:12px;padding:10px 16px">
+      <details${failN ? '' : ''}>
+        <summary style="cursor:pointer;font-weight:600;list-style:revert">${icon('search')} 自动拉取诊断（${escapeHtml(m.lastPull.date)} · 成功 ${okN} / 失败 ${failN}）<span style="color:var(--muted);font-weight:400;font-size:12px"> — 点击展开</span></summary>
+        <p class="hint" style="margin-top:8px">失败项的<strong>原始返回</strong>在这里；把它截图发我可精确校准符号/参数。</p>
+        <div class="table-scroll"><table><thead><tr><th>指标</th><th>结果</th><th>原始返回 / 值</th></tr></thead><tbody>${rows}</tbody></table></div>
+      </details></div>`);
     app.appendChild(dcard);
   }
 
