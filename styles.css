@@ -364,6 +364,9 @@ tr.total-row td.num { white-space: normal; }   /* 合计行可在 token 间换�
 
 /* 分段控件（资产趋势粒度切换） */
 .card-head-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+/* 头行（含按钮/控件，比纯标题高）后紧跟说明文字时，抵消 .hint 的上提负边距，
+   否则说明首行会被头行控件压住（如「全部持仓」的一键刷新估值按钮） */
+.card-head-row + .hint { margin-top: 12px; }
 .seg { display: inline-flex; flex: 0 0 auto; background: var(--surface-soft); border: 1px solid var(--line); border-radius: 999px; padding: 3px; gap: 2px; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
 .seg::-webkit-scrollbar { display: none; }
 .seg-btn {
