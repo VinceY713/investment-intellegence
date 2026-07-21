@@ -4055,19 +4055,21 @@ async function fetchIndexQuote(item) {
    ------------------------------------------------------------------------- */
 // 每个指标配多个候选源，逐个尝试直到取到有效值（新浪被封→自动切腾讯/东财/金十）。
 // 源类型：sina(新浪 list=,逗号) / thf(腾讯 hf_外盘或us美股) / em(东财中国宏观) / emus(东财美国) / jin10(金十)
+// range=[min,max] 合理区间：取到但超区间→判为无效(避免"假成功"，如美元指数取到 3554)，
+// 并在诊断里附上原始返回，便于校准取值位置。
 const MACRO_AUTO = [
-  { key: 'dxy',    label: '美元指数',   sources: [ { kind: 'thf', sym: 'hf_ZSD', field: 0 }, { kind: 'sina', sym: 'DINIW', field: 1 } ] },
-  { key: 'vix',    label: 'VIX',        sources: [ { kind: 'thf', sym: 'usVIX', field: 3 }, { kind: 'sina', sym: 'gb_$vix', field: 1 } ] },
-  { key: 'ust10',  label: '美债10Y',    sources: [ { kind: 'thf', sym: 'usUS10Y', field: 3 }, { kind: 'sina', sym: 'gb_$tnx', field: 1, div: 10 } ] },
-  { key: 'cnCPI',  label: '中国CPI',    sources: [ { kind: 'em', report: 'RPT_ECONOMY_CPI', sort: 'REPORT_DATE', pick: ['NATIONAL_SAME'] } ] },
-  { key: 'cnPMI',  label: '中国PMI',    sources: [ { kind: 'em', report: 'RPT_ECONOMY_PMI', sort: 'REPORT_DATE', pick: ['MAKE_INDEX'] } ] },
-  { key: 'cnLPR1', label: 'LPR 1年',    sources: [ { kind: 'em', report: 'RPTA_WEB_RATE', sort: 'TRADE_DATE', pick: ['LPR1Y', 'LPR_1Y', 'LPR1', 'LPR_1'] } ] },
-  { key: 'cnLPR5', label: 'LPR 5年',    sources: [ { kind: 'em', report: 'RPTA_WEB_RATE', sort: 'TRADE_DATE', pick: ['LPR5Y', 'LPR_5Y', 'LPR5', 'LPR_5'] } ] },
-  { key: 'usCPI',   label: '美国CPI',   sources: [ { kind: 'emus', ind: 'EMG00000733' } ] },
-  { key: 'fedUpper',label: '美联储利率',sources: [ { kind: 'jin10', attr: 24 } ] },
-  { key: 'usUnemp', label: '美国失业率',sources: [ { kind: 'jin10', attr: 47 } ] },
-  { key: 'usPCE',   label: '美国核心PCE',sources:[ { kind: 'jin10', attr: 80 } ] },
-  { key: 'usPMI',   label: '美国PMI',   sources: [ { kind: 'jin10', attr: 28 } ] },
+  { key: 'dxy',    label: '美元指数',   range: [70, 130], sources: [ { kind: 'thf', sym: 'hf_ZSD', field: 0 }, { kind: 'thf', sym: 'hf_USDX', field: 0 }, { kind: 'sina', sym: 'DINIW', field: 1 } ] },
+  { key: 'vix',    label: 'VIX',        range: [5, 95],   sources: [ { kind: 'thf', sym: 'usVIX', field: 3 }, { kind: 'sina', sym: 'gb_$vix', field: 1 } ] },
+  { key: 'ust10',  label: '美债10Y',    range: [0, 12],   sources: [ { kind: 'thf', sym: 'usTNX', field: 3 }, { kind: 'thf', sym: 'hf_TNX' }, { kind: 'sina', sym: 'gb_$tnx', field: 1, div: 10 } ] },
+  { key: 'cnCPI',  label: '中国CPI',    range: [-6, 20],  sources: [ { kind: 'em', report: 'RPT_ECONOMY_CPI', sort: 'REPORT_DATE', pick: ['NATIONAL_SAME'] } ] },
+  { key: 'cnPMI',  label: '中国PMI',    range: [20, 80],  sources: [ { kind: 'em', report: 'RPT_ECONOMY_PMI', sort: 'REPORT_DATE', pick: ['MAKE_INDEX'] } ] },
+  { key: 'cnLPR1', label: 'LPR 1年',    range: [0, 15],   sources: [ { kind: 'em', report: 'RPTA_WEB_RATE', sort: 'TRADE_DATE', pick: ['LPR1Y', 'LPR_1Y', 'LPR1', 'LPR_1'] } ] },
+  { key: 'cnLPR5', label: 'LPR 5年',    range: [0, 15],   sources: [ { kind: 'em', report: 'RPTA_WEB_RATE', sort: 'TRADE_DATE', pick: ['LPR5Y', 'LPR_5Y', 'LPR5', 'LPR_5'] } ] },
+  { key: 'usCPI',   label: '美国CPI',   range: [-6, 20],  sources: [ { kind: 'emus', ind: 'EMG00000733' } ] },
+  { key: 'fedUpper',label: '美联储利率',range: [0, 15],   sources: [ { kind: 'jin10', attr: 24 } ] },
+  { key: 'usUnemp', label: '美国失业率',range: [0, 30],   sources: [ { kind: 'jin10', attr: 47 } ] },
+  { key: 'usPCE',   label: '美国核心PCE',range:[-6, 20],  sources:[ { kind: 'jin10', attr: 80 } ] },
+  { key: 'usPMI',   label: '美国PMI',   range: [20, 80], sources: [ { kind: 'jin10', attr: 28 } ] },
 ];
 // 通用取原始文本（诊断用）
 async function fetchRaw(url) {
@@ -4098,10 +4100,12 @@ async function fetchMacroSource(src) {
       return { value: v, raw: 'em/' + src.report + ' HTTP' + r.status + ' ' + macroClip(r.text) };
     }
     if (src.kind === 'emus') {
-      const r = await fetchRaw('/api/emmacro?reportName=RPT_ECONOMICVALUE_USA&columns=ALL&pageSize=1&filter=' + encodeURIComponent('(INDICATOR_ID="' + src.ind + '")') + '&sortColumns=REPORT_DATE&sortTypes=-1&source=WEB&client=WEB');
+      // 多取几行：最新月常「已统计未发布」(VALUE=null)，取最近一个有值的 VALUE；都无则用最新行的前值 PRE_VALUE
+      const r = await fetchRaw('/api/emmacro?reportName=RPT_ECONOMICVALUE_USA&columns=ALL&pageSize=8&filter=' + encodeURIComponent('(INDICATOR_ID="' + src.ind + '")') + '&sortColumns=REPORT_DATE&sortTypes=-1&source=WEB&client=WEB');
       let v = null; try {
         const rows = JSON.parse(r.text).result.data;
-        for (const row of rows) { let x = parseFloat(row.VALUE); if (!isFinite(x)) for (const k of Object.keys(row)) { if (/VALUE/i.test(k) && !/PRE|PREV|LAST|BEFORE/i.test(k)) { const y = parseFloat(row[k]); if (isFinite(y)) { x = y; break; } } } if (isFinite(x)) { v = x; break; } }
+        for (const row of rows) { const x = parseFloat(row.VALUE); if (isFinite(x)) { v = x; break; } }
+        if (v == null && rows[0]) { const pv = parseFloat(rows[0].PRE_VALUE); if (isFinite(pv)) v = pv; }
       } catch (e) {}
       return { value: v, raw: 'emus/' + src.ind + ' HTTP' + r.status + ' ' + macroClip(r.text) };
     }
@@ -4125,10 +4129,14 @@ async function autoPullMacro() {
   }));
   for (const a of MACRO_AUTO) {
     let v = null; const attempts = [];
-    for (const src of a.sources) {                 // 逐个候选源尝试，取到就停
+    for (const src of a.sources) {                 // 逐个候选源尝试，取到且在合理区间就停
       const res = await fetchMacroSource(src);
-      attempts.push(res.raw);
-      if (res.value != null && isFinite(res.value)) { v = res.value; break; }
+      let note = res.raw;
+      if (res.value != null && isFinite(res.value)) {
+        if (!a.range || (res.value >= a.range[0] && res.value <= a.range[1])) { attempts.push(note); v = res.value; break; }
+        note += ' ⚠取到 ' + res.value + ' 超出合理区间[' + a.range + ']，判无效';   // 假成功→暴露原始返回
+      }
+      attempts.push(note);
     }
     if (v != null && isFinite(v)) { m.ind[a.key] = { value: +v.toFixed(2), date: todayStr() }; ok++; detail.push(a.label + '✓'); diag.push({ label: a.label, ok: true, raw: String(+v.toFixed(2)) }); }
     else { fail++; detail.push(a.label + '✗'); diag.push({ label: a.label, ok: false, raw: attempts.join('  ‖  ') }); }
