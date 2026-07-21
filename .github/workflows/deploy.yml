@@ -199,6 +199,30 @@ jobs:
                     add_header Cache-Control "no-store";
                 }
 
+                # 金十数据代理：/api/jin10?category=ec&attr_id=24 → 美国宏观(失业/联邦利率/核心PCE/PMI 等)
+                # 需注入 x-app-id/x-version 头（金十前端公开常量，akshare 同款）；HTTP/1.1
+                location = /api/jin10 {
+                    proxy_pass https://datacenter-api.jin10.com/reports/list_v2$is_args$args;
+                    proxy_http_version 1.1;
+                    proxy_set_header Connection "";
+                    proxy_set_header Host datacenter-api.jin10.com;
+                    proxy_set_header Referer https://datacenter.jin10.com/;
+                    proxy_set_header Origin https://datacenter.jin10.com;
+                    proxy_set_header User-Agent "Mozilla/5.0";
+                    proxy_set_header Accept "*/*";
+                    proxy_set_header x-app-id "rU6QIu7JHe2gOUeR";
+                    proxy_set_header x-version "1.0.0";
+                    proxy_set_header x-csrf-token "x-csrf-token";
+                    proxy_ssl_server_name on;
+                    proxy_ssl_name datacenter-api.jin10.com;
+                    proxy_ssl_protocols TLSv1.2 TLSv1.3;
+                    resolver 119.29.29.29 223.5.5.5 valid=300s;
+                    resolver_timeout 5s;
+                    proxy_connect_timeout 10s;
+                    proxy_read_timeout 15s;
+                    add_header Cache-Control "no-store";
+                }
+
                 # 黄金代理：/api/gold → 腾讯伦敦金 hf_XAU（美元/盎司，与股票同源、HTTP/1.1 稳），前端 ×汇率÷31.1 折人民币/克
                 # （东方财富 push2 只认 HTTP/2，nginx 无法代理，故用腾讯源）
                 location = /api/gold {

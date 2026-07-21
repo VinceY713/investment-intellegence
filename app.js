@@ -4058,6 +4058,12 @@ const MACRO_AUTO = [
   { key: 'cnPMI',  label: '中国PMI',    kind: 'em', report: 'RPT_ECONOMY_PMI', sort: 'REPORT_DATE', pick: ['MAKE_INDEX'] },
   { key: 'cnLPR1', label: 'LPR 1年',    kind: 'em', report: 'RPTA_WEB_RATE', sort: 'TRADE_DATE', pick: ['LPR1Y', 'LPR_1Y', 'LPR1', 'LPR_1'] },
   { key: 'cnLPR5', label: 'LPR 5年',    kind: 'em', report: 'RPTA_WEB_RATE', sort: 'TRADE_DATE', pick: ['LPR5Y', 'LPR_5Y', 'LPR5', 'LPR_5'] },
+  // 美国：CPI年率走东财(已验证 INDICATOR_ID)；失业/联邦利率/核心PCE/PMI 走金十(akshare 同款 attr_id)
+  { key: 'usCPI',   label: '美国CPI',   kind: 'emus',  ind: 'EMG00000733' },
+  { key: 'fedUpper',label: '美联储利率',kind: 'jin10', attr: 24 },
+  { key: 'usUnemp', label: '美国失业率',kind: 'jin10', attr: 47 },
+  { key: 'usPCE',   label: '美国核心PCE',kind:'jin10', attr: 80 },
+  { key: 'usPMI',   label: '美国PMI',   kind: 'jin10', attr: 28 },
 ];
 async function fetchEmMacro(report, sort) {
   const url = '/api/emmacro?reportName=' + encodeURIComponent(report) +
@@ -4069,6 +4075,32 @@ async function fetchEmMacro(report, sort) {
   const data = j && j.result && j.result.data;
   if (!Array.isArray(data) || !data.length) throw new Error('无数据');
   return data[0];
+}
+// 美国经济数据（东财 RPT_ECONOMICVALUE_USA，按 INDICATOR_ID 过滤，取 VALUE=今值）
+async function fetchEmUsMacro(indicatorId) {
+  const url = '/api/emmacro?reportName=RPT_ECONOMICVALUE_USA&columns=ALL&pageSize=1' +
+    '&filter=' + encodeURIComponent('(INDICATOR_ID="' + indicatorId + '")') +
+    '&sortColumns=REPORT_DATE&sortTypes=-1&source=WEB&client=WEB';
+  const res = await fetch(url, { cache: 'no-store' });
+  if (!res.ok) throw new Error('接口 ' + res.status);
+  const j = await res.json();
+  const data = j && j.result && j.result.data;
+  if (!Array.isArray(data) || !data.length) throw new Error('无数据');
+  const v = parseFloat(data[0].VALUE);
+  if (!isFinite(v)) throw new Error('无值');
+  return v;
+}
+// 金十数据（datacenter-api.jin10.com/reports/list_v2）data.values[0] = [日期,今值,预测,前值]，取今值[1]
+async function fetchJin10(attrId) {
+  const url = '/api/jin10?category=ec&attr_id=' + attrId + '&max_date=&_=' + Date.now();
+  const res = await fetch(url, { cache: 'no-store' });
+  if (!res.ok) throw new Error('接口 ' + res.status);
+  const j = await res.json();
+  const vals = j && j.data && j.data.values;
+  if (!Array.isArray(vals) || !vals.length) throw new Error('无数据');
+  const v = parseFloat(vals[0][1]);
+  if (!isFinite(v)) throw new Error('无值');
+  return v;
 }
 async function autoPullMacro() {
   const m = STATE.macro; m.market = m.market || {}; m.ind = m.ind || {};
@@ -4083,6 +4115,8 @@ async function autoPullMacro() {
       let v = null;
       if (a.kind === 'sina') { const f = await sinaFields(a.sym); v = parseFloat(f[a.field]); if (a.div) v = v / a.div; }
       else if (a.kind === 'em') { const row = await fetchEmMacro(a.report, a.sort); for (const key of a.pick) { const x = parseFloat(row[key]); if (isFinite(x)) { v = x; break; } } }
+      else if (a.kind === 'emus') { v = await fetchEmUsMacro(a.ind); }
+      else if (a.kind === 'jin10') { v = await fetchJin10(a.attr); }
       if (v != null && isFinite(v)) { m.ind[a.key] = { value: +v.toFixed(2), date: todayStr() }; ok++; detail.push(a.label + '✓'); }
       else { fail++; detail.push(a.label + '✗'); }
     } catch (e) { fail++; detail.push(a.label + '✗'); }
@@ -4215,7 +4249,7 @@ VIEWS.macro = function (app) {
   });
 
   app.appendChild(el(`<div class="card" style="margin-top:16px"><div class="alert blue"><span class="icon">${icon('info')}</span><div>
-    <strong>数据从哪来？</strong>市场行情/美元指数/VIX/美债走<strong>新浪</strong>、中国 CPI/PMI/LPR 走<strong>东方财富</strong>（均免 key、境内可达）——点「自动拉取宏观」一键填入。<strong>美国 CPI/失业率/联邦利率暂无可靠免 key 源，保持手填</strong>（每月更新一次即可，附了官方链接）。<br><strong>为什么不让 AI 自动"分析"宏观？</strong>因为模型没有实时数据、有训练截止，直接问它"当前美联储/CPI"会自信地编造过时或错误数字——对认真投资是负资产。所以这里是<strong>拉真实数据 → 工具按固定规则解读</strong>，透明可复现。<br><span style="color:var(--muted)">注：自动拉取的部分符号需真机核对，失败项会显示明细并保留手填；把失败项发我，我按你 ECS 的实际返回校准。</span></div></div></div>`));
+    <strong>数据从哪来？</strong>市场行情/美元指数/VIX/美债走<strong>新浪</strong>，中国 CPI/PMI/LPR 走<strong>东方财富</strong>，美国 CPI 走东财、美国失业率/联邦利率/核心PCE/PMI 走<strong>金十数据</strong>（均免 key、境内可达，akshare 同款）——点「自动拉取宏观」一键填入。<br><strong>为什么不让 AI 自动"分析"宏观？</strong>因为模型没有实时数据、有训练截止，直接问它"当前美联储/CPI"会自信地编造过时或错误数字——对认真投资是负资产。所以这里是<strong>拉真实数据 → 工具按固定规则解读</strong>，透明可复现。<br><span style="color:var(--muted)">注：自动拉取的部分符号需真机核对，失败项会显示明细并保留手填；把失败项发我，我按你 ECS 的实际返回校准。</span></div></div></div>`));
 };
 
 /* =========================================================================
