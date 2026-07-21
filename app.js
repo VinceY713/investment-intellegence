@@ -4302,7 +4302,7 @@ VIEWS.macro = function (app) {
     const dcard = el(`<div class="card" style="margin-top:12px"><h3>${icon('search')} 自动拉取诊断（${escapeHtml(m.lastPull.date)}）</h3>
       <p class="hint">失败项的<strong>原始返回</strong>列在这里。把这张表截图发我，我按真实返回一次改对符号/参数。</p></div>`);
     const ds = el('<div class="table-scroll"></div>');
-    ds.appendChild(el(`<table><thead><tr><th>指标</th><th>结果</th><th>原始返回 / 值</th></tr></thead><tbody>${
+    ds.appendChild(el(`<table class="stack-mobile"><thead><tr><th>指标</th><th>结果</th><th>原始返回 / 值</th></tr></thead><tbody>${
       m.lastPull.diag.map(d => `<tr><td style="white-space:nowrap">${escapeHtml(d.label)}</td><td>${d.ok ? '<span class="pill green">成功</span>' : '<span class="pill red">失败</span>'}</td><td style="font-size:11px;font-family:monospace;word-break:break-all">${escapeHtml(d.raw)}</td></tr>`).join('')
     }</tbody></table>`));
     dcard.appendChild(ds);
@@ -4322,7 +4322,7 @@ VIEWS.macro = function (app) {
         <td style="font-size:12px;line-height:1.5"><strong>含义</strong>：${escapeHtml(it.meaning)}<br><strong style="color:var(--accent-ink)">对你组合</strong>：${escapeHtml(it.impact)}<br><strong style="color:var(--amber-ink)">关注</strong>：${escapeHtml(it.watch)} · <a href="${it.src}" target="_blank" rel="noopener" style="color:var(--accent-ink)">官方来源↗</a></td>
       </tr>`;
     }).join('');
-    scroll.appendChild(el(`<table><thead><tr><th>指标</th><th class="num">当前值</th><th class="num">更新日期</th><th>说明 / 对你的影响 / 关注信号</th></tr></thead><tbody>${rows}</tbody></table>`));
+    scroll.appendChild(el(`<table class="stack-mobile"><thead><tr><th>指标</th><th class="num">当前值</th><th class="num">更新日期</th><th>说明 / 对你的影响 / 关注信号</th></tr></thead><tbody>${rows}</tbody></table>`));
     card.appendChild(scroll);
     app.appendChild(card);
     scroll.querySelectorAll('[data-mk]').forEach(inp => inp.onchange = () => {
