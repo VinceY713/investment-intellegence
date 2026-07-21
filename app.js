@@ -100,6 +100,14 @@ function roundLot(shares, code) {                               // 向下取整�
   const lot = lotSizeOf(code);
   return Math.max(0, Math.floor(num(shares) / lot) * lot);
 }
+// 人民币金额 → 标的计价货币金额（美股 ÷汇率），用于由 CNY 仓位金额算股数（美股股价是美元）
+function nativeAmt(valueCny, code) {
+  return isUsCode(code) ? num(valueCny) / currentFx() : num(valueCny);
+}
+// 由 CNY 仓位金额 + 单价（标的计价货币）算可下单股数：先折算币种，再除单价，再取整到手
+function sharesFromCny(valueCny, price, code) {
+  return price > 0 ? roundLot(nativeAmt(valueCny, code) / price, code) : 0;
+}
 
 /* -------------------------------------------------------------------------
    交易成本估算（粗略）：A股佣金 0.025%(最低5元) 双边 + 卖出印花税 0.05% + 过户费；
@@ -120,15 +128,24 @@ function tradeCost(code, amountCny, side /* 'buy'|'sell' */) {
 }
 
 /* -------------------------------------------------------------------------
-   类现金资产口径（现金蓄水池铁律用）：现金 + 定存 + 活钱理财 + 货币基金
-   —— 修复原来只认「人民币现金/香港账户现金」两类、漏算定存/理财/货基导致误拦加仓
+   类现金资产口径（现金蓄水池铁律用）：只算「回调时能立刻动用」的弹药——
+   现金 + 货币基金 + 可随时赎回的活钱理财；锁定的定存/封闭理财(如 2027 才可赎的 QDII)
+   不算，否则会高估可用现金、让现金铁律该拦时不拦。
    ------------------------------------------------------------------------- */
-const CASH_LIKE_CATEGORIES = ['人民币现金', '香港账户现金', '定期存款', '理财(QDII)'];
 function isCashLikeAsset(a) {
   if (!a) return false;
-  if (CASH_LIKE_CATEGORIES.includes(a.category)) return true;
-  // 名字里带「货币/现金/余额/活期/…宝」的基金也算类现金
-  return a.category === '基金' && /货币|现金|余额|活期|宝$/.test(a.name || '');
+  if (a.category === '人民币现金' || a.category === '香港账户现金') return true;
+  // 货币基金/余额宝类（名字匹配）—— 随时可赎
+  if (a.category === '基金' && /货币|现金|余额|活期|宝$/.test(a.name || '')) return true;
+  // 定存/理财：仅当明确「每日/随时可赎」才算弹药；带锁定期(如“370天/2027-可赎/封闭/持有期”)的不算。
+  // 注意不能只匹配「可赎」——锁定产品也写“2027-xx-xx可赎”。要求出现每日/天天/随时/活期/T+0 等日频词。
+  if (a.category === '定期存款' || a.category === '理财(QDII)') {
+    const txt = (a.name || '') + '｜' + (a.note || '');
+    const daily = /每日|天天|随时|活期|T\+0/i.test(txt);
+    const locked = /\d{2,4}\s*天|封闭|持有期|定开|\d{4}[-\/]\d{1,2}/.test(txt);   // 含期限/未来日期 → 锁定
+    return daily && !locked;
+  }
+  return false;
 }
 
 /* -------------------------------------------------------------------------
@@ -840,7 +857,10 @@ const Calc = {
     for (let i = 0; i < items.length; i++)
       for (let j = 0; j < items.length; j++)
         q += w[i] * w[j] * (i === j ? 1 : rho(items[i], items[j]));
-    return q > 0 ? Math.min(items.length, 1 / q) : items.length;
+    // q = wᵀρw（组合方差样式量）。q≤0 说明相关矩阵退化/非半正定（实测两两估计可能如此）——
+    // 此时绝不能报“满分散”，保守返回 1（视为完全集中）；正常时夹在 [1, n]。
+    if (!(q > 0)) return 1;
+    return Math.max(1, Math.min(items.length, 1 / q));
   },
 
   // 分散调整后的组合回撤估计：sqrt(ΣΣ wᵢwⱼ ρᵢⱼ ddᵢ ddⱼ)，dd=占比%×最大跌幅%。
@@ -1906,7 +1926,7 @@ VIEWS.kelly = function (app) {
         const diffMoney = total > 0 ? Math.abs(diff) / 100 * total : 0;
         sizing = `<div class="result-box"><div class="metric-row"><span class="k">${fracTxt} 凯利目标仓位（≤单股上限 ${s.singleCap}%）</span><span class="v" style="color:var(--accent-ink)">${capped.toFixed(1)}%${total > 0 ? '（约 ' + fmtMoney(capped / 100 * total) + '）' : ''}</span></div></div>`;
         if (ev < 0) advice = `<div class="alert red"><span class="icon">${icon('danger')}</span><div><strong>EV 为负（${ev.toFixed(1)}%）· 数学上不值得下注</strong><br>纪律做法：不加仓，考虑减仓或离场；当前占 ${cur.toFixed(1)}%。</div></div>`;
-        else if (f <= 0) advice = `<div class="alert amber"><span class="icon">${icon('warn')}</span><div><strong>赔率不足（满凯利 ≤ 0）</strong>：期望值虽非负，但赔率撑不起仓位，建议不参与或减仓。</div></div>`;
+        else if (f <= 0) advice = `<div class="alert amber"><span class="icon">${icon('warn')}</span><div><strong>期望值恰为零（EV=0）</strong>：凯利仓位为 0，数学上不值得下注，建议观望。</div></div>`;
         else if (diff > 0.5) advice = `<div class="alert green"><span class="icon">${icon('check')}</span><div><strong>目标 ${capped.toFixed(1)}% vs 当前 ${cur.toFixed(1)}% → 有 ${diff.toFixed(1)} 个百分点空间（约 ${fmtMoney(diffMoney)}）</strong><br>加仓前必须过「⑤ 铁律校验」。</div></div>`;
         else if (diff < -0.5) advice = `<div class="alert amber"><span class="icon">${icon('warn')}</span><div><strong>目标 ${capped.toFixed(1)}% vs 当前 ${cur.toFixed(1)}% → 超配 ${(-diff).toFixed(1)} 个百分点（约 ${fmtMoney(diffMoney)}）</strong><br>按凯利纪律应逐步减到目标附近，别一次性调仓。</div></div>`;
         else advice = `<div class="alert green"><span class="icon">${icon('check')}</span><div><strong>当前 ${cur.toFixed(1)}% ≈ 目标 ${capped.toFixed(1)}%，仓位基本合理</strong>，保持并按纪律跟踪即可。</div></div>`;
@@ -2026,6 +2046,7 @@ VIEWS.kelly = function (app) {
     const errs = [];
     if (up <= 0) errs.push('上涨空间需为正数');
     if (down <= 0) errs.push('下跌空间需为正数');
+    if (down > 0 && up > 0 && up / down > 15) errs.push('赔率 b = 上涨÷下跌 > 15，下跌空间相对过小、参数很可能失真（会把凯利算到几百上千%），请复核上涨/下跌空间');
     if (pPct <= 0 || pPct >= 100) errs.push('胜率需在 0–100 之间');
     if (bulls.length < 2) errs.push('看多理由至少 2 条');
     if (bears.length < 2) errs.push('看空理由至少 2 条');
@@ -2054,10 +2075,14 @@ VIEWS.kelly = function (app) {
       return;
     }
 
+    // 推荐档 = 分数凯利，但显示时封顶到单股上限（原来会把 125% 净值标成“默认执行值”）
+    const capFrac = s.singleCap / 100;
+    const recRaw = f * frac;
+    const recVal = Math.min(recRaw, capFrac);
     const tiers = [
       { label: '满凯利', val: f, rec: false },
       { label: '半凯利', val: f * 0.5, rec: false },
-      { label: fracTxt + ' 凯利', val: f * frac, rec: true },
+      { label: fracTxt + ' 凯利', val: recVal, rec: true, capped: recRaw > capFrac + 1e-9 },
     ];
 
     resBox.appendChild(el(`
@@ -2072,17 +2097,20 @@ VIEWS.kelly = function (app) {
     `));
 
     if (f <= 0) {
-      resBox.appendChild(el(`<div class="alert red"><span class="icon">${icon('danger')}</span><div>满凯利 f ≤ 0：期望值虽非负，但赔率不足以支撑下注，建议不参与或减仓。</div></div>`));
+      resBox.appendChild(el(`<div class="alert amber"><span class="icon">${icon('warn')}</span><div>期望值恰为零（EV=0），凯利仓位为 0——数学上不值得下注，建议观望。</div></div>`));
       return;
     }
 
     const tierEl = el('<div class="kelly-tiers"></div>');
     tiers.forEach(t => {
+      const theoretical = t.val > 1;   // 满/半凯利可能 >100% 净身家：显示为理论值、不可照做
       tierEl.appendChild(el(`
         <div class="tier ${t.rec?'recommended':''}">
           <div class="label">${t.label}</div>
-          <div class="val">${(t.val*100).toFixed(1)}%</div>
-          ${t.rec ? ('<div class="tag">' + icon('star') + ' 默认执行值</div>') : ''}
+          <div class="val">${theoretical ? (t.val*100).toFixed(0) + '%' : (t.val*100).toFixed(1) + '%'}</div>
+          ${t.rec
+            ? ('<div class="tag">' + icon('star') + (t.capped ? ' 封顶执行值(≤单股上限)' : ' 默认执行值') + '</div>')
+            : (theoretical ? '<div class="tag" style="color:var(--muted)">理论值·不可照做</div>' : '')}
         </div>`));
     });
     resBox.appendChild(tierEl);
@@ -2153,7 +2181,7 @@ VIEWS.drawdown = function (app) {
   const threshold = num(settingCard.querySelector('#dd-threshold').value, 15);
   const positions = STATE.positions;
   const used = positions.reduce((a, p) => a + Calc.drawdownContribution(num(p.weight), num(p.maxDrop)), 0);
-  const usedReal = Calc.corrDrawdown(positions);   // 分散调整后的现实下沿
+  const usedReal = Calc.corrDrawdown(positions, corrResolver(STATE.corrCache));   // 与首页一致：有实测相关则用实测
   const remaining = threshold - used;
 
   const budgetCard = el('<div class="card" style="margin-top:16px"><h3>组合风险预算</h3></div>');
@@ -2287,11 +2315,17 @@ function holdingRiskType(cand) {
 const ROLE_BAND = { core: [8, 30], theme: [3, 12] };
 
 // 下注/配置质量评分（0–100）：综合期望值、赔率、胜率，惩罚过度自信
+// 下注/配置质量评分（0–100）：连续、单调、在 EV=0 处不断裂，且用有界压缩避免高分段饱和。
+// 说明：原实现在 EV=0 处从 ~38 跳到 ~60（12–28 分断崖），且 ev×8 让好票几乎都顶到 95、
+// 高分段无分辨率——AI 的 5 档估计一旦在 EV=0 两侧摆动，评分就会剧烈跳变。这里改用 tanh 压缩。
 function betScore(ev, b, win) {
   if (!isFinite(ev)) return 50;
-  if (ev < 0) return Math.max(5, Math.round(38 + ev * 4));      // EV<0 → 40 以下
-  let s = 50 + ev * 8 + (b - 1.2) * 18 + (win - 45) * 0.6;
-  if (win > 60) s -= (win - 60) * 2;                            // 过度乐观降分
+  const bb = isFinite(b) ? Math.min(b, 5) : 1.5;               // 赔率封顶，避免极端 b 拉爆分数
+  const evTerm = 30 * Math.tanh(ev / 6);                       // EV：±∞→±30，EV=0→0（连续，无断裂）
+  const bTerm = 8 * Math.tanh((bb - 1.5) / 1.5);              // 赔率：中性 1.5
+  const winTerm = (Math.max(30, Math.min(70, win)) - 50) * 0.4;
+  let s = 50 + evTerm + bTerm + winTerm;
+  if (win > 60) s -= (win - 60) * 1.2;                         // 过度乐观降分
   return Math.max(5, Math.min(95, Math.round(s)));
 }
 
@@ -2405,7 +2439,7 @@ VIEWS.stoploss = function (app) {
     const r = Calc.fixedFractionalSize(total, risk, buy, stop);
     const capValue = total * (s.singleCap / 100);
     const overCap = r.positionValue > capValue;
-    const lotShares = roundLot(r.shares, code);
+    const lotShares = sharesFromCny(r.positionValue, buy, code);   // 仓位金额(¥)先折币种再÷单价（美股修正）
     box.appendChild(el(`
       <div class="result-box">
         <div class="metric-row"><span class="k">止损幅度 = (买入−止损)/买入</span><span class="v">${fmtPct(r.stopPct,2)}</span></div>
@@ -2529,7 +2563,7 @@ VIEWS.rules = function (app) {
       <tr><td>禁止下跌趋势加仓</td><td>趋势=下跌/加速下跌 + 加仓（接刀）</td></tr>
       <tr><td>单股仓位上限</td><td>加仓后 > 上限（默认 ${s.singleCap}%）</td></tr>
       <tr><td>正金字塔校验</td><td>高位加仓金额 ≥ 上次</td></tr>
-      <tr><td>因子集中度</td><td>加仓后某因子 > 60%</td></tr>
+      <tr><td>因子集中度</td><td>加仓后某因子 > 风险档上限（稳健50/均衡60/进取75，占弹性仓）</td></tr>
       <tr><td>现金蓄水池</td><td>加仓后真实现金（现金类资产−加仓金额）< ${s.cashFloor}% 总资产</td></tr>
       <tr><td>胜率诚实度</td><td>胜率 > 60% 无充分理由（在「① 凯利定注」中强制校验）</td></tr>
     </tbody></table></div></div>`);
@@ -2596,8 +2630,9 @@ VIEWS.rules = function (app) {
     // 铁律3 单股仓位上限（epsilon 容差，避免浮点误判"恰好等于上限"）
     const after = cur + add;
     if (after > s.singleCap + 1e-9) violations.push('单股仓位上限：加仓后占比 ' + fmtPct(after,1) + ' > 上限 ' + s.singleCap + '%，违反分散原则。');
-    // 铁律4 正金字塔校验
-    if (addAmt > 0 && lastAmt > 0 && addAmt >= lastAmt) violations.push('正金字塔校验：本次加仓金额 ' + fmtMoney(addAmt) + ' ≥ 上次 ' + fmtMoney(lastAmt) + '，高位应递减加仓，你正头重脚轻。');
+    // 铁律4 正金字塔校验（用等效加仓金额：没填金额、只填占比时，按占比×总资产折算，避免被绕过）
+    const effAddMoney = addAmt > 0 ? addAmt : (tot > 0 ? add / 100 * tot : 0);
+    if (effAddMoney > 0 && lastAmt > 0 && effAddMoney >= lastAmt) violations.push('正金字塔校验：本次加仓 ' + fmtMoney(effAddMoney) + ' ≥ 上次 ' + fmtMoney(lastAmt) + '，高位应递减加仓，你正头重脚轻。');
     // 铁律5 因子集中度（加仓后）
     {
       // 计算加仓后该因子占比
@@ -2610,7 +2645,9 @@ VIEWS.rules = function (app) {
       }
       const { factorWeights } = Calc.effectiveBets(posCopy);
       const fw = factorWeights[factor] || 0;
-      if (fw > 0.6) violations.push('因子集中度：加仓后因子「' + factor + '」占 ' + fmtPct(fw*100,0) + ' > 60%，该操作加重单一 beta 集中度。');
+      const lvl = EQUITY_RISK_LEVELS[s.equityRiskLevel] || EQUITY_RISK_LEVELS['进取'];
+      const factorCapPct = lvl.factor;   // 与「股票体检」一致的、随风险档变化的因子上限（稳健50/均衡60/进取75）
+      if (fw * 100 > factorCapPct + 1e-9) violations.push('因子集中度：加仓后因子「' + factor + '」占 ' + fmtPct(fw*100,0) + ' > ' + lvl.label + '档上限 ' + factorCapPct + '%，该操作加重单一 beta 集中度。');
     }
     // 铁律6 现金蓄水池——真实口径：现金类资产（含股票现金池）÷ 总资产，
     // 加仓后现金 = 当前现金 − 本次加仓金额。无资产明细时回退到「100−股票总仓位」推算口径。
@@ -2788,7 +2825,7 @@ VIEWS.planner = function (app) {
     let costSum = 0;
     const rows = prices.map((price, i) => {
       const amt = total * weights[i] / wsum;
-      const shares = roundLot(amt / price, pyCode);      // A股取整到手，美股到 1 股
+      const shares = sharesFromCny(amt, price, pyCode);  // 金额(¥)先折币种再÷单价；A股取整到手
       costSum += tradeCost(pyCode, shares * price, 'buy');
       return `<tr>
         <td>第 ${i+1} 批</td>
@@ -2941,7 +2978,7 @@ VIEWS.planner = function (app) {
       const reduceW = Math.max(0, w - targetW);
       const reduceValue = total > 0 ? reduceW / 100 * total : 0;
       const rdLot = lotSizeOf(p.code);
-      const reduceShares = price > 0 ? roundLot(reduceValue / price, p.code) : 0;
+      const reduceShares = sharesFromCny(reduceValue, price, p.code);   // 美股先 ÷汇率 再 ÷美元单价
 
       box.appendChild(el(`<div class="alert ${tone}" style="margin-top:14px"><span class="icon">${tone==='red'?icon('danger'):tone==='amber'?icon('warn'):icon('check')}</span><div>
         <strong>结论:${decision}</strong><br>${reason}</div></div>`));
@@ -2964,7 +3001,7 @@ VIEWS.planner = function (app) {
         // 逻辑破/破止损：分 3 批短窗口出，降低卖在最低点的择时风险，但不拖延
         const parts = [0.4, 0.3, 0.3];
         const rows = parts.map((f, i) => `<tr><td>第 ${i+1} 批（${i===0?'立即':'1–'+(i*2)+' 个交易日内'}）</td>
-          <td class="num">${fmtMoney(reduceValue*f)}</td><td class="num">${price>0?roundLot(reduceValue*f/price, p.code).toLocaleString():'—'}</td><td class="num">${fmtPct(f*100,0)}</td></tr>`).join('');
+          <td class="num">${fmtMoney(reduceValue*f)}</td><td class="num">${price>0?sharesFromCny(reduceValue*f, price, p.code).toLocaleString():'—'}</td><td class="num">${fmtPct(f*100,0)}</td></tr>`).join('');
         box.appendChild(el(`<div class="table-scroll" style="margin-top:12px"><table>
           <thead><tr><th>批次</th><th class="num">减仓金额</th><th class="num">股数</th><th class="num">占比</th></tr></thead>
           <tbody>${rows}<tr class="total-row"><td>合计</td><td class="num">${fmtMoney(reduceValue)}</td><td></td><td class="num">100%</td></tr></tbody></table></div>`));
@@ -2976,7 +3013,7 @@ VIEWS.planner = function (app) {
         const wts = [2, 3, 4]; const wsum = wts.reduce((a, b) => a + b, 0);
         const rows = levels.map((lv, i) => {
           const px = price * (1 + lv), amt = reduceValue * wts[i] / wsum;
-          return `<tr><td>第 ${i+1} 批</td><td class="num">${px>0?px.toFixed(px>=100?2:3):'—'}</td><td class="num">${fmtMoney(amt)}</td><td class="num">${px>0?roundLot(amt/px, p.code).toLocaleString():'—'}</td><td class="num">${fmtPct(wts[i]/wsum*100,0)}</td></tr>`;
+          return `<tr><td>第 ${i+1} 批</td><td class="num">${px>0?px.toFixed(px>=100?2:3):'—'}</td><td class="num">${fmtMoney(amt)}</td><td class="num">${px>0?sharesFromCny(amt, px, p.code).toLocaleString():'—'}</td><td class="num">${fmtPct(wts[i]/wsum*100,0)}</td></tr>`;
         }).join('');
         box.appendChild(el(`<div class="table-scroll" style="margin-top:12px"><table>
           <thead><tr><th>批次</th><th class="num">价位</th><th class="num">减仓金额</th><th class="num">股数</th><th class="num">占比</th></tr></thead>
