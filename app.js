@@ -1448,7 +1448,9 @@ VIEWS.positions = function (app) {
     } else {
       STATE.positions.push(pos);
     }
-    // 持仓若与「投资组合」某资产同代码，同步更新该资产（否则渲染时会被资产回填覆盖，编辑不生效）
+    // 持仓与「投资组合」同代码资产双向一致：
+    //  · 已存在该资产 → 同步更新（否则渲染时会被资产回填覆盖，编辑不生效）
+    //  · 新持仓且投资组合里没有 → 自动创建对应股票资产，出现在首页「投资组合」
     if (pos.code) {
       const fx = currentFx();
       const a = (STATE.assets || []).find(x => x.code === pos.code);
@@ -1459,6 +1461,23 @@ VIEWS.positions = function (app) {
         a.lastPx = px;
         if (cost > 0) a.pnl = Math.round(shares * (px - cost) * (a.currency === 'USD' ? fx : 1) * 100) / 100;
         a.cny = Math.round(assetCny(a, fx));
+      } else if (!a && !editId && shares > 0 && px > 0) {
+        const isUs = isUsCode(pos.code);
+        const na = {
+          id: uid(),
+          platform: isUs ? '美股券商' : '股票账户',
+          category: isUs ? '美股股票' : 'A股股票',
+          name: pos.name,
+          code: pos.code,
+          currency: isUs ? 'USD' : 'CNY',
+          shares,
+          lastPx: px,
+          amount: Math.round(shares * px * 100) / 100,
+          pnl: cost > 0 ? Math.round(shares * (px - cost) * (isUs ? fx : 1) * 100) / 100 : 0,
+          note: '由「持仓」录入自动创建，如为基金/其它可在此改类别',
+        };
+        na.cny = Math.round(assetCny(na, fx));
+        (STATE.assets = STATE.assets || []).push(na);
       }
     }
     // 持股数变动 → 现金自动结算：差额为正（净卖出）= 盈余计入现金池；
@@ -3680,6 +3699,36 @@ VIEWS.help = function (app) {
     <strong>免责声明</strong>：本工具仅做量化计算与纪律校验，不构成投资建议；AI 点评为模型生成，仅供参考。所有模型都依赖你的主观输入，输入不实则结论不实。最终决策与结果由你自己负责。</div></div></div>`));
 };
 
+// 历史数据补建：把「持仓」里有代码、有股数与现价、但「投资组合」里没有的标的，
+// 一次性补建成对应股票资产。幂等（已存在同代码资产则跳过），返回补建数量。
+function backfillPositionAssets() {
+  const fx = currentFx();
+  let created = 0;
+  (STATE.positions || []).forEach(p => {
+    const code = (p.code || '').trim();
+    if (!code) return;
+    if ((STATE.assets || []).some(a => a.code === code)) return;   // 组合里已有
+    const shares = num(p.shares), px = num(p.price), cost = num(p.cost);
+    if (!(shares > 0 && px > 0)) return;                            // 缺股数/现价无法估值
+    const isUs = isUsCode(code);
+    const na = {
+      id: uid(),
+      platform: isUs ? '美股券商' : '股票账户',
+      category: isUs ? '美股股票' : 'A股股票',
+      name: p.name, code,
+      currency: isUs ? 'USD' : 'CNY',
+      shares, lastPx: px,
+      amount: Math.round(shares * px * 100) / 100,
+      pnl: cost > 0 ? Math.round(shares * (px - cost) * (isUs ? fx : 1) * 100) / 100 : 0,
+      note: '由「持仓」历史数据自动补建，如为基金/其它可改类别',
+    };
+    na.cny = Math.round(assetCny(na, fx));
+    (STATE.assets = STATE.assets || []).push(na);
+    created++;
+  });
+  return created;
+}
+
 /* -------------------------------------------------------------------------
    启动
    ------------------------------------------------------------------------- */
@@ -3696,7 +3745,9 @@ updateCloudBadges();
 (async () => {
   const { changed } = await initCloudSync();       // 拉云端整份数据并对账
   if (changed) render();                           // 云端更新 → 重绘
+  const backfilled = backfillPositionAssets();     // 历史持仓补建为投资组合资产（幂等）
+  if (backfilled > 0) saveState();                 // 有补建 → 保存并回传云端
   const refreshed = await autoRefreshQuotes();     // 打开页面自动更新涨跌（15 分钟节流）
   recordDailySnapshot();                           // 记录/更新今日快照（saveState 会自动回传云端）
-  if (refreshed || changed) render();
+  if (refreshed || changed || backfilled > 0) render();
 })();
