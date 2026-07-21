@@ -45,6 +45,94 @@ const FACTOR_COLORS = [
 ];
 
 /* -------------------------------------------------------------------------
+   市场识别 & 交易制度参数（A股涨跌停 / T+1 / 手数 vs 美股）
+   —— 让止损、分批、股数取整按标的所属市场走不同规则
+   ------------------------------------------------------------------------- */
+function marketOf(code) {
+  const c = String(code || '').trim();
+  if (!c) return 'unknown';
+  if (/[A-Za-z]/.test(c)) return 'US';               // 含字母 → 美股
+  if (/^688/.test(c)) return 'A-STAR';               // 科创板 ±20%
+  if (/^(300|301)/.test(c)) return 'A-CHINEXT';      // 创业板 ±20%
+  if (/^(8|4)/.test(c) || /^920/.test(c)) return 'A-BJ'; // 北交所 ±30%
+  if (/^(5|1)/.test(c)) return 'A-ETF';              // 沪深 ETF/LOF/基金 ±10%
+  if (/^\d{6}$/.test(c)) return 'A-MAIN';            // 沪深主板 ±10%
+  return 'unknown';
+}
+const MARKET_LABEL = {
+  'A-MAIN': '沪深主板', 'A-STAR': '科创板', 'A-CHINEXT': '创业板',
+  'A-BJ': '北交所', 'A-ETF': '场内基金/ETF', 'US': '美股', 'unknown': '未识别',
+};
+// 单日涨跌停幅度（%）；美股/未知返回 null（无涨跌停，但有熔断/跳空）
+function dailyLimitPct(code) {
+  switch (marketOf(code)) {
+    case 'A-STAR': case 'A-CHINEXT': return 20;
+    case 'A-BJ': return 30;
+    case 'A-MAIN': case 'A-ETF': return 10;
+    default: return null;
+  }
+}
+function isAShare(code) { return String(marketOf(code)).startsWith('A'); }
+function isTPlus1(code) { return isAShare(code); }              // A股 T+1，当日买入不可卖
+function lotSizeOf(code) { return isAShare(code) ? 100 : 1; }  // A股 100 股/手，美股可 1 股
+function roundLot(shares, code) {                               // 向下取整到可下单手数
+  const lot = lotSizeOf(code);
+  return Math.max(0, Math.floor(num(shares) / lot) * lot);
+}
+
+/* -------------------------------------------------------------------------
+   交易成本估算（粗略）：A股佣金 0.025%(最低5元) 双边 + 卖出印花税 0.05% + 过户费；
+   美股按券商近零处理。用于分批/减仓给出净额提示，避免小额多批被手续费吃掉。
+   ------------------------------------------------------------------------- */
+function tradeCost(code, amountCny, side /* 'buy'|'sell' */) {
+  const amt = Math.abs(num(amountCny));
+  if (amt <= 0) return 0;
+  const m = marketOf(code);
+  if (m === 'US') return amt * 0.0003;                          // 多数美股券商零佣，给极小值兜底
+  if (String(m).startsWith('A')) {
+    const commission = Math.max(5, amt * 0.00025);              // 佣金 万2.5，最低 5 元
+    const stamp = side === 'sell' ? amt * 0.0005 : 0;           // 印花税仅卖出 0.05%
+    const transfer = amt * 0.00001;                             // 过户费 0.001%
+    return commission + stamp + transfer;
+  }
+  return 0;
+}
+
+/* -------------------------------------------------------------------------
+   类现金资产口径（现金蓄水池铁律用）：现金 + 定存 + 活钱理财 + 货币基金
+   —— 修复原来只认「人民币现金/香港账户现金」两类、漏算定存/理财/货基导致误拦加仓
+   ------------------------------------------------------------------------- */
+const CASH_LIKE_CATEGORIES = ['人民币现金', '香港账户现金', '定期存款', '理财(QDII)'];
+function isCashLikeAsset(a) {
+  if (!a) return false;
+  if (CASH_LIKE_CATEGORIES.includes(a.category)) return true;
+  // 名字里带「货币/现金/余额/活期/…宝」的基金也算类现金
+  return a.category === '基金' && /货币|现金|余额|活期|宝$/.test(a.name || '');
+}
+
+/* -------------------------------------------------------------------------
+   因子相关性先验矩阵（同涨同跌程度）—— 让「有效持仓数 / 回撤」看真实相关，
+   而非只看因子标签+权重（能戳破「多只不同标签、实则同一方向」的假分散）。
+   注：暂用领域先验（非历史回归）；数据层仅有实时价、无历史序列，后续可接入
+   日K历史升级为真实相关矩阵。黄金对权益取负（避险）。
+   ------------------------------------------------------------------------- */
+const FACTOR_GROUPS = {
+  'AI算力': '科技成长', 'AI电力': '科技成长', 'AI应用': '科技成长',
+  '半导体': '科技成长', '机器人': '科技成长', '新能源车': '科技成长',
+  '创新药': '医药消费', '消费': '医药消费',
+  '银行': '价值周期', '地产': '价值周期', '能源': '价值周期',
+  '军工': '主题', '其它': '其它', '黄金': '避险',
+};
+const GROUP_CORR = 0.72;   // 同一大组（如均属科技成长）默认相关
+const CROSS_CORR = 0.32;   // 跨组默认相关（A股系统性 beta 不低，同涨同跌常见）
+function factorCorr(a, b) {
+  if (a === b) return 1;
+  const ga = FACTOR_GROUPS[a] || '其它', gb = FACTOR_GROUPS[b] || '其它';
+  if (ga === '避险' || gb === '避险') return (ga === '避险' && gb === '避险') ? 1 : -0.05; // 黄金 vs 权益
+  return ga === gb ? GROUP_CORR : CROSS_CORR;
+}
+
+/* -------------------------------------------------------------------------
    AI 组合诊断（DeepSeek，经服务器 /api/ai-review 代理，密钥不出前端）
    ------------------------------------------------------------------------- */
 const AI_ENDPOINT = '/api/ai-review';
@@ -220,8 +308,12 @@ function previewSharesSettlement(oldShares, newShares, price, code) {
 // 现金类资产合计（铁律「现金蓄水池」的真实口径，含股票现金池）
 function cashAssetsCny() {
   const fx = currentFx();
-  return (STATE.assets || []).reduce((s, a) =>
-    s + (a.category === '人民币现金' || a.category === '香港账户现金' ? assetCny(a, fx) : 0), 0);
+  return (STATE.assets || []).reduce((s, a) => s + (isCashLikeAsset(a) ? assetCny(a, fx) : 0), 0);
+}
+// 美元敞口（人民币口径）：以美元计价的风险资产合计，含汇率风险。用于提示 FX 敞口。
+function usdExposureCny() {
+  const fx = currentFx();
+  return (STATE.assets || []).reduce((s, a) => s + (a.currency === 'USD' ? assetCny(a, fx) : 0), 0);
 }
 // 减仓记账：卖出金额写回数据——联动资产/股数自动减少，所得自动进股票现金池
 function applySellToPool(posId, amtCny) {
@@ -365,6 +457,7 @@ function buildEmptyState() {
     assets: [],
     portfolio: { totalAssets: 0, asOfDate: '', fxRate: FX_DEFAULT },
     snapshots: [],
+    forecasts: [],
   };
 }
 
@@ -375,6 +468,7 @@ function applyStateDefaults(s) {
   s.assets = s.assets || [];
   s.portfolio = Object.assign({ totalAssets: Math.round(SEED_TOTAL) }, s.portfolio || {});
   s.snapshots = s.snapshots || [];
+  s.forecasts = s.forecasts || [];
   return s;
 }
 
@@ -600,11 +694,20 @@ const Calc = {
     return upPct / downPct;
   },
 
-  // 凯利公式 f = (b×p − q) / b
+  // 凯利公式（二元赌注版）f = (b×p − q) / b —— 仅保留兼容，股票请用 kellyStock
   kelly(p, b) {
     if (!isFinite(b) || b <= 0) return 0;
     const q = 1 - p;
     return (b * p - q) / b;
+  },
+
+  // 凯利公式（股票/部分损失版）：上涨 u% / 下跌 d%（正百分数），输时只亏 d% 而非全损。
+  // f* = (p·u − q·d)/(u·d)，返回小数（占总资金比例）。可 >1，故必须配分数凯利 + 单股上限。
+  // 说明：原二元公式 (bp−q)/b 把「下跌」当成本金全损，对股票会系统性算错仓位——这里修正。
+  kellyStock(p, upPct, downPct) {
+    const u = upPct / 100, d = downPct / 100, q = 1 - p;
+    if (!(u > 0) || !(d > 0)) return 0;
+    return (p * u - q * d) / (u * d);
   },
 
   // 有效持仓数：按因子分组后 1 / Σ(因子权重²)（逆 HHI）
@@ -625,6 +728,32 @@ const Calc = {
       hhi += w * w;
     });
     return { effN: hhi > 0 ? 1 / hhi : 0, factorWeights, total, factorSum };
+  },
+
+  // 相关性调整后的有效持仓数：effN_ρ = 1 / (wᵀ ρ w)，w 归一化权重，ρ 因子相关矩阵。
+  // ρ=单位阵(彼此独立)时退化为 1/HHI；ρ 越接近全相关，effN 越小。
+  // 与「按标签的有效持仓数」的差距 = 隐藏集中度（多只不同标签、实则同涨同跌）。
+  corrEffectiveBets(positions) {
+    const items = positions.map(p => ({ f: p.factor || '其它', w: Number(p.weight) || 0 })).filter(x => x.w > 0);
+    const tot = items.reduce((s, x) => s + x.w, 0);
+    if (tot <= 0) return 0;
+    const w = items.map(x => x.w / tot);
+    let q = 0;
+    for (let i = 0; i < items.length; i++)
+      for (let j = 0; j < items.length; j++)
+        q += w[i] * w[j] * (i === j ? 1 : factorCorr(items[i].f, items[j].f));
+    return q > 0 ? Math.min(items.length, 1 / q) : items.length;
+  },
+
+  // 分散调整后的组合回撤估计：sqrt(ΣΣ wᵢwⱼ ρᵢⱼ ddᵢ ddⱼ)，dd=占比%×最大跌幅%。
+  // ρ=1(全相关，危机情形)时退化为线性求和 Σ dd（即最坏情形）；这里给出「现实」下沿。
+  corrDrawdown(positions) {
+    const items = positions.map(p => ({ f: p.factor || '其它', dd: (Number(p.weight) || 0) / 100 * (Number(p.maxDrop) || 0) })).filter(x => x.dd > 0);
+    let q = 0;
+    for (let i = 0; i < items.length; i++)
+      for (let j = 0; j < items.length; j++)
+        q += items[i].dd * items[j].dd * (i === j ? 1 : Math.max(0, factorCorr(items[i].f, items[j].f))); // 回撤同向，负相关按0(保守)
+    return Math.sqrt(Math.max(0, q));
   },
 
   // 最大回撤贡献 = 持仓占比 × 该股最大跌幅
@@ -743,11 +872,17 @@ VIEWS.dashboard = function (app) {
   const target = num(s.equityTargetPct, 20);
   const level = EQUITY_RISK_LEVELS[s.equityRiskLevel] || EQUITY_RISK_LEVELS['进取'];
   const { effN, factorWeights } = Calc.effectiveBets(positions);
+  const corrEffN = Calc.corrEffectiveBets(positions);   // 相关性调整后的有效持仓数（更真实）
   const nHoldings = positions.length;
 
-  // 弹性仓对全组合的预估最大回撤贡献（= Σ 占总资产权重 × 各股最大跌幅）——核心风险口径
+  // 弹性仓对全组合的预估最大回撤贡献：
+  //  · equityDD = Σ 占比×最大跌幅 = 全相关(危机)最坏情形（保守，用于守门）
+  //  · equityDDReal = 分散调整后的现实下沿（sqrt 二次型，因子相关）
   const equityDD = positions.reduce((a, p) => a + Calc.drawdownContribution(num(p.weight), num(p.maxDrop)), 0);
+  const equityDDReal = Calc.corrDrawdown(positions);
   const ddOk = equityDD <= s.maxDrawdown;
+  const usdExp = usdExposureCny();                        // 美元敞口（含汇率风险）
+  const totForFx = portfolioTotal();
 
   // 因子最大集中度（factorWeights 已是"占弹性仓"的比例）
   let maxFactor = null, maxFactorW = 0;
@@ -787,14 +922,16 @@ VIEWS.dashboard = function (app) {
       <div class="stat"><div class="label">${icon('coins')} 弹性仓占比</div>
         <div class="value" style="color:${sizeState[0]}">${fmtPct(equityPct,1)}</div>
         <div class="sub">目标 ${target}% · ${sizeState[1]}</div></div>
-      <div class="stat"><div class="label">${icon('target')} 有效持仓数</div>
-        <div class="value" style="color:${effN>=3?'var(--green-ink)':(effN>=2?'var(--amber-ink)':'var(--red-ink)')}">${effN?effN.toFixed(1):'—'}</div>
-        <div class="sub">名义 ${nHoldings} 只 · 实际独立赌注</div></div>
-      <div class="stat"><div class="label">${icon('trenddown')} 弹性仓回撤贡献</div>
+      <div class="stat"><div class="label">${icon('target')} 有效持仓数(相关性调整)</div>
+        <div class="value" style="color:${corrEffN>=3?'var(--green-ink)':(corrEffN>=2?'var(--amber-ink)':'var(--red-ink)')}">${corrEffN?corrEffN.toFixed(1):'—'}</div>
+        <div class="sub">名义 ${nHoldings} 只 · 标签口径 ${effN?effN.toFixed(1):'—'}</div></div>
+      <div class="stat"><div class="label">${icon('trenddown')} 弹性仓回撤(最坏/现实)</div>
         <div class="value" style="color:${ddOk?'var(--green-ink)':'var(--red-ink)'}">${fmtPct(equityDD,1)}</div>
-        <div class="sub">全组合可承受 ${s.maxDrawdown}% · ${ddOk?'可控':'超支'}</div></div>
+        <div class="sub">现实约 ${fmtPct(equityDDReal,1)} · 承受 ${s.maxDrawdown}%</div></div>
     </div>
   `));
+  if (usdExp > 0 && totForFx > 0) app.appendChild(el(`<div class="card"><div class="alert blue"><span class="icon">${icon('globe')}</span><div>
+    <strong>美元敞口 ${fmtPct(usdExp/totForFx*100,1)}（约 ${fmtMoney(usdExp)}）</strong>：这部分资产在人民币口径下同时承担<strong>标的波动 + 美元/人民币汇率</strong>双重风险。美股涨、美元跌时人民币收益会被汇率吃掉；汇率是独立风险因子，不应只看标的涨跌。当前中间价 ${currentFx()}。</div></div></div>`));
 
   // 核心解读：把"弹性仓风险"放到全组合语境
   app.appendChild(el(`<div class="card"><div class="alert ${ddOk?'blue':'red'}"><span class="icon">${ddOk?icon('info'):icon('danger')}</span><div>
@@ -808,7 +945,10 @@ VIEWS.dashboard = function (app) {
   if (!ddOk) checks.push(['red', `弹性仓回撤贡献 ${fmtPct(equityDD,1)} > 全组合承受 ${s.maxDrawdown}%——见「③ 回撤控制」降高波动持仓`]);
   if (!concentrationOk && maxFactor) checks.push(['red', `因子「${maxFactor}」占弹性仓 ${fmtPct(maxFactorW*100,0)} > ${level.label}档上限 ${level.factor}%——过度押单一 beta`]);
   overSingle.forEach(p => checks.push(['amber', `${escapeHtml(p.name||'未命名')} 占弹性仓 ${fmtPct(num(p.weight)/equityPct*100,0)} > ${level.label}档单股上限 ${level.single}%`]));
-  if (nHoldings >= 3 && effN > 0 && effN < nHoldings * 0.6) checks.push(['amber', `持 ${nHoldings} 只但有效持仓数仅 ${effN.toFixed(1)}——假分散(多只押同一方向)`]);
+  if (nHoldings >= 3 && corrEffN > 0 && corrEffN < nHoldings * 0.6) checks.push(['amber', `持 ${nHoldings} 只但相关性调整后有效持仓数仅 ${corrEffN.toFixed(1)}——假分散(多只押同一方向)`]);
+  // 隐藏集中度：标签口径显示分散、但按真实相关性缩水 —— 这才是 README 承诺的「戳破假分散」
+  if (nHoldings >= 3 && effN > 0 && corrEffN > 0 && (effN - corrEffN) >= 0.8)
+    checks.push(['amber', `隐藏集中度：按因子标签看有效持仓数 ${effN.toFixed(1)}，但按真实相关性只剩 ${corrEffN.toFixed(1)}——多只标签不同、实则同涨同跌，别被“看着分散”骗了`]);
   deep.forEach(p => checks.push(['amber', `${escapeHtml(p.name||'未命名')} 深套 ${fmtPct(num(p.pnl),1)}——请复核买入逻辑是否仍成立(见「⑤ 加减仓 → 减仓/退出」)，不是自动卖`]));
   if (equityPct < target * 0.7) checks.push(['blue', `弹性仓仅 ${fmtPct(equityPct,1)} < 目标 ${target}%——若想要更高收益弹性，可在纪律内逐步补到目标附近`]);
   if (checks.length === 0 && nHoldings > 0) checks.push(['green', '弹性引擎风险可控、分散达标，无需处理']);
@@ -1549,7 +1689,8 @@ VIEWS.kelly = function (app) {
       const prob = win / 100;
       const ev = Calc.ev(prob, up, down);
       const b = Calc.odds(up, down);
-      const f = Calc.kelly(prob, b);
+      const f = Calc.kellyStock(prob, up, down);            // 股票版凯利（部分损失，非全损）
+      const fLow = Calc.kellyStock(Math.max(0, prob - 0.1), up, down); // 胜率−10% 的敏感性
       const cur = num(p.weight);
       const total = portfolioTotal();
       const rtype = holdingRiskType(p);
@@ -1590,20 +1731,36 @@ VIEWS.kelly = function (app) {
       out.innerHTML = `
         <div class="result-box">
           <div class="metric-row"><span class="k">综合评分（越高越值得按纪律持有/下注）</span><span class="v" style="color:${scoreColor};font-size:20px">${score}<span style="font-size:13px;color:var(--muted)"> / 100</span></span></div>
-          <div class="metric-row"><span class="k">AI 保守胜率 p</span><span class="v">${win}%</span></div>
+          <div class="metric-row"><span class="k">AI 主观胜率 p<span style="color:var(--muted);font-size:11px"> · 估计值非事实</span></span><span class="v">${win}%</span></div>
           <div class="metric-row"><span class="k">上涨空间 / 下跌空间</span><span class="v">+${up.toFixed(0)}% / −${down.toFixed(0)}%</span></div>
           <div class="metric-row"><span class="k">期望值 EV</span><span class="v" style="color:${ev >= 0 ? 'var(--green-ink)' : 'var(--red-ink)'}">${ev >= 0 ? '+' : ''}${ev.toFixed(2)}%</span></div>
-          <div class="metric-row"><span class="k">净赔率 b · 满凯利 f</span><span class="v">${b.toFixed(2)} · ${(f * 100).toFixed(1)}%</span></div>
+          <div class="metric-row"><span class="k">净赔率 b · 满凯利 f（股票版）</span><span class="v">${b.toFixed(2)} · ${(f * 100).toFixed(1)}%</span></div>
+          <div class="metric-row"><span class="k">敏感性：胜率−10%(=${Math.max(0,win-10)}%) 时的满凯利</span><span class="v" style="color:var(--muted)">${(fLow * 100).toFixed(1)}%</span></div>
         </div>
         ${sizing}
         ${advice}
         ${caveat}
+        <div class="alert blue" style="margin-top:10px"><span class="icon">${icon('info')}</span><div><strong>凯利对胜率极敏感</strong>：胜率仅差 10 个点，满凯利从 ${(f*100).toFixed(0)}% 变成 ${(fLow*100).toFixed(0)}%。这就是为什么用<strong>${fracTxt}凯利 + 单股上限</strong>兜底——参数一定有误差，宁可小注。股票版凯利已修正原「二元赌注」把下跌当全损的错误。</div></div>
         <div class="grid grid-2" style="margin-top:12px">
           <div><div class="mini-label" style="color:var(--green-ink)">AI 看多理由</div>${bulls.map(t => `<p style="margin:4px 0;font-size:13px">· ${escapeHtml(t)}</p>`).join('') || '<p class="inline-note">无</p>'}</div>
           <div><div class="mini-label" style="color:var(--red-ink)">AI 看空理由</div>${bears.map(t => `<p style="margin:4px 0;font-size:13px">· ${escapeHtml(t)}</p>`).join('') || '<p class="inline-note">无</p>'}</div>
         </div>
         ${note ? `<p class="inline-note" style="margin-top:8px">${icon('sparkles')} AI 结论：${escapeHtml(note)}</p>` : ''}
+        <div class="row" style="margin-top:10px"><button class="btn secondary small" id="ka-record" style="flex:0 0 auto">${icon('clipboard')} 记录此判断到「复盘校准」</button></div>
         <p class="inline-note">${fromCache ? '本次会话已评估过该标的，复用一致结果（<a href="#" id="ka-recompute" style="color:var(--accent-ink)">重新评估</a>）。' : ''}参数已回填到下方计算器，可自行微调后重算。AI 生成内容仅供参考，不构成投资建议。</p>`;
+
+      // 记录预测：把「当下判断的胜率/空间」存进复盘校准，日后回填结果校准你的判断力
+      const recBtn = out.querySelector('#ka-record');
+      if (recBtn) recBtn.onclick = () => {
+        STATE.forecasts = STATE.forecasts || [];
+        STATE.forecasts.push({
+          id: uid(), date: todayStr(), name: p.name || '', code: p.code || '',
+          p: win, up, down, ev: +ev.toFixed(2), f: +(f * 100).toFixed(1),
+          source: 'AI', outcome: '', realizedPct: null,
+        });
+        saveState();
+        recBtn.outerHTML = `<span class="pill green">已记录 · 到「复盘校准」页回填结果</span>`;
+      };
 
       // “重新评估”：清掉该标的缓存后重跑（用于确需刷新 AI 观点时）
       const recompute = out.querySelector('#ka-recompute');
@@ -1679,7 +1836,8 @@ VIEWS.kelly = function (app) {
     const p = pPct / 100;
     const ev = Calc.ev(p, up, down);           // EV 前置闸门
     const b = Calc.odds(up, down);
-    const f = Calc.kelly(p, b);
+    const f = Calc.kellyStock(p, up, down);    // 股票版凯利（部分损失，修正原二元全损假设）
+    const fLow = Calc.kellyStock(Math.max(0, p - 0.1), up, down); // 胜率−10% 敏感性
 
     // EV 前置闸门：EV 为负直接淘汰，不进入凯利
     if (ev < 0) {
@@ -1706,8 +1864,10 @@ VIEWS.kelly = function (app) {
         <div class="metric-row"><span class="k">期望值 EV = p×涨幅 − q×跌幅</span><span class="v" style="color:var(--green)">+${ev.toFixed(2)}%</span></div>
         <div class="metric-row"><span class="k">净赔率 b = 涨幅 ÷ 跌幅</span><span class="v">${b.toFixed(2)}</span></div>
         <div class="metric-row"><span class="k">败率 q</span><span class="v">${((1-p)*100).toFixed(0)}%</span></div>
-        <div class="metric-row"><span class="k">满凯利 f = (b×p − q)/b</span><span class="v">${(f*100).toFixed(1)}%</span></div>
+        <div class="metric-row"><span class="k">满凯利 f = (p·u − q·d)/(u·d) · 股票版</span><span class="v">${(f*100).toFixed(1)}%</span></div>
+        <div class="metric-row"><span class="k">敏感性：胜率−10%(=${Math.max(0,pPct-10).toFixed(0)}%) 时满凯利</span><span class="v" style="color:var(--muted)">${(fLow*100).toFixed(1)}%</span></div>
       </div>
+      <p class="inline-note">股票版凯利：把「下跌空间」当作只亏 d%（而非本金全损），修正了原二元赌注公式对股票的系统性错算。满凯利常 >100%，务必用分数凯利 + 单股上限兜底。</p>
     `));
 
     if (f <= 0) {
@@ -1792,15 +1952,18 @@ VIEWS.drawdown = function (app) {
   const threshold = num(settingCard.querySelector('#dd-threshold').value, 15);
   const positions = STATE.positions;
   const used = positions.reduce((a, p) => a + Calc.drawdownContribution(num(p.weight), num(p.maxDrop)), 0);
+  const usedReal = Calc.corrDrawdown(positions);   // 分散调整后的现实下沿
   const remaining = threshold - used;
 
   const budgetCard = el('<div class="card" style="margin-top:16px"><h3>组合风险预算</h3></div>');
   const pct = Math.min(100, (used / threshold) * 100);
   budgetCard.appendChild(el(`
     <div class="metric-row"><span class="k">回撤阈值（预算总额）</span><span class="v">${fmtPct(threshold,1)}</span></div>
-    <div class="metric-row"><span class="k">已用（Σ 各股回撤贡献）</span><span class="v" style="color:${used>threshold?'var(--red)':'var(--green)'}">${fmtPct(used,2)}</span></div>
-    <div class="metric-row"><span class="k">剩余</span><span class="v" style="color:${remaining<0?'var(--red)':'inherit'}">${fmtPct(remaining,2)}</span></div>
+    <div class="metric-row"><span class="k">已用 · 最坏情形（全相关，Σ 各股回撤贡献）</span><span class="v" style="color:${used>threshold?'var(--red)':'var(--green)'}">${fmtPct(used,2)}</span></div>
+    <div class="metric-row"><span class="k">已用 · 现实下沿（分散调整，因子相关）</span><span class="v" style="color:var(--muted)">${fmtPct(usedReal,2)}</span></div>
+    <div class="metric-row"><span class="k">剩余（按最坏情形守门）</span><span class="v" style="color:${remaining<0?'var(--red)':'inherit'}">${fmtPct(remaining,2)}</span></div>
     <div class="progress" style="margin-top:12px"><div class="fill" style="width:${pct}%;background:${used>threshold?'var(--red)':(pct>80?'var(--amber)':'var(--green)')}"></div></div>
+    <p class="inline-note">两个口径：<strong>最坏情形</strong>假设所有持仓同时见底（危机里相关性→1，用于守门，偏保守）；<strong>现实下沿</strong>按因子相关性做二次型收敛（正常市况更接近真实）。守门用最坏情形，判断“是否真的危险”看两者区间。</p>
   `));
   if (used > threshold) {
     budgetCard.appendChild(el(`<div class="alert red" style="margin-top:12px"><span class="icon">${icon('danger')}</span><div>
@@ -2031,21 +2194,48 @@ VIEWS.stoploss = function (app) {
       box.appendChild(el(`<div class="alert red"><span class="icon">${icon('danger')}</span><div>止损价须为正且低于买入价（否则不构成止损）。</div></div>`));
       return;
     }
+    // 标的所属市场（从选中的持仓带出代码）→ 决定涨跌停/T+1/手数
+    const picked = pick ? holdings.find(x => x.key === pick.value) : null;
+    const code = picked ? (picked.code || '') : '';
+    const mkt = marketOf(code);
+    const limit = dailyLimitPct(code);      // A股单日涨跌停幅度；美股为 null
+    const lot = lotSizeOf(code);
+
     const r = Calc.fixedFractionalSize(total, risk, buy, stop);
     const capValue = total * (s.singleCap / 100);
     const overCap = r.positionValue > capValue;
+    const lotShares = roundLot(r.shares, code);
     box.appendChild(el(`
       <div class="result-box">
         <div class="metric-row"><span class="k">止损幅度 = (买入−止损)/买入</span><span class="v">${fmtPct(r.stopPct,2)}</span></div>
         <div class="metric-row"><span class="k">单笔风险金额 = 总资产×${risk}%</span><span class="v">${fmtMoney(r.riskAmount)}</span></div>
         <div class="metric-row"><span class="k">最大可买仓位金额</span><span class="v" style="color:var(--accent)">${fmtMoney(r.positionValue)}</span></div>
-        <div class="metric-row"><span class="k">对应股数（约）</span><span class="v">${Math.floor(r.shares).toLocaleString()}</span></div>
+        <div class="metric-row"><span class="k">对应股数（${lot > 1 ? '整手 ' + lot + ' 股/手' : '可买 1 股'}）</span><span class="v">${lotShares.toLocaleString()}${lot > 1 ? '（' + (lotShares / lot) + ' 手）' : ''}</span></div>
         <div class="metric-row"><span class="k">占总资产</span><span class="v">${fmtPct(r.positionValue/total*100,1)}</span></div>
       </div>
       <div class="alert blue"><span class="icon">${icon('pin')}</span><div>
-        若买入 ${fmtMoney(r.positionValue)} 并在 ${buy} 触及止损价 ${stop} 时离场，亏损恰为总资产的 ${risk}%（${fmtMoney(r.riskAmount)}）。
+        若买入 ${fmtMoney(r.positionValue)} 并在 ${buy} <strong>能够按 ${stop} 成交</strong>离场，亏损约为总资产的 ${risk}%（${fmtMoney(r.riskAmount)}）。
       </div></div>
     `));
+
+    // A股：止损可能因涨跌停/T+1/一字板无法成交 —— 用「跳空最坏情形」再给一个更保守的仓位上限
+    if (limit != null) {
+      const stopPct = r.stopPct;                        // 名义止损幅度%
+      // 若名义止损 < 单日跌停幅度，跌停当天根本到不了止损价；一字跌停还卖不出，可能连续多日
+      const gapUnexecutable = stopPct < limit;
+      const worstDropPct = Math.max(stopPct, limit);    // 最坏至少吃一个跌停
+      const gapPos = Calc.fixedFractionalSize(total, risk, 100, 100 * (1 - worstDropPct / 100));
+      box.appendChild(el(`<div class="alert amber"><span class="icon">${icon('warn')}</span><div>
+        <strong>${MARKET_LABEL[mkt]}·涨跌停 ±${limit}%·T+1</strong>：${gapUnexecutable
+          ? `你的止损幅度 ${fmtPct(stopPct,1)} <strong>小于单日跌停 ${limit}%</strong>——跌停当天价格<strong>到不了</strong>止损价，只能靠隔日跳空砸下去；若<strong>一字跌停</strong>更是<strong>卖不出</strong>，可能连续多日。`
+          : `即使止损幅度 ${fmtPct(stopPct,1)} ≥ 单日跌停，一字板仍可能<strong>无法成交</strong>。`}
+        当日买入受 <strong>T+1</strong> 限制当天不可卖。<br>
+        <strong>按「至少吃一个跌停(−${limit}%)」的最坏情形反推，同样 ${risk}% 风险预算下仓位应压到约 ${fmtMoney(gapPos.positionValue)}（占 ${fmtPct(gapPos.positionValue/total*100,1)}）。</strong>该止损为参考，不保证成交。</div></div>`));
+    } else if (mkt === 'US') {
+      box.appendChild(el(`<div class="alert amber"><span class="icon">${icon('warn')}</span><div>
+        <strong>美股·无涨跌停</strong>：止损通常能成交，但<strong>隔夜跳空 / 熔断（−7/−13/−20%）</strong>会击穿止损、以更差价格成交（滑价）。财报/突发事件前后尤甚，实际亏损可能大于 ${risk}%。</div></div>`));
+    }
+
     if (overCap) {
       box.appendChild(el(`<div class="alert amber"><span class="icon">${icon('warn')}</span><div>
         该仓位金额 ${fmtMoney(r.positionValue)} 占 ${fmtPct(r.positionValue/total*100,1)}，超过单股上限 ${s.singleCap}%（${fmtMoney(capValue)}）。建议以单股上限为准，或收紧止损。
@@ -2181,7 +2371,14 @@ VIEWS.rules = function (app) {
     const downtrend = (trend === '下跌' || trend === '加速下跌');
     if (pnl < 0) {
       if (pnl <= -DEEP_LOSS) {
-        violations.push('深套加仓（浮亏 ' + fmtPct(pnl,1) + '，已超 ' + DEEP_LOSS + '%）：这是“套牢摊平”死亡螺旋的典型入口。除非同时满足 ① 原始买入逻辑经复核仍成立（不是“跌了更便宜”）② 这是计划内的最后一批 ③ 加仓后总仓位仍在回撤预算与单股上限内，否则不应加仓。');
+        // 价值型分批的例外：预先声明的计划内分批 + 非下跌趋势 → 降级为强提醒而非硬拦
+        // （价值投资里，逻辑未破时更低价是更好的价格；但必须是预设的、带总仓位上限与证伪止损的计划，
+        //   而不是套牢后临时“摊平回本”。下跌趋势仍由铁律2硬拦。）
+        if (planned && !downtrend) {
+          softWarnings.push('深套 ' + fmtPct(pnl,1) + ' 但你声明这是<strong>计划内价值分批</strong>：仅在满足 ① 买入逻辑经复核仍成立（非“跌了更便宜”）② 这是预设的最后几批、有总仓位上限 ③ 设了硬性证伪止损 时才继续。若其一不满足，请当作套牢摊平处理、不要加。');
+        } else {
+          violations.push('深套加仓（浮亏 ' + fmtPct(pnl,1) + '，已超 ' + DEEP_LOSS + '%）：这是“套牢摊平”死亡螺旋的典型入口。除非同时满足 ① 原始买入逻辑经复核仍成立（不是“跌了更便宜”）② 这是计划内的最后一批 ③ 加仓后总仓位仍在回撤预算与单股上限内，否则不应加仓。（如确为预先声明的价值分批，请勾选“计划内分批”并确保趋势非下跌。）');
+        }
       } else if (!downtrend && !planned) {
         softWarnings.push('浮亏 ' + fmtPct(pnl,1) + ' 补仓：请先确认这是“计划内分批 / 企稳补仓”，而非“套牢摊平”。若无预设计划，倾向于等企稳或按计划再买。');
       }
@@ -2374,26 +2571,31 @@ VIEWS.planner = function (app) {
       box.appendChild(el(`<div class="alert red"><span class="icon">${icon('danger')}</span><div>请确保最高价 > 最低价，且金额为正。</div></div>`));
       return;
     }
+    const pyCode = pyramid.querySelector('#py-code').value.trim();
+    const pyLot = lotSizeOf(pyCode);
     // 权重：越低价权重越大。用线性递减权重 n, n-1, ..., 1 分配到从低到高的价位
     const prices = [];
     for (let i = 0; i < n; i++) prices.push(low + (high - low) * i / (n - 1));
     const weights = prices.map((_, i) => n - i); // i=0(最低价)权重最大
     const wsum = weights.reduce((a, b) => a + b, 0);
+    let costSum = 0;
     const rows = prices.map((price, i) => {
       const amt = total * weights[i] / wsum;
-      const shares = amt / price;
+      const shares = roundLot(amt / price, pyCode);      // A股取整到手，美股到 1 股
+      costSum += tradeCost(pyCode, shares * price, 'buy');
       return `<tr>
         <td>第 ${i+1} 批</td>
         <td class="num">${price.toFixed(2)}</td>
         <td class="num">${fmtMoney(amt)}</td>
         <td class="num">${fmtPct(weights[i]/wsum*100,0)}</td>
-        <td class="num">${Math.floor(shares).toLocaleString()}</td>
+        <td class="num">${shares.toLocaleString()}${pyLot > 1 ? '（' + (shares / pyLot) + '手）' : ''}</td>
       </tr>`;
     }).join('');
     box.appendChild(el(`<div class="table-scroll" style="margin-top:14px"><table>
-      <thead><tr><th>批次</th><th class="num">价位</th><th class="num">买入金额</th><th class="num">占比</th><th class="num">股数</th></tr></thead>
+      <thead><tr><th>批次</th><th class="num">价位</th><th class="num">买入金额</th><th class="num">占比</th><th class="num">股数${pyLot > 1 ? '(整手)' : ''}</th></tr></thead>
       <tbody>${rows}<tr class="total-row"><td>合计</td><td></td><td class="num">${fmtMoney(total)}</td><td class="num">100%</td><td></td></tr></tbody>
     </table></div>`));
+    box.appendChild(el(`<p class="inline-note">${pyLot > 1 ? 'A股按 100 股/手取整，' : ''}预估交易成本约 <strong>${fmtMoney(costSum)}</strong>（${marketOf(pyCode) === 'US' ? '美股近零佣' : 'A股佣金+印花税'}，仅供参考）。</p>`));
     box.appendChild(el(`<div class="alert blue" style="margin-top:12px"><span class="icon">${icon('ruler')}</span><div>
       正金字塔：最大一笔永远在区间最低价，越高买越少，避免高位头重脚轻。${pyMode === 'dip'
         ? '当前为<strong>回调·等跌</strong>模式：低位批次要等股价跌到该价位才成交；若判断这是上涨趋势股，改用「顺势·现价起步」。'
@@ -2402,8 +2604,8 @@ VIEWS.planner = function (app) {
   };
 
   /* --- 利润隔离 --- */
-  const lock = el(`<div class="card" style="margin-top:16px"><h3>利润隔离</h3>
-    <p class="hint">浮盈超阈值（默认 +${s.profitLockThreshold}%）时，提醒转出部分浮盈至安全资产</p></div>`);
+  const lock = el(`<div class="card" style="margin-top:16px"><h3>利润隔离（部分止盈）</h3>
+    <p class="hint">浮盈超阈值（默认 +${s.profitLockThreshold}%）时，提醒<strong>部分</strong>止盈锁进安全资产——不是清仓。让剩余仓位配<strong>移动止损</strong>继续奔跑，兼顾“落袋”与“不错杀牛股”。</p></div>`);
   app.appendChild(lock);
 
   const gainers = STATE.positions.filter(p => num(p.pnl) >= s.profitLockThreshold);
@@ -2435,7 +2637,7 @@ VIEWS.planner = function (app) {
       <th class="num">浮盈金额*</th><th class="num">建议隔离</th><th class="num">已隔离</th><th></th>
     </tr></thead><tbody>${rows}</tbody></table>`));
     lock.appendChild(scroll);
-    lock.appendChild(el(`<p class="inline-note">*浮盈金额为按当前占比与浮盈率的估算，用于给出隔离参考。建议将浮盈的一半转入货基/债/黄金等安全资产。</p>`));
+    lock.appendChild(el(`<p class="inline-note">*浮盈金额为按当前占比与浮盈率的估算，仅作参考。“建议隔离”默认取浮盈一半——这是<strong>部分止盈</strong>而非清仓：锁一半落袋、剩余仓位挂移动止损让利润奔跑。机械式全部止盈会砍掉真正的复利大牛股，故只锁一部分。</p>`));
     scroll.querySelectorAll('[data-lock]').forEach(b => b.onclick = () => {
       const p = STATE.positions.find(x => x.id === b.dataset.lock);
       if (!p) return;
@@ -2531,7 +2733,8 @@ VIEWS.planner = function (app) {
 
       const reduceW = Math.max(0, w - targetW);
       const reduceValue = total > 0 ? reduceW / 100 * total : 0;
-      const reduceShares = price > 0 ? reduceValue / price : 0;
+      const rdLot = lotSizeOf(p.code);
+      const reduceShares = price > 0 ? roundLot(reduceValue / price, p.code) : 0;
 
       box.appendChild(el(`<div class="alert ${tone}" style="margin-top:14px"><span class="icon">${tone==='red'?icon('danger'):tone==='amber'?icon('warn'):icon('check')}</span><div>
         <strong>结论:${decision}</strong><br>${reason}</div></div>`));
@@ -2539,18 +2742,22 @@ VIEWS.planner = function (app) {
       box.appendChild(el(`<div class="result-box">
         <div class="metric-row"><span class="k">当前占比 / 目标占比</span><span class="v">${fmtPct(w,1)} → ${fmtPct(targetW,1)}</span></div>
         <div class="metric-row"><span class="k">建议减仓金额（约）</span><span class="v" style="color:var(--red-ink)">${mode==='hold'?'—':fmtMoney(reduceValue)}</span></div>
-        <div class="metric-row"><span class="k">对应股数（约）</span><span class="v">${mode==='hold'||!(reduceShares>0)?'—':Math.floor(reduceShares).toLocaleString()}</span></div>
+        <div class="metric-row"><span class="k">对应股数（${rdLot>1?'整手':'约'}）</span><span class="v">${mode==='hold'||!(reduceShares>0)?'—':reduceShares.toLocaleString()}</span></div>
         <div class="metric-row"><span class="k">成本价（沉没成本,不参与决策）</span><span class="v" style="color:var(--muted)">${card.querySelector('#rd-cost').value||'—'}</span></div>
       </div>`));
 
       if (mode === 'hold') return;
+
+      if (isTPlus1(p.code)) box.appendChild(el(`<div class="alert amber" style="margin-top:10px"><span class="icon">${icon('warn')}</span><div>
+        <strong>${MARKET_LABEL[marketOf(p.code)]}·T+1</strong>：当日买入的份额当天不可卖；若为逻辑破坏/破止损的紧急退出，一字跌停可能<strong>挂单也卖不出</strong>，可用<strong>隔夜委托(夜市)</strong>抢次日排队优先。减仓预估成本约 ${fmtMoney(tradeCost(p.code, reduceValue, 'sell'))}（含印花税）。</div></div>`));
+      else if (marketOf(p.code) === 'US') box.appendChild(el(`<div class="alert blue" style="margin-top:10px"><span class="icon">${icon('info')}</span><div>美股可 T+0 卖出，但停牌/熔断时挂单不成交，按重开价成交。减仓预估成本约 ${fmtMoney(tradeCost(p.code, reduceValue, 'sell'))}。</div></div>`));
 
       // 分批减仓计划
       if (mode === 'exit') {
         // 逻辑破/破止损：分 3 批短窗口出，降低卖在最低点的择时风险，但不拖延
         const parts = [0.4, 0.3, 0.3];
         const rows = parts.map((f, i) => `<tr><td>第 ${i+1} 批（${i===0?'立即':'1–'+(i*2)+' 个交易日内'}）</td>
-          <td class="num">${fmtMoney(reduceValue*f)}</td><td class="num">${price>0?Math.floor(reduceValue*f/price).toLocaleString():'—'}</td><td class="num">${fmtPct(f*100,0)}</td></tr>`).join('');
+          <td class="num">${fmtMoney(reduceValue*f)}</td><td class="num">${price>0?roundLot(reduceValue*f/price, p.code).toLocaleString():'—'}</td><td class="num">${fmtPct(f*100,0)}</td></tr>`).join('');
         box.appendChild(el(`<div class="table-scroll" style="margin-top:12px"><table>
           <thead><tr><th>批次</th><th class="num">减仓金额</th><th class="num">股数</th><th class="num">占比</th></tr></thead>
           <tbody>${rows}<tr class="total-row"><td>合计</td><td class="num">${fmtMoney(reduceValue)}</td><td></td><td class="num">100%</td></tr></tbody></table></div>`));
@@ -2562,7 +2769,7 @@ VIEWS.planner = function (app) {
         const wts = [2, 3, 4]; const wsum = wts.reduce((a, b) => a + b, 0);
         const rows = levels.map((lv, i) => {
           const px = price * (1 + lv), amt = reduceValue * wts[i] / wsum;
-          return `<tr><td>第 ${i+1} 批</td><td class="num">${px>0?px.toFixed(px>=100?2:3):'—'}</td><td class="num">${fmtMoney(amt)}</td><td class="num">${px>0?Math.floor(amt/px).toLocaleString():'—'}</td><td class="num">${fmtPct(wts[i]/wsum*100,0)}</td></tr>`;
+          return `<tr><td>第 ${i+1} 批</td><td class="num">${px>0?px.toFixed(px>=100?2:3):'—'}</td><td class="num">${fmtMoney(amt)}</td><td class="num">${px>0?roundLot(amt/px, p.code).toLocaleString():'—'}</td><td class="num">${fmtPct(wts[i]/wsum*100,0)}</td></tr>`;
         }).join('');
         box.appendChild(el(`<div class="table-scroll" style="margin-top:12px"><table>
           <thead><tr><th>批次</th><th class="num">价位</th><th class="num">减仓金额</th><th class="num">股数</th><th class="num">占比</th></tr></thead>
@@ -2597,6 +2804,91 @@ VIEWS.planner = function (app) {
       };
     };
   } // end renderReduce
+};
+
+/* =========================================================================
+   视图：复盘校准 —— 记录每次判断的胜率/空间，事后回填结果，
+   用 Brier 分数 + 校准曲线校准你（与 AI）的判断力。这是「长出投资大脑」的核心闭环。
+   ========================================================================= */
+VIEWS.calibration = function (app) {
+  app.appendChild(el(`
+    <div class="view-head">
+      <h2>复盘校准 · 判断力体检</h2>
+      <p>凯利/减仓时点「记录此判断」会存到这里。事后回填结果，工具算出你的<strong>实际胜率 vs 你以为的胜率</strong>与 <strong>Brier 分数</strong>——多数人会发现自己填的“70%”只兑现约 50%。这是唯一能真正校准判断力的功能。</p>
+    </div>
+  `));
+
+  const fc = STATE.forecasts || [];
+  const closed = fc.filter(f => f.outcome === 'win' || f.outcome === 'loss');
+
+  // 汇总：平均预测胜率、实际胜率、Brier 分数（越低越准，0=完美）
+  if (closed.length) {
+    const avgP = closed.reduce((a, f) => a + num(f.p), 0) / closed.length;
+    const realWin = closed.filter(f => f.outcome === 'win').length / closed.length * 100;
+    const brier = closed.reduce((a, f) => { const o = f.outcome === 'win' ? 1 : 0; const pr = num(f.p) / 100; return a + (pr - o) * (pr - o); }, 0) / closed.length;
+    // 校准分桶（<40 / 40–55 / 55–70 / >70）
+    const buckets = [[0, 40, '保守(<40%)'], [40, 55, '偏低(40–55%)'], [55, 70, '中高(55–70%)'], [70, 101, '高(>70%)']];
+    const bucketRows = buckets.map(([lo, hi, lbl]) => {
+      const grp = closed.filter(f => num(f.p) >= lo && num(f.p) < hi);
+      if (!grp.length) return `<tr><td>${lbl}</td><td class="num">0</td><td class="num">—</td><td class="num">—</td></tr>`;
+      const predAvg = grp.reduce((a, f) => a + num(f.p), 0) / grp.length;
+      const realAvg = grp.filter(f => f.outcome === 'win').length / grp.length * 100;
+      const gap = realAvg - predAvg;
+      return `<tr><td>${lbl}</td><td class="num">${grp.length}</td><td class="num">${predAvg.toFixed(0)}%</td>
+        <td class="num" style="color:${gap<-8?'var(--red-ink)':(gap>8?'var(--green-ink)':'inherit')}">${realAvg.toFixed(0)}%</td></tr>`;
+    }).join('');
+
+    const over = avgP - realWin;
+    app.appendChild(el(`<div class="card">
+      <div class="stat-grid" style="margin-bottom:8px">
+        <div class="stat"><div class="label">已结算判断</div><div class="value">${closed.length}</div><div class="sub">共记录 ${fc.length} 条</div></div>
+        <div class="stat"><div class="label">你以为的平均胜率</div><div class="value">${avgP.toFixed(0)}%</div><div class="sub">主观预测</div></div>
+        <div class="stat"><div class="label">实际胜率</div><div class="value" style="color:${realWin>=avgP-8?'var(--green-ink)':'var(--red-ink)'}">${realWin.toFixed(0)}%</div><div class="sub">${over>8?'高估 '+over.toFixed(0)+'个点':(over<-8?'低估':'较准')}</div></div>
+        <div class="stat"><div class="label">Brier 分数</div><div class="value" style="color:${brier<=0.2?'var(--green-ink)':(brier<=0.28?'var(--amber-ink)':'var(--red-ink)')}">${brier.toFixed(3)}</div><div class="sub">越低越准 · 0.25=瞎猜</div></div>
+      </div>
+      <div class="table-scroll"><table><thead><tr><th>你填的胜率区间</th><th class="num">样本</th><th class="num">平均预测</th><th class="num">实际兑现</th></tr></thead>
+      <tbody>${bucketRows}</tbody></table></div>
+      <p class="inline-note">若“高(>70%)”一栏实际兑现明显低于预测，说明你在高把握时最容易过度自信——正是散户最常亏钱的地方。样本越多越可信（建议 ≥15 条）。</p>
+    </div>`));
+  } else {
+    app.appendChild(el(`<div class="card"><div class="alert blue"><span class="icon">${icon('info')}</span><div>还没有已结算的判断。到「① 凯利定注」评估标的后点「记录此判断」，一段时间后回来回填结果，就能看到你的校准曲线。</div></div></div>`));
+  }
+
+  // 记录列表 + 回填结果
+  const listCard = el('<div class="card" style="margin-top:16px"><h3>判断记录</h3></div>');
+  if (!fc.length) {
+    listCard.appendChild(el(`<div class="empty"><div class="big">${icon('clipboard')}</div><p>暂无记录。</p></div>`));
+  } else {
+    const scroll = el('<div class="table-scroll"></div>');
+    const rows = fc.slice().reverse().map(f => {
+      const oc = f.outcome === 'win' ? '<span class="pill green">兑现</span>' : (f.outcome === 'loss' ? '<span class="pill red">落空</span>' : '<span class="pill">待结算</span>');
+      return `<tr>
+        <td>${escapeHtml(f.date)}</td>
+        <td>${escapeHtml(f.name)}${f.code ? '（' + escapeHtml(f.code) + '）' : ''}</td>
+        <td class="num">${num(f.p)}%</td>
+        <td class="num">+${num(f.up)}/−${num(f.down)}</td>
+        <td class="num" style="color:${num(f.ev)>=0?'var(--green-ink)':'var(--red-ink)'}">${num(f.ev)>=0?'+':''}${num(f.ev)}%</td>
+        <td>${oc}</td>
+        <td class="num">
+          ${f.outcome ? `<button class="btn secondary small" data-clear="${f.id}">重置</button>`
+            : `<button class="btn secondary small" data-win="${f.id}">兑现</button> <button class="btn danger small" data-loss="${f.id}">落空</button>`}
+          <button class="btn danger small" data-del="${f.id}">删</button>
+        </td>
+      </tr>`;
+    }).join('');
+    scroll.appendChild(el(`<table><thead><tr><th>日期</th><th>标的</th><th class="num">预测胜率</th><th class="num">空间(+/−)</th><th class="num">EV</th><th>结果</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table>`));
+    listCard.appendChild(scroll);
+    listCard.appendChild(el(`<p class="inline-note">「兑现/落空」以你事后的客观判断为准（如：达到上涨目标算兑现、触及下跌空间/逻辑破坏算落空）。诚实回填，工具才有校准价值。</p>`));
+    const setOutcome = (id, oc) => { const f = fc.find(x => x.id === id); if (f) { f.outcome = oc; saveState(); render(); } };
+    scroll.querySelectorAll('[data-win]').forEach(b => b.onclick = () => setOutcome(b.dataset.win, 'win'));
+    scroll.querySelectorAll('[data-loss]').forEach(b => b.onclick = () => setOutcome(b.dataset.loss, 'loss'));
+    scroll.querySelectorAll('[data-clear]').forEach(b => b.onclick = () => setOutcome(b.dataset.clear, ''));
+    scroll.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
+      if (!confirm('删除这条判断记录？')) return;
+      STATE.forecasts = fc.filter(x => x.id !== b.dataset.del); saveState(); render();
+    });
+  }
+  app.appendChild(listCard);
 };
 
 /* =========================================================================
