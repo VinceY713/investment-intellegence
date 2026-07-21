@@ -2296,14 +2296,21 @@ VIEWS.planner = function (app) {
 
   /* --- 正金字塔加仓 --- */
   const pyramid = el(`<div class="card" style="margin-top:16px"><h3>正金字塔分批加仓</h3>
-    <p class="hint">输入价位区间与总投入，系统生成"越低买越多、越高买越少"的分批金额</p></div>`);
+    <p class="hint">输入价位区间与总投入，系统生成"越低买越多、越高买越少"的分批金额（最大一笔永远在区间最低价）</p></div>`);
   pyramid.appendChild(el(`
+    <div class="field"><label>分批模式</label>
+      <div class="seg" id="py-seg">
+        <button class="seg-btn active" data-mode="dip" type="button">回调分批 · 等跌（区间在现价下方）</button>
+        <button class="seg-btn" data-mode="trend" type="button">顺势分批 · 现价起步（区间在现价上方）</button>
+      </div>
+      <p class="inline-note" id="py-mode-note">回调分批：赌它跌下来摊低成本，最大一笔在低位——<strong>若个股一路上涨、不回调，低位批次成交不了</strong>。判断会回调时用。</p>
+    </div>
     <div class="field"><label>标的代码（A股/ETF 数字，美股字母；可留空手填）</label>
       <div class="row" style="gap:6px;max-width:420px">
         <input id="py-code" placeholder="如 002518 / 513260 / TCOM" style="flex:1"/>
         <button class="btn secondary" id="py-fetch" style="flex:0 0 auto">获取现价</button>
       </div>
-      <p class="inline-note" id="py-code-note">获取后自动把现价填入「最高价」，并按现价 −15% 预填「最低价」，都可改。</p>
+      <p class="inline-note" id="py-code-note">获取现价后，按所选模式自动填入价位区间（可改）。</p>
     </div>
     <div class="grid grid-3">
       <div class="field"><label>最低价（买最多）</label><input id="py-low" type="number" step="0.01" placeholder="18"/></div>
@@ -2316,6 +2323,31 @@ VIEWS.planner = function (app) {
   `));
   app.appendChild(pyramid);
 
+  let pyMode = 'dip', pyCur = 0;   // 分批模式 + 最近获取的现价（切模式时按现价重填区间）
+  const fillRange = (cur) => {
+    if (!(cur > 0)) return;
+    const dp = cur >= 100 ? 2 : 3;
+    if (pyMode === 'dip') {        // 等跌：现价为顶，−15% 为底
+      pyramid.querySelector('#py-high').value = +cur.toFixed(dp);
+      pyramid.querySelector('#py-low').value = +(cur * 0.85).toFixed(dp);
+    } else {                       // 顺势：现价为底（最大一笔立即成交），+15% 为顶
+      pyramid.querySelector('#py-low').value = +cur.toFixed(dp);
+      pyramid.querySelector('#py-high').value = +(cur * 1.15).toFixed(dp);
+    }
+  };
+  const modeNote = pyramid.querySelector('#py-mode-note');
+  pyramid.querySelectorAll('#py-seg .seg-btn').forEach(btn => {
+    btn.onclick = () => {
+      pyramid.querySelectorAll('#py-seg .seg-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      pyMode = btn.dataset.mode;
+      modeNote.innerHTML = pyMode === 'dip'
+        ? '回调分批：赌它跌下来摊低成本，最大一笔在低位——<strong>若个股一路上涨、不回调，低位批次成交不了</strong>。判断会回调时用。'
+        : '顺势分批：<strong>最大一笔就在现价、立即建仓</strong>，之后越涨买越少（不追高大单）。适合上涨趋势想建/加仓、又怕踏空时用。';
+      fillRange(pyCur);            // 已获取过现价则按新模式重填区间
+    };
+  });
+
   pyramid.querySelector('#py-fetch').onclick = async () => {
     const note = pyramid.querySelector('#py-code-note');
     const code = pyramid.querySelector('#py-code').value.trim();
@@ -2323,10 +2355,9 @@ VIEWS.planner = function (app) {
     note.textContent = '获取中…'; note.style.color = 'var(--muted)';
     try {
       const q = await fetchQuote(code);
-      const cur = num(q.price);
-      pyramid.querySelector('#py-high').value = +cur.toFixed(cur >= 100 ? 2 : 3);
-      pyramid.querySelector('#py-low').value = +(cur * 0.85).toFixed(cur >= 100 ? 2 : 3);
-      note.innerHTML = `${icon('check')} ${escapeHtml(q.name)}  现价 ${cur}，已填入价位区间（可改）`; note.style.color = 'var(--green)';
+      pyCur = num(q.price);
+      fillRange(pyCur);
+      note.innerHTML = `${icon('check')} ${escapeHtml(q.name)}  现价 ${pyCur}，已按「${pyMode === 'dip' ? '回调·等跌' : '顺势·现价起步'}」填入价位区间（可改）`; note.style.color = 'var(--green)';
     } catch (e) {
       note.innerHTML = `${icon('warn')} 获取失败（${escapeHtml(e.message)}）——请手动填价位`; note.style.color = 'var(--amber)';
     }
@@ -2364,7 +2395,9 @@ VIEWS.planner = function (app) {
       <tbody>${rows}<tr class="total-row"><td>合计</td><td></td><td class="num">${fmtMoney(total)}</td><td class="num">100%</td><td></td></tr></tbody>
     </table></div>`));
     box.appendChild(el(`<div class="alert blue" style="margin-top:12px"><span class="icon">${icon('ruler')}</span><div>
-      正金字塔：越跌越买、越涨越少，摊薄成本且避免高位头重脚轻。切勿反向操作（追高加仓）。
+      正金字塔：最大一笔永远在区间最低价，越高买越少，避免高位头重脚轻。${pyMode === 'dip'
+        ? '当前为<strong>回调·等跌</strong>模式：低位批次要等股价跌到该价位才成交；若判断这是上涨趋势股，改用「顺势·现价起步」。'
+        : '当前为<strong>顺势·现价起步</strong>模式：第 1 批就在现价立即建仓，随后逐级加码但金额递减（不追高大单）。'}
     </div></div>`));
   };
 
