@@ -552,13 +552,15 @@ function buildSeedState() {
     assets: JSON.parse(JSON.stringify(assets)),
     positions: JSON.parse(JSON.stringify(positions)),
   };
-  return {
+  // 走 applyStateDefaults 补齐所有新字段（forecasts / corrCache / macro …），
+  // 否则首次使用(种子态)缺字段会让新视图崩（如「市场指标」读 STATE.macro）。
+  return applyStateDefaults({
     settings: Object.assign({}, DEFAULT_SETTINGS),
     positions,
     assets,
     portfolio: { totalAssets: Math.round(SEED_TOTAL), asOfDate: SEED_DATE, fxRate: FX_DEFAULT },
     snapshots: [seedSnap],
-  };
+  });
 }
 
 // 真正的空状态（「清空全部数据」用；不能走 loadState 兜底，否则会重新载入种子数据）
@@ -571,6 +573,7 @@ function buildEmptyState() {
     snapshots: [],
     forecasts: [],
     corrCache: null,
+    macro: { market: {}, ind: {}, updatedAt: null },
   };
 }
 
@@ -583,6 +586,8 @@ function applyStateDefaults(s) {
   s.snapshots = s.snapshots || [];
   s.forecasts = s.forecasts || [];
   s.corrCache = s.corrCache || null;
+  s.macro = Object.assign({ market: {}, ind: {}, updatedAt: null }, s.macro || {});
+  s.macro.market = s.macro.market || {}; s.macro.ind = s.macro.ind || {};
   return s;
 }
 
@@ -3838,6 +3843,169 @@ VIEWS.portfolio = function (app) {
 请据此诊断健康度并给出下一步建议。`;
 
   aiCard.querySelector('#pf-ai').onclick = (e) => aiReview(summary, aiCard.querySelector('#pf-ai-out'), e.currentTarget.closest('button'));
+};
+
+/* =========================================================================
+   视图：市场指标看板 —— 集中放影响组合的关键宏观变量，随时参考
+   原则：能自动拉的(A股/美股指数、汇率)自动拉；利率/通胀/债市等用结构化指标卡
+   (当前值+含义+对你组合的影响+关注信号+官方来源)，你按发布节奏更新；再叠一层
+   确定性的 regime 信号解读(不调用 AI、可复现、不臆造)。
+   ========================================================================= */
+// 自动刷新的"市场温度"标的（用现有行情代理；指数用显式腾讯符号）
+const MACRO_MARKET = [
+  { key: 'sh',    name: '上证指数',   sym: 'sh000001', us: false },
+  { key: 'hs300', name: '沪深300',    sym: 'sh000300', us: false },
+  { key: 'cyb',   name: '创业板指',   sym: 'sz399006', us: false },
+  { key: 'kc50',  name: '科创50',     sym: 'sh000688', us: false },
+  { key: 'ndx',   name: '纳斯达克',   sym: 'usIXIC',   us: true  },
+  { key: 'spx',   name: '标普500',    sym: 'usINX',    us: true  },
+];
+// 手动维护的关键宏观指标（分组）——每项：含义 / 对你组合(人民币本位·A股+美股+黄金+美元资产)的影响 / 关注信号 / 来源
+const MACRO_GROUPS = [
+  { title: '利率 · 央行', items: [
+    { key: 'fedUpper', name: '美联储基金利率(上限)', unit: '%', meaning: '美国政策利率，全球资产定价之锚。', impact: '越高→无息黄金与高估值成长股承压、美元走强；你的美元存款/短债票息更高。', watch: '看点阵图与降息节奏；转向降息利好风险资产与黄金。', src: 'https://www.federalreserve.gov/monetarypolicy/openmarket.htm' },
+    { key: 'fomcBias', name: '下次FOMC倾向', unit: '', meaning: '市场预期加息/降息/按兵不动（可填“降息25bp概率X%”）。', impact: '预期转鸽→提前利好成长与黄金。', watch: 'CME FedWatch 概率。', src: 'https://www.cmegroup.com/markets/interest-rates/cme-fedwatch-tool.html' },
+    { key: 'cnLPR1', name: '中国 LPR 1年', unit: '%', meaning: '中国实体经济短端贷款基准。', impact: '下调→流动性宽松，利好 A股尤其成长/地产链。', watch: '每月20日公布。', src: 'http://www.pbc.gov.cn/' },
+    { key: 'cnLPR5', name: '中国 LPR 5年', unit: '%', meaning: '房贷等长端基准。', impact: '下调→利好地产、银行让利、A股风险偏好。', watch: '每月20日。', src: 'http://www.pbc.gov.cn/' },
+  ]},
+  { title: '通胀 · 增长', items: [
+    { key: 'usCPI', name: '美国 CPI 同比', unit: '%', meaning: '美国通胀，决定美联储松紧。', impact: '高→降息受限，压制估值与黄金短期；低→打开宽松空间。', watch: '每月中旬。', src: 'https://www.bls.gov/cpi/' },
+    { key: 'usPCE', name: '美国 核心PCE', unit: '%', meaning: '美联储最看重的通胀口径。', impact: '同 CPI，更权威。', watch: '月末。', src: 'https://www.bea.gov/' },
+    { key: 'usUnemp', name: '美国 失业率', unit: '%', meaning: '就业强弱，衰退与降息的关键。', impact: '走高→衰退担忧升温、避险(黄金/美债)受益、成长承压。', watch: '每月初非农。', src: 'https://www.bls.gov/' },
+    { key: 'usPMI', name: '美国 ISM制造业PMI', unit: '', meaning: '荣枯线50。', impact: '<50 收缩→顺周期/大宗承压。', watch: '月初。', src: 'https://www.ismworld.org/' },
+    { key: 'cnCPI', name: '中国 CPI 同比', unit: '%', meaning: '中国通胀/通缩温度。', impact: '偏低/为负→通缩压力，压制顺周期、利好债；也倒逼政策宽松。', watch: '每月上旬。', src: 'https://www.stats.gov.cn/' },
+    { key: 'cnPMI', name: '中国 制造业PMI', unit: '', meaning: '荣枯线50。', impact: '>50 扩张→利好周期/顺周期 A股。', watch: '月末。', src: 'https://www.stats.gov.cn/' },
+    { key: 'cnTSF', name: '中国 社融同比', unit: '%', meaning: '宽信用力度、A股流动性先行指标。', impact: '回升→A股流动性改善的领先信号。', watch: '每月中。', src: 'http://www.pbc.gov.cn/' },
+  ]},
+  { title: '债市 · 避险 · 汇率', items: [
+    { key: 'ust10', name: '美债 10年收益率', unit: '%', meaning: '全球无风险利率之锚。', impact: '上行→压制黄金与成长股估值；你的美元债/存款再投资收益更高。', watch: '看与 2年的利差。', src: 'https://home.treasury.gov/resource-center/data-chart-center/interest-rates' },
+    { key: 'ust2', name: '美债 2年收益率', unit: '%', meaning: '最贴近美联储政策预期。', impact: '与10年比较判断曲线形态。', watch: '10Y−2Y 倒挂=衰退预警。', src: 'https://home.treasury.gov/resource-center/data-chart-center/interest-rates' },
+    { key: 'cn10', name: '中国 10年国债', unit: '%', meaning: '中国无风险利率。', impact: '下行→反映经济偏弱/宽松预期，利好债与红利。', watch: '与美债利差影响汇率。', src: 'https://www.chinabond.com.cn/' },
+    { key: 'dxy', name: '美元指数 DXY', unit: '', meaning: '美元强弱。', impact: '强美元→压制黄金/新兴市场；你美元资产受益，但人民币计价的海外收益被汇率吃掉。', watch: '>105 偏强 / <98 偏弱。', src: 'https://www.marketwatch.com/investing/index/dxy' },
+    { key: 'vix', name: 'VIX 恐慌指数', unit: '', meaning: '美股隐含波动率、市场情绪。', impact: '飙升→避险、波动放大，最易情绪化操作——铁律该发挥作用。', watch: '>25 恐慌 / <13 自满。', src: 'https://www.cboe.com/tradable_products/vix/' },
+  ]},
+];
+
+async function fetchIndexQuote(sym, us) {
+  try { return parseTencent(await getQuoteText('/api/quote?code=' + encodeURIComponent(sym)), { us }); }
+  catch (e) {
+    const sinaSym = us ? sym.toLowerCase().replace(/^us/, 'gb_') : sym;
+    return parseSina(await getQuoteText('/api/quote_sina?code=' + encodeURIComponent(sinaSym)), { us });
+  }
+}
+
+// 确定性 regime 信号：读已填指标，输出对「你这种组合」的含义。无 AI、可复现、不臆造。
+function macroSignals() {
+  const g = (k) => { const v = STATE.macro && STATE.macro.ind && STATE.macro.ind[k]; const n = v ? num(v.value, NaN) : NaN; return isFinite(n) ? n : null; };
+  const out = [];
+  const y10 = g('ust10'), y2 = g('ust2');
+  if (y10 != null && y2 != null) {
+    const sp = y10 - y2;
+    if (sp < 0) out.push(['red', `美债收益率曲线倒挂（10Y ${y10}% < 2Y ${y2}%，利差 ${sp.toFixed(2)}%）：历史上领先经济衰退 6–18 个月，风险资产中期需谨慎，优先保本与分散、备足现金。`]);
+    else if (sp < 0.3) out.push(['amber', `美债利差偏平（10Y−2Y ${sp.toFixed(2)}%）：曲线接近倒挂，留意衰退前兆。`]);
+  }
+  const fed = g('fedUpper');
+  if (fed != null) {
+    if (fed >= 4.5) out.push(['amber', `美联储高利率（${fed}%）：无息黄金与高估值成长股承压、美元偏强；你的美元存款/短债有票息优势，但人民币计价的海外收益会被汇率侵蚀。`]);
+    else if (fed <= 2) out.push(['blue', `低利率环境（${fed}%）：整体利好风险资产与黄金。`]);
+  }
+  const dxy = g('dxy');
+  if (dxy != null) {
+    if (dxy >= 105) out.push(['amber', `强美元（DXY ${dxy}）：压制黄金/新兴市场/大宗；你的美元资产受益，但人民币口径的海外收益被汇率吃掉——注意你的美元敞口。`]);
+    else if (dxy <= 98) out.push(['blue', `弱美元（DXY ${dxy}）：利好黄金、新兴市场与非美资产。`]);
+  }
+  const vix = g('vix');
+  if (vix != null) {
+    if (vix >= 25) out.push(['red', `市场恐慌（VIX ${vix}）：波动放大，最容易情绪化操作——正是「铁律校验/止损防御」该发挥作用的时候，别追跌杀跌。`]);
+    else if (vix <= 13) out.push(['amber', `波动极低（VIX ${vix}）：市场自满，警惕尾部风险与拥挤交易，别在低波中过度加杠杆/加仓。`]);
+  }
+  const cpiCN = g('cnCPI');
+  if (cpiCN != null && cpiCN < 0.5) out.push(['amber', `中国 CPI 偏低（${cpiCN}%）：通缩压力、实际利率偏高，压制顺周期、利好债与红利；也倒逼政策进一步宽松。`]);
+  const cpiUS = g('usCPI');
+  if (cpiUS != null && cpiUS >= 3) out.push(['amber', `美国通胀仍偏高（CPI ${cpiUS}%）：美联储降息受限，短期压制估值与黄金。`]);
+  const pmiCN = g('cnPMI');
+  if (pmiCN != null) { if (pmiCN < 50) out.push(['amber', `中国制造业PMI ${pmiCN}<50（收缩）：顺周期/工业链需求偏弱。`]); else if (pmiCN >= 50.5) out.push(['blue', `中国制造业PMI ${pmiCN}>50（扩张）：利好周期与顺周期 A股。`]); }
+  if (!out.length) out.push(['blue', '已填写的指标未触发明显信号；补全更多指标（尤其美债10Y/2Y、美联储利率、DXY、VIX）可得到更完整的组合含义解读。']);
+  return out;
+}
+
+VIEWS.macro = function (app) {
+  if (!STATE.macro || !STATE.macro.market) STATE.macro = { market: {}, ind: {}, updatedAt: null };
+  const m = STATE.macro;
+  app.appendChild(el(`
+    <div class="view-head">
+      <h2>市场指标 · 影响组合的关键变量</h2>
+      <p>把影响你组合的宏观变量集中放这里随时参考。<strong>市场温度</strong>自动刷新；<strong>利率/通胀/债市</strong>按官方发布节奏你手动更新一次即可长期留存。下方<strong>信号解读</strong>是对「你这种人民币本位、A股+美股+黄金+美元资产」组合的确定性提示（不预测、不调用 AI）。</p>
+    </div>
+  `));
+
+  // —— 信号解读（放最上面，一眼看规则）——
+  const sigCard = el('<div class="card"><h3>' + icon('gauge') + ' 当前 regime 信号解读</h3></div>');
+  macroSignals().forEach(([type, msg]) => sigCard.appendChild(el(`<div class="alert ${type}"><span class="icon">${type === 'red' ? icon('danger') : type === 'amber' ? icon('warn') : icon('info')}</span><div>${msg}</div></div>`)));
+  sigCard.appendChild(el(`<p class="inline-note">信号由你填入的指标按固定规则触发，透明、可复现；填得越全越准。</p>`));
+  app.appendChild(sigCard);
+
+  // —— 市场温度（自动）——
+  const mkCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('chart')} 市场温度（可自动刷新）</h3></div>`);
+  const mkBar = el(`<div class="row" style="gap:8px;flex-wrap:wrap"><button class="btn" id="mk-go" style="flex:0 0 auto">${icon('refresh')} 刷新指数行情</button><span id="mk-note" class="inline-note" style="align-self:center">${m.updatedAt ? '上次更新 ' + escapeHtml(m.updatedAt) : '点刷新拉取最新指数点位'}</span></div>`);
+  mkCard.appendChild(mkBar);
+  const mkGrid = el('<div class="stat-grid" style="margin-top:12px"></div>');
+  const renderMarket = () => {
+    mkGrid.innerHTML = '';
+    MACRO_MARKET.forEach(it => {
+      const d = m.market[it.key];
+      const val = d && isFinite(d.price) ? (+d.price).toLocaleString(undefined, { maximumFractionDigits: 2 }) : '—';
+      const chg = d && d.changePct != null && isFinite(d.changePct) ? d.changePct : null;
+      const usdcny = it.key === 'sh' ? '' : '';
+      mkGrid.appendChild(el(`<div class="stat"><div class="label">${it.name}</div>
+        <div class="value" style="font-size:20px;color:${chg == null ? 'inherit' : (chg >= 0 ? 'var(--green-ink)' : 'var(--red-ink)')}">${val}</div>
+        <div class="sub">${chg == null ? (d ? '' : '未刷新') : (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%'}</div></div>`));
+    });
+    // 附带 USD/CNY 中间价
+    mkGrid.appendChild(el(`<div class="stat"><div class="label">美元/人民币中间价</div><div class="value" style="font-size:20px">${currentFx().toFixed(4)}</div><div class="sub">「设置」可一键更新</div></div>`));
+  };
+  mkCard.appendChild(mkGrid);
+  renderMarket();
+  app.appendChild(mkCard);
+
+  mkBar.querySelector('#mk-go').onclick = async () => {
+    const btn = mkBar.querySelector('#mk-go'), note = mkBar.querySelector('#mk-note');
+    btn.disabled = true; note.innerHTML = icon('refresh', 'spin') + ' 拉取中…';
+    let ok = 0, fail = 0;
+    await Promise.all(MACRO_MARKET.map(async it => {
+      try { const q = await fetchIndexQuote(it.sym, it.us); m.market[it.key] = { price: q.price, changePct: q.changePct, date: todayStr() }; ok++; }
+      catch (e) { fail++; }
+    }));
+    m.updatedAt = todayStr(); saveState(); renderMarket();
+    note.innerHTML = `${icon('check')} 已更新 ${ok} 项${fail ? '（' + fail + ' 项失败，多为境外指数被源限制，可手动参考）' : ''} · ${todayStr()}`;
+    btn.disabled = false;
+  };
+
+  // —— 手动关键指标 ——
+  MACRO_GROUPS.forEach(grp => {
+    const card = el(`<div class="card" style="margin-top:16px"><h3>${escapeHtml(grp.title)}</h3></div>`);
+    const scroll = el('<div class="table-scroll"></div>');
+    const rows = grp.items.map(it => {
+      const cur = (m.ind[it.key] || {});
+      return `<tr>
+        <td style="white-space:nowrap"><strong>${escapeHtml(it.name)}</strong>${it.unit ? ' <span style="color:var(--muted)">(' + it.unit + ')</span>' : ''}</td>
+        <td class="num"><input data-mk="${it.key}" value="${cur.value != null ? escapeHtml(String(cur.value)) : ''}" placeholder="填入最新值" style="max-width:120px"/></td>
+        <td class="num" style="color:var(--muted);font-size:12px">${cur.date ? escapeHtml(cur.date) : '—'}</td>
+        <td style="font-size:12px;line-height:1.5"><strong>含义</strong>：${escapeHtml(it.meaning)}<br><strong style="color:var(--accent-ink)">对你组合</strong>：${escapeHtml(it.impact)}<br><strong style="color:var(--amber-ink)">关注</strong>：${escapeHtml(it.watch)} · <a href="${it.src}" target="_blank" rel="noopener" style="color:var(--accent-ink)">官方来源↗</a></td>
+      </tr>`;
+    }).join('');
+    scroll.appendChild(el(`<table><thead><tr><th>指标</th><th class="num">当前值</th><th class="num">更新日期</th><th>说明 / 对你的影响 / 关注信号</th></tr></thead><tbody>${rows}</tbody></table>`));
+    card.appendChild(scroll);
+    app.appendChild(card);
+    scroll.querySelectorAll('[data-mk]').forEach(inp => inp.onchange = () => {
+      const k = inp.dataset.mk, v = inp.value.trim();
+      if (v === '') delete m.ind[k]; else m.ind[k] = { value: v, date: todayStr() };
+      saveState(); render();   // 重绘以刷新信号解读
+    });
+  });
+
+  app.appendChild(el(`<div class="card" style="margin-top:16px"><div class="alert blue"><span class="icon">${icon('info')}</span><div>
+    <strong>为什么手动填、而不是让 AI 自动分析宏观？</strong>因为模型没有实时数据、有训练截止，直接问它"当前美联储/CPI"会自信地编造过时或错误数字——对认真投资是负资产。这里改成：<strong>你填真实数据（每月/每次会议更新一次）→ 工具按固定规则解读对你组合的含义</strong>，透明可复现。若日后你能提供 FRED 等数据源的 API key、且 ECS 可访问，我可以把利率/通胀/美债做成自动拉取。</div></div></div>`));
 };
 
 /* =========================================================================
