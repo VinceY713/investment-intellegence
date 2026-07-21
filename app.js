@@ -1143,6 +1143,48 @@ VIEWS.dashboard = function (app) {
 };
 
 /* 真实相关性卡片：拉历史日K → 实测相关矩阵 + 每股波动/历史最大回撤 + 一键回填 maxDrop */
+// 相关性热力图的确定性解读（无 AI、可复现）：找高相关对、冗余股、最佳分散器、隐藏集中度、行动建议
+function analyzeCorrelation(c, positions) {
+  const out = [];
+  if (!c || !c.matrix || !c.codes || c.codes.length < 2) return out;
+  const n = c.codes.length, names = c.names || c.codes;
+  const wOf = code => { const p = (positions || []).find(x => x.code === code); return p ? num(p.weight) : 0; };
+  // 1 两两相关对排序
+  const pairs = [];
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) { const r = c.matrix[i][j]; if (r != null && isFinite(r)) pairs.push({ i, j, r }); }
+  pairs.sort((a, b) => b.r - a.r);
+  const hi = pairs.filter(p => p.r >= 0.7), mid = pairs.filter(p => p.r >= 0.5 && p.r < 0.7);
+  if (hi.length) {
+    out.push(['red', `发现 ${hi.length} 对<strong>高度同涨同跌（ρ≥0.7）</strong>——这些就是"假分散"的元凶，实际近似<strong>一注</strong>：`]);
+    hi.slice(0, 6).forEach(p => out.push(['pair', `${escapeHtml(names[p.i])} ↔ ${escapeHtml(names[p.j])}　ρ=${p.r.toFixed(2)}（占比 ${wOf(c.codes[p.i]).toFixed(1)}% / ${wOf(c.codes[p.j]).toFixed(1)}%）`]));
+  } else if (mid.length) {
+    out.push(['amber', `无 ρ≥0.7 的对，但有 ${mid.length} 对中度相关（0.5–0.7）：`]);
+    mid.slice(0, 5).forEach(p => out.push(['pair', `${escapeHtml(names[p.i])} ↔ ${escapeHtml(names[p.j])}　ρ=${p.r.toFixed(2)}`]));
+  } else {
+    out.push(['green', '未发现 ρ≥0.5 的高相关对，个股层面分散良好。']);
+  }
+  // 2 冗余度（对其余的平均相关）：最高=最冗余，最低/负=最佳分散器
+  const avg = [];
+  for (let i = 0; i < n; i++) { let s = 0, cnt = 0; for (let j = 0; j < n; j++) if (i !== j && c.matrix[i][j] != null) { s += c.matrix[i][j]; cnt++; } avg.push({ i, a: cnt ? s / cnt : 0 }); }
+  avg.sort((x, y) => y.a - x.a);
+  if (avg.length >= 2) {
+    const worst = avg[0], best = avg[avg.length - 1];
+    out.push(['info', `最"冗余"的一只：<strong>${escapeHtml(names[worst.i])}</strong>（与其余平均相关 ${worst.a.toFixed(2)}）——对分散贡献最小，要精简优先考虑它。`]);
+    if (best.a < 0.35) out.push(['green', `最好的分散器：<strong>${escapeHtml(names[best.i])}</strong>（平均相关 ${best.a.toFixed(2)}）——在压低组合共振，值得保留。`]);
+  }
+  // 3 隐藏集中度：标签 effN vs 相关性 effN
+  const labelEff = Calc.effectiveBets(positions).effN;
+  const corrEff = Calc.corrEffectiveBets(positions, corrResolver(c));
+  if (labelEff && corrEff) out.push([(labelEff - corrEff) >= 0.8 ? 'amber' : 'info', `按因子标签有效持仓数 ${labelEff.toFixed(1)}，按真实相关只剩 <strong>${corrEff.toFixed(1)}</strong>${(labelEff - corrEff) >= 0.8 ? '——差距=被标签掩盖的隐藏集中度' : ''}。`]);
+  // 4 行动建议
+  if (hi.length) {
+    const p = hi[0], wi = wOf(c.codes[p.i]), wj = wOf(c.codes[p.j]);
+    const trim = wi >= wj ? names[p.i] : names[p.j];
+    out.push(['action', `<strong>怎么办</strong>：${escapeHtml(names[p.i])} 与 ${escapeHtml(names[p.j])} 高度重叠，二选一即可；若都想留，把两者合计仓位当"一注"控上限。要精简，先减仓位更大的 <strong>${escapeHtml(trim)}</strong>，或换成与组合低相关的标的，把有效持仓数提上去。`]);
+  }
+  return out;
+}
+
 function renderRealCorrCard(app, positions) {
   const card = el(`<div class="card" style="margin-top:16px"><h3>${icon('globe')} 真实相关性（历史日K）</h3>
     <p class="hint">拉每只持仓约 160 个交易日收盘价，算<strong>实测</strong>两两相关（替代因子先验），并给出各股年化波动与<strong>历史最大回撤</strong>，可一键回填到「最大跌幅」。场外基金无日K，自动回退先验。</p></div>`);
@@ -1170,10 +1212,20 @@ function renderRealCorrCard(app, positions) {
       <td class="num">${st.vol!=null?fmtPct(st.vol,0):'—'}</td>
       <td class="num" style="color:var(--red-ink)">${fmtPct(st.mdd,0)}</td></tr>`).join('');
     const failNote = (c.failed && c.failed.length) ? `<p class="inline-note">${c.failed.length} 只未取到日K（场外基金/代码不支持），这些仍用因子先验：${c.failed.map(f=>escapeHtml(f.name)).join('、')}。</p>` : '';
+    // 智能解读（自动、确定性）
+    const analysis = analyzeCorrelation(c, STATE.positions || []);
+    const anaAlert = (t, m) => {
+      if (t === 'pair') return `<div style="font-size:12px;margin:2px 0 2px 32px;font-family:monospace;color:var(--muted)">· ${m}</div>`;
+      const cls = t === 'red' ? 'red' : t === 'amber' ? 'amber' : t === 'green' ? 'green' : 'blue';
+      const ic = t === 'red' ? icon('danger') : t === 'amber' ? icon('warn') : t === 'green' ? icon('check') : t === 'action' ? icon('target') : icon('info');
+      return `<div class="alert ${cls}" style="margin-top:8px"><span class="icon">${ic}</span><div>${m}</div></div>`;
+    };
+    const anaHtml = analysis.length ? `<h4 style="margin:18px 0 6px">${icon('sparkles')} 智能解读（自动）</h4>` + analysis.map(x => anaAlert(x[0], x[1])).join('') : '';
     out.innerHTML = `
       <p class="inline-note" style="margin-top:6px">数据日期 ${escapeHtml(c.date)} · 颜色越红＝相关性越高（同涨同跌）、越绿＝越低/负相关。</p>
       <div class="table-scroll"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>
-      <div class="table-scroll" style="margin-top:12px"><table>
+      ${anaHtml}
+      <div class="table-scroll" style="margin-top:14px"><table>
         <thead><tr><th>标的</th><th class="num">样本天数</th><th class="num">年化波动</th><th class="num">历史最大回撤</th></tr></thead>
         <tbody>${statRows}</tbody></table></div>
       ${failNote}
