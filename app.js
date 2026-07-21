@@ -133,6 +133,80 @@ function factorCorr(a, b) {
 }
 
 /* -------------------------------------------------------------------------
+   真实相关性引擎（历史日K）—— 拉每只持仓约 160 个交易日收盘价，算真实两两相关、
+   年化波动、历史最大回撤，替代因子先验。数据源：腾讯前复权日K（经 /api/kline 代理）。
+   失败自动回退到因子先验，绝不阻断其它功能。
+   ------------------------------------------------------------------------- */
+// 代码 → 腾讯 K 线符号：A股 sh/sz/bj+代码，美股 us+SYM；OTC 场外基金无日K → null（回退先验）
+function klineSymbol(code) {
+  const c = String(code || '').trim();
+  if (!c) return null;
+  if (isUsCode(c)) return 'us' + c.toUpperCase().replace(/\s+/g, '');
+  if (/^\d{6}$/.test(c)) return detectMarket(c) + c;
+  return null;
+}
+async function fetchKlines(code, count = 160) {
+  const sym = klineSymbol(code);
+  if (!sym) throw new Error('该代码无日K（场外基金/无代码）');
+  const res = await fetch('/api/kline?param=' + encodeURIComponent(sym + ',day,,,' + count + ',qfq'), { cache: 'no-store' });
+  if (!res.ok) throw new Error('接口返回 ' + res.status);
+  const j = await res.json();
+  const node = j && j.data && j.data[sym];
+  const arr = node && (node.qfqday || node.day || node.week || node.qfqweek);
+  if (!Array.isArray(arr) || !arr.length) throw new Error('无K线数据');
+  return arr.map(r => ({ date: r[0], close: parseFloat(r[2]) })).filter(x => isFinite(x.close) && x.close > 0);
+}
+// 日收益率序列 / 皮尔逊相关 / 年化波动 / 历史最大回撤
+function retsOf(closes) { const r = []; for (let i = 1; i < closes.length; i++) if (closes[i - 1] > 0) r.push(closes[i] / closes[i - 1] - 1); return r; }
+function pearson(x, y) {
+  const n = Math.min(x.length, y.length);
+  if (n < 20) return null;                         // 样本过少不给相关，回退先验
+  let sx = 0, sy = 0; for (let i = 0; i < n; i++) { sx += x[i]; sy += y[i]; }
+  const mx = sx / n, my = sy / n;
+  let cov = 0, vx = 0, vy = 0;
+  for (let i = 0; i < n; i++) { const dx = x[i] - mx, dy = y[i] - my; cov += dx * dy; vx += dx * dx; vy += dy * dy; }
+  if (vx <= 0 || vy <= 0) return null;
+  return Math.max(-1, Math.min(1, cov / Math.sqrt(vx * vy)));
+}
+function annVolPct(rets) { if (rets.length < 2) return null; const m = rets.reduce((a, b) => a + b, 0) / rets.length; let v = 0; for (const r of rets) v += (r - m) * (r - m); v /= (rets.length - 1); return Math.sqrt(v * 252) * 100; }
+function histMaxDrawdownPct(closes) { let peak = 0, mdd = 0; for (const c of closes) { if (c > peak) peak = c; if (peak > 0) { const dd = (peak - c) / peak; if (dd > mdd) mdd = dd; } } return mdd * 100; }
+
+// 拉全部持仓日K → 真实相关矩阵 + 每股统计；缓存到 STATE.corrCache
+async function buildRealCorr(positions) {
+  const targets = positions.filter(p => klineSymbol(p.code));
+  if (!targets.length) throw new Error('没有可取日K的持仓（需 A股/美股代码，场外基金不支持）');
+  const fetched = await Promise.all(targets.map(async p => {
+    try { const k = await fetchKlines(p.code); return { p, map: new Map(k.map(x => [x.date, x.close])), closes: k.map(x => x.close), dates: k.map(x => x.date) }; }
+    catch (e) { return { p, err: e.message }; }
+  }));
+  const ok = fetched.filter(f => f.map && f.map.size >= 30);
+  const failed = fetched.filter(f => !f.map).map(f => ({ name: f.p.name, code: f.p.code, err: f.err }));
+  if (!ok.length) throw new Error('全部日K获取失败：' + (failed[0] ? failed[0].err : '未知'));
+  const codes = ok.map(f => f.p.code), index = {}; codes.forEach((c, i) => index[c] = i);
+  const n = ok.length;
+  const matrix = Array.from({ length: n }, () => Array(n).fill(1));
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+    const a = ok[i], b = ok[j];
+    const common = a.dates.filter(d => b.map.has(d));       // 交集日期对齐（A股/美股不同休市日）
+    if (common.length < 25) { matrix[i][j] = matrix[j][i] = null; continue; }
+    const rho = pearson(retsOf(common.map(d => a.map.get(d))), retsOf(common.map(d => b.map.get(d))));
+    matrix[i][j] = matrix[j][i] = (rho == null ? null : rho);
+  }
+  const stats = ok.map(f => ({ code: f.p.code, name: f.p.name, days: f.closes.length, vol: annVolPct(retsOf(f.closes)), mdd: histMaxDrawdownPct(f.closes) }));
+  return { date: todayStr(), codes, index, names: ok.map(f => f.p.name), matrix, stats, failed };
+}
+// 相关性解析器：有缓存则用实测相关，缺失的（场外基金）回退因子先验
+function corrResolver(cache) {
+  if (!cache || !cache.matrix || !cache.index) return null;
+  return (a, b) => {
+    const ia = cache.index[a.c], ib = cache.index[b.c];
+    if (ia == null || ib == null) return factorCorr(a.f, b.f);
+    const v = cache.matrix[ia] && cache.matrix[ia][ib];
+    return (v == null || !isFinite(v)) ? factorCorr(a.f, b.f) : v;
+  };
+}
+
+/* -------------------------------------------------------------------------
    AI 组合诊断（DeepSeek，经服务器 /api/ai-review 代理，密钥不出前端）
    ------------------------------------------------------------------------- */
 const AI_ENDPOINT = '/api/ai-review';
@@ -458,6 +532,7 @@ function buildEmptyState() {
     portfolio: { totalAssets: 0, asOfDate: '', fxRate: FX_DEFAULT },
     snapshots: [],
     forecasts: [],
+    corrCache: null,
   };
 }
 
@@ -469,6 +544,7 @@ function applyStateDefaults(s) {
   s.portfolio = Object.assign({ totalAssets: Math.round(SEED_TOTAL) }, s.portfolio || {});
   s.snapshots = s.snapshots || [];
   s.forecasts = s.forecasts || [];
+  s.corrCache = s.corrCache || null;
   return s;
 }
 
@@ -733,26 +809,28 @@ const Calc = {
   // 相关性调整后的有效持仓数：effN_ρ = 1 / (wᵀ ρ w)，w 归一化权重，ρ 因子相关矩阵。
   // ρ=单位阵(彼此独立)时退化为 1/HHI；ρ 越接近全相关，effN 越小。
   // 与「按标签的有效持仓数」的差距 = 隐藏集中度（多只不同标签、实则同涨同跌）。
-  corrEffectiveBets(positions) {
-    const items = positions.map(p => ({ f: p.factor || '其它', w: Number(p.weight) || 0 })).filter(x => x.w > 0);
+  corrEffectiveBets(positions, corrFn) {
+    const items = positions.map(p => ({ f: p.factor || '其它', c: p.code || '', w: Number(p.weight) || 0 })).filter(x => x.w > 0);
     const tot = items.reduce((s, x) => s + x.w, 0);
     if (tot <= 0) return 0;
+    const rho = corrFn || ((a, b) => factorCorr(a.f, b.f));
     const w = items.map(x => x.w / tot);
     let q = 0;
     for (let i = 0; i < items.length; i++)
       for (let j = 0; j < items.length; j++)
-        q += w[i] * w[j] * (i === j ? 1 : factorCorr(items[i].f, items[j].f));
+        q += w[i] * w[j] * (i === j ? 1 : rho(items[i], items[j]));
     return q > 0 ? Math.min(items.length, 1 / q) : items.length;
   },
 
   // 分散调整后的组合回撤估计：sqrt(ΣΣ wᵢwⱼ ρᵢⱼ ddᵢ ddⱼ)，dd=占比%×最大跌幅%。
   // ρ=1(全相关，危机情形)时退化为线性求和 Σ dd（即最坏情形）；这里给出「现实」下沿。
-  corrDrawdown(positions) {
-    const items = positions.map(p => ({ f: p.factor || '其它', dd: (Number(p.weight) || 0) / 100 * (Number(p.maxDrop) || 0) })).filter(x => x.dd > 0);
+  corrDrawdown(positions, corrFn) {
+    const items = positions.map(p => ({ f: p.factor || '其它', c: p.code || '', dd: (Number(p.weight) || 0) / 100 * (Number(p.maxDrop) || 0) })).filter(x => x.dd > 0);
+    const rho = corrFn || ((a, b) => factorCorr(a.f, b.f));
     let q = 0;
     for (let i = 0; i < items.length; i++)
       for (let j = 0; j < items.length; j++)
-        q += items[i].dd * items[j].dd * (i === j ? 1 : Math.max(0, factorCorr(items[i].f, items[j].f))); // 回撤同向，负相关按0(保守)
+        q += items[i].dd * items[j].dd * (i === j ? 1 : Math.max(0, rho(items[i], items[j]))); // 回撤同向，负相关按0(保守)
     return Math.sqrt(Math.max(0, q));
   },
 
@@ -872,14 +950,17 @@ VIEWS.dashboard = function (app) {
   const target = num(s.equityTargetPct, 20);
   const level = EQUITY_RISK_LEVELS[s.equityRiskLevel] || EQUITY_RISK_LEVELS['进取'];
   const { effN, factorWeights } = Calc.effectiveBets(positions);
-  const corrEffN = Calc.corrEffectiveBets(positions);   // 相关性调整后的有效持仓数（更真实）
+  const corrCache = STATE.corrCache;
+  const corrFn = corrResolver(corrCache);               // 有历史K线缓存则用实测相关，否则 null→因子先验
+  const corrSrc = corrFn ? '实测' : '先验';
+  const corrEffN = Calc.corrEffectiveBets(positions, corrFn);   // 相关性调整后的有效持仓数（更真实）
   const nHoldings = positions.length;
 
   // 弹性仓对全组合的预估最大回撤贡献：
   //  · equityDD = Σ 占比×最大跌幅 = 全相关(危机)最坏情形（保守，用于守门）
   //  · equityDDReal = 分散调整后的现实下沿（sqrt 二次型，因子相关）
   const equityDD = positions.reduce((a, p) => a + Calc.drawdownContribution(num(p.weight), num(p.maxDrop)), 0);
-  const equityDDReal = Calc.corrDrawdown(positions);
+  const equityDDReal = Calc.corrDrawdown(positions, corrFn);
   const ddOk = equityDD <= s.maxDrawdown;
   const usdExp = usdExposureCny();                        // 美元敞口（含汇率风险）
   const totForFx = portfolioTotal();
@@ -922,7 +1003,7 @@ VIEWS.dashboard = function (app) {
       <div class="stat"><div class="label">${icon('coins')} 弹性仓占比</div>
         <div class="value" style="color:${sizeState[0]}">${fmtPct(equityPct,1)}</div>
         <div class="sub">目标 ${target}% · ${sizeState[1]}</div></div>
-      <div class="stat"><div class="label">${icon('target')} 有效持仓数(相关性调整)</div>
+      <div class="stat"><div class="label">${icon('target')} 有效持仓数(${corrSrc}相关)</div>
         <div class="value" style="color:${corrEffN>=3?'var(--green-ink)':(corrEffN>=2?'var(--amber-ink)':'var(--red-ink)')}">${corrEffN?corrEffN.toFixed(1):'—'}</div>
         <div class="sub">名义 ${nHoldings} 只 · 标签口径 ${effN?effN.toFixed(1):'—'}</div></div>
       <div class="stat"><div class="label">${icon('trenddown')} 弹性仓回撤(最坏/现实)</div>
@@ -967,8 +1048,74 @@ VIEWS.dashboard = function (app) {
       <p class="hint">一眼看清弹性仓真正押注的方向与集中度。有效持仓数 ${effN.toFixed(1)}／名义 ${nHoldings}——差距越大，说明"看着分散、实则押一个方向"。</p></div>`);
     pieCard.appendChild(buildPie(factorWeights));
     app.appendChild(pieCard);
+
+    // 真实相关性（历史K线）：拉日K算实测相关矩阵、波动、历史最大回撤
+    renderRealCorrCard(app, positions);
   }
 };
+
+/* 真实相关性卡片：拉历史日K → 实测相关矩阵 + 每股波动/历史最大回撤 + 一键回填 maxDrop */
+function renderRealCorrCard(app, positions) {
+  const card = el(`<div class="card" style="margin-top:16px"><h3>${icon('globe')} 真实相关性（历史日K）</h3>
+    <p class="hint">拉每只持仓约 160 个交易日收盘价，算<strong>实测</strong>两两相关（替代因子先验），并给出各股年化波动与<strong>历史最大回撤</strong>，可一键回填到「最大跌幅」。场外基金无日K，自动回退先验。</p></div>`);
+  const bar = el(`<div class="row" style="gap:8px;flex-wrap:wrap"><button class="btn" id="rc-go" style="flex:0 0 auto">${icon('refresh')} 拉取历史K线·计算真实相关性</button><span id="rc-note" class="inline-note" style="align-self:center"></span></div>`);
+  card.appendChild(bar);
+  const out = el('<div id="rc-out"></div>');
+  card.appendChild(out);
+  app.appendChild(card);
+
+  const cache = STATE.corrCache;
+  const heat = (v) => {
+    if (v == null || !isFinite(v)) return 'var(--surface-soft)';
+    const t = Math.max(0, Math.min(1, (v + 0.2) / 1.2)); // −0.2→0, 1.0→1
+    const r = Math.round(52 + t * (255 - 52)), g = Math.round(199 - t * (199 - 55)), b = Math.round(89 - t * (89 - 95));
+    return `rgba(${r},${g},${b},0.85)`;
+  };
+  const renderCache = (c) => {
+    if (!c || !c.codes || !c.codes.length) { out.innerHTML = ''; return; }
+    const n = c.codes.length;
+    const shortN = c.names.map(nm => (nm || '').slice(0, 4));
+    const head = '<th></th>' + shortN.map(nm => `<th class="num" style="font-size:11px">${escapeHtml(nm)}</th>`).join('');
+    const body = c.matrix.map((row, i) => `<tr><td style="font-size:11px;white-space:nowrap">${escapeHtml(shortN[i])}</td>` +
+      row.map((v, j) => `<td class="num" style="background:${i===j?'var(--surface-soft)':heat(v)};color:${i===j?'var(--muted)':'#fff'};font-size:11px">${i===j?'1.00':(v==null?'—':v.toFixed(2))}</td>`).join('') + '</tr>').join('');
+    const statRows = c.stats.map(st => `<tr><td>${escapeHtml(st.name)}</td><td class="num">${st.days}</td>
+      <td class="num">${st.vol!=null?fmtPct(st.vol,0):'—'}</td>
+      <td class="num" style="color:var(--red-ink)">${fmtPct(st.mdd,0)}</td></tr>`).join('');
+    const failNote = (c.failed && c.failed.length) ? `<p class="inline-note">${c.failed.length} 只未取到日K（场外基金/代码不支持），这些仍用因子先验：${c.failed.map(f=>escapeHtml(f.name)).join('、')}。</p>` : '';
+    out.innerHTML = `
+      <p class="inline-note" style="margin-top:6px">数据日期 ${escapeHtml(c.date)} · 颜色越红＝相关性越高（同涨同跌）、越绿＝越低/负相关。</p>
+      <div class="table-scroll"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>
+      <div class="table-scroll" style="margin-top:12px"><table>
+        <thead><tr><th>标的</th><th class="num">样本天数</th><th class="num">年化波动</th><th class="num">历史最大回撤</th></tr></thead>
+        <tbody>${statRows}</tbody></table></div>
+      ${failNote}
+      <div class="row" style="gap:8px;margin-top:10px"><button class="btn secondary" id="rc-fill" style="flex:0 0 auto">${icon('download')} 用历史最大回撤回填各股「最大跌幅」</button></div>
+      <p class="inline-note">回填后「③ 回撤控制」「股票体检」的回撤口径将基于真实历史，而非手填估计。回填只覆盖能取到日K的标的。</p>`;
+    const fill = out.querySelector('#rc-fill');
+    if (fill) fill.onclick = () => {
+      let cnt = 0;
+      c.stats.forEach(st => {
+        const p = (STATE.positions || []).find(x => x.code === st.code);
+        if (p && st.mdd > 0) { p.maxDrop = Math.round(st.mdd); cnt++; }
+      });
+      saveState(); alert(`已用历史最大回撤回填 ${cnt} 只持仓的「最大跌幅」。`); render();
+    };
+  };
+  renderCache(cache);
+
+  bar.querySelector('#rc-go').onclick = async () => {
+    const btn = bar.querySelector('#rc-go'), note = bar.querySelector('#rc-note');
+    btn.disabled = true; note.innerHTML = icon('refresh', 'spin') + ' 拉取历史K线中，约 5–20 秒…';
+    try {
+      const c = await buildRealCorr(STATE.positions || []);
+      STATE.corrCache = c; saveState();
+      note.innerHTML = `${icon('check')} 已更新（${c.codes.length} 只，数据日期 ${c.date}）`;
+      renderCache(c);
+    } catch (e) {
+      note.innerHTML = `${icon('warn')} 获取失败：${escapeHtml(e.message)}——已保留因子先验，不影响其它功能`;
+    } finally { btn.disabled = false; }
+  };
+}
 
 /* SVG 饼图 + 图例 */
 function buildPie(factorWeights, opts) {
