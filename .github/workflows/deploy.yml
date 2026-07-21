@@ -179,6 +179,26 @@ jobs:
                     add_header Cache-Control "no-store";
                 }
 
+                # 东方财富宏观数据代理：/api/emmacro?reportName=RPT_ECONOMY_CPI&... → 数据中心 JSON
+                # 免 key、HTTP/1.1 可代理；用于中国 CPI/PMI/LPR 等已发布宏观数据自动拉取
+                location = /api/emmacro {
+                    proxy_pass https://datacenter-web.eastmoney.com/api/data/v1/get$is_args$args;
+                    proxy_http_version 1.1;
+                    proxy_set_header Connection "";
+                    proxy_set_header Host datacenter-web.eastmoney.com;
+                    proxy_set_header Referer https://datacenter.eastmoney.com/;
+                    proxy_set_header User-Agent "Mozilla/5.0";
+                    proxy_set_header Accept "*/*";
+                    proxy_ssl_server_name on;
+                    proxy_ssl_name datacenter-web.eastmoney.com;
+                    proxy_ssl_protocols TLSv1.2 TLSv1.3;
+                    resolver 119.29.29.29 223.5.5.5 valid=300s;
+                    resolver_timeout 5s;
+                    proxy_connect_timeout 10s;
+                    proxy_read_timeout 15s;
+                    add_header Cache-Control "no-store";
+                }
+
                 # 黄金代理：/api/gold → 腾讯伦敦金 hf_XAU（美元/盎司，与股票同源、HTTP/1.1 稳），前端 ×汇率÷31.1 折人民币/克
                 # （东方财富 push2 只认 HTTP/2，nginx 无法代理，故用腾讯源）
                 location = /api/gold {

@@ -3967,13 +3967,15 @@ VIEWS.portfolio = function (app) {
    确定性的 regime 信号解读(不调用 AI、可复现、不臆造)。
    ========================================================================= */
 // 自动刷新的"市场温度"标的（用现有行情代理；指数用显式腾讯符号）
+// fmt：'cn'=A股指数走腾讯；'gb'=新浪 gb_$ 美股指数([1]价/[2]涨跌%)；'int'=新浪 int_([1]价/[3]涨跌%)
 const MACRO_MARKET = [
-  { key: 'sh',    name: '上证指数',   sym: 'sh000001', us: false },
-  { key: 'hs300', name: '沪深300',    sym: 'sh000300', us: false },
-  { key: 'cyb',   name: '创业板指',   sym: 'sz399006', us: false },
-  { key: 'kc50',  name: '科创50',     sym: 'sh000688', us: false },
-  { key: 'ndx',   name: '纳斯达克',   sym: 'usIXIC',   us: true  },
-  { key: 'spx',   name: '标普500',    sym: 'usINX',    us: true  },
+  { key: 'sh',    name: '上证指数', sym: 'sh000001', fmt: 'cn' },
+  { key: 'hs300', name: '沪深300',  sym: 'sh000300', fmt: 'cn' },
+  { key: 'cyb',   name: '创业板指', sym: 'sz399006', fmt: 'cn' },
+  { key: 'kc50',  name: '科创50',   sym: 'sh000688', fmt: 'cn' },
+  { key: 'ndx',   name: '纳斯达克', sym: 'gb_$ixic', fmt: 'gb' },
+  { key: 'spx',   name: '标普500',  sym: 'gb_$inx',  fmt: 'gb' },
+  { key: 'hsi',   name: '恒生指数', sym: 'int_hangseng', fmt: 'int' },
 ];
 // 手动维护的关键宏观指标（分组）——每项：含义 / 对你组合(人民币本位·A股+美股+黄金+美元资产)的影响 / 关注信号 / 来源
 const MACRO_GROUPS = [
@@ -4001,12 +4003,66 @@ const MACRO_GROUPS = [
   ]},
 ];
 
-async function fetchIndexQuote(sym, us) {
-  try { return parseTencent(await getQuoteText('/api/quote?code=' + encodeURIComponent(sym)), { us }); }
-  catch (e) {
-    const sinaSym = us ? sym.toLowerCase().replace(/^us/, 'gb_') : sym;
-    return parseSina(await getQuoteText('/api/quote_sina?code=' + encodeURIComponent(sinaSym)), { us });
+// 取新浪 hq.sinajs.cn 一行报价，逗号切分为字段数组
+async function sinaFields(sym) {
+  const t = await getQuoteText('/api/quote_sina?code=' + encodeURIComponent(sym));
+  const m = t.match(/"([^"]*)"/);
+  if (!m || !m[1]) throw new Error('无数据');
+  return m[1].split(',');
+}
+async function fetchIndexQuote(item) {
+  if (item.fmt === 'cn') return parseTencent(await getQuoteText('/api/quote?code=' + encodeURIComponent(item.sym)), { us: false });
+  const f = await sinaFields(item.sym);
+  const price = parseFloat(f[1]);
+  const changePct = item.fmt === 'int' ? parseFloat(f[3]) : parseFloat(f[2]);   // gb_$ 涨跌%在[2]，int_在[3]
+  if (!isFinite(price)) throw new Error('解析失败');
+  return { name: f[0], price, changePct: isFinite(changePct) ? changePct : null };
+}
+
+/* -------------------------------------------------------------------------
+   宏观自动拉取（试验）：免 key、境内可达的数据源。市场行情/DXY/VIX/美债走新浪(复用
+   /api/quote_sina)；中国 CPI/PMI/LPR 走东财数据中心(/api/emmacro)。部分符号需真机验证，
+   拉不到就保留手填、绝不覆盖为空。US CPI/失业/联邦利率暂无可靠免 key 源，保持手填。
+   ------------------------------------------------------------------------- */
+const MACRO_AUTO = [
+  { key: 'dxy',    label: '美元指数',   kind: 'sina', sym: 'DINIW',    field: 1 },
+  { key: 'vix',    label: 'VIX',        kind: 'sina', sym: 'gb_$vix',  field: 1 },
+  { key: 'ust10',  label: '美债10Y',    kind: 'sina', sym: 'gb_$tnx',  field: 1, div: 10 },  // ^TNX = 10Y×10
+  { key: 'cnCPI',  label: '中国CPI',    kind: 'em', report: 'RPT_ECONOMY_CPI', sort: 'REPORT_DATE', pick: ['NATIONAL_SAME'] },
+  { key: 'cnPMI',  label: '中国PMI',    kind: 'em', report: 'RPT_ECONOMY_PMI', sort: 'REPORT_DATE', pick: ['MAKE_INDEX'] },
+  { key: 'cnLPR1', label: 'LPR 1年',    kind: 'em', report: 'RPTA_WEB_RATE', sort: 'TRADE_DATE', pick: ['LPR1Y', 'LPR_1Y', 'LPR1', 'LPR_1'] },
+  { key: 'cnLPR5', label: 'LPR 5年',    kind: 'em', report: 'RPTA_WEB_RATE', sort: 'TRADE_DATE', pick: ['LPR5Y', 'LPR_5Y', 'LPR5', 'LPR_5'] },
+];
+async function fetchEmMacro(report, sort) {
+  const url = '/api/emmacro?reportName=' + encodeURIComponent(report) +
+    '&columns=ALL&pageSize=1&sortColumns=' + encodeURIComponent(sort || '') +
+    '&sortTypes=-1&source=WEB&client=WEB';
+  const res = await fetch(url, { cache: 'no-store' });
+  if (!res.ok) throw new Error('接口 ' + res.status);
+  const j = await res.json();
+  const data = j && j.result && j.result.data;
+  if (!Array.isArray(data) || !data.length) throw new Error('无数据');
+  return data[0];
+}
+async function autoPullMacro() {
+  const m = STATE.macro; m.market = m.market || {}; m.ind = m.ind || {};
+  const detail = []; let ok = 0, fail = 0;
+  // 市场温度（指数）
+  await Promise.all(MACRO_MARKET.map(async it => {
+    try { const q = await fetchIndexQuote(it); if (isFinite(q.price)) { m.market[it.key] = { price: q.price, changePct: q.changePct, date: todayStr() }; } } catch (e) { /* 保留旧值 */ }
+  }));
+  // 宏观指标（逐项，失败不覆盖）
+  for (const a of MACRO_AUTO) {
+    try {
+      let v = null;
+      if (a.kind === 'sina') { const f = await sinaFields(a.sym); v = parseFloat(f[a.field]); if (a.div) v = v / a.div; }
+      else if (a.kind === 'em') { const row = await fetchEmMacro(a.report, a.sort); for (const key of a.pick) { const x = parseFloat(row[key]); if (isFinite(x)) { v = x; break; } } }
+      if (v != null && isFinite(v)) { m.ind[a.key] = { value: +v.toFixed(2), date: todayStr() }; ok++; detail.push(a.label + '✓'); }
+      else { fail++; detail.push(a.label + '✗'); }
+    } catch (e) { fail++; detail.push(a.label + '✗'); }
   }
+  m.updatedAt = todayStr(); saveState();
+  return { ok, fail, detail };
 }
 
 // 确定性 regime 信号：读已填指标，输出对「你这种组合」的含义。无 AI、可复现、不臆造。
@@ -4062,7 +4118,7 @@ VIEWS.macro = function (app) {
 
   // —— 市场温度（自动）——
   const mkCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('chart')} 市场温度（可自动刷新）</h3></div>`);
-  const mkBar = el(`<div class="row" style="gap:8px;flex-wrap:wrap"><button class="btn" id="mk-go" style="flex:0 0 auto">${icon('refresh')} 刷新指数行情</button><span id="mk-note" class="inline-note" style="align-self:center">${m.updatedAt ? '上次更新 ' + escapeHtml(m.updatedAt) : '点刷新拉取最新指数点位'}</span></div>`);
+  const mkBar = el(`<div class="row" style="gap:8px;flex-wrap:wrap"><button class="btn" id="mk-go" style="flex:0 0 auto">${icon('refresh')} 刷新指数行情</button><button class="btn secondary" id="mk-auto" style="flex:0 0 auto">${icon('sparkles')} 自动拉取宏观（试验）</button><span id="mk-note" class="inline-note" style="align-self:center">${m.updatedAt ? '上次更新 ' + escapeHtml(m.updatedAt) : '点刷新拉取最新指数点位'}</span></div>`);
   mkCard.appendChild(mkBar);
   const mkGrid = el('<div class="stat-grid" style="margin-top:12px"></div>');
   const renderMarket = () => {
@@ -4088,12 +4144,25 @@ VIEWS.macro = function (app) {
     btn.disabled = true; note.innerHTML = icon('refresh', 'spin') + ' 拉取中…';
     let ok = 0, fail = 0;
     await Promise.all(MACRO_MARKET.map(async it => {
-      try { const q = await fetchIndexQuote(it.sym, it.us); m.market[it.key] = { price: q.price, changePct: q.changePct, date: todayStr() }; ok++; }
+      try { const q = await fetchIndexQuote(it); if (isFinite(q.price)) { m.market[it.key] = { price: q.price, changePct: q.changePct, date: todayStr() }; ok++; } else fail++; }
       catch (e) { fail++; }
     }));
     m.updatedAt = todayStr(); saveState(); renderMarket();
     note.innerHTML = `${icon('check')} 已更新 ${ok} 项${fail ? '（' + fail + ' 项失败，多为境外指数被源限制，可手动参考）' : ''} · ${todayStr()}`;
     btn.disabled = false;
+  };
+
+  // 自动拉取宏观（试验）：DXY/VIX/美债走新浪、中国CPI/PMI/LPR走东财；拉到的写入指标卡并触发信号
+  mkBar.querySelector('#mk-auto').onclick = async () => {
+    const btn = mkBar.querySelector('#mk-auto'), note = mkBar.querySelector('#mk-note');
+    btn.disabled = true; note.innerHTML = icon('refresh', 'spin') + ' 自动拉取中（约 5–15 秒）…';
+    try {
+      const r = await autoPullMacro();
+      note.innerHTML = `${icon(r.ok ? 'check' : 'warn')} 自动拉取：成功 ${r.ok} / 失败 ${r.fail} 项 · 明细：${escapeHtml(r.detail.join(' '))}${r.fail ? '（失败项多为符号需真机核对，已保留手填，可把失败项发我修）' : ''}`;
+      render();   // 重绘：填入的指标 + 触发信号解读
+    } catch (e) {
+      note.innerHTML = `${icon('warn')} 自动拉取失败：${escapeHtml(e.message)}——可继续手填`;
+    } finally { btn.disabled = false; }
   };
 
   // —— 手动关键指标 ——
@@ -4120,7 +4189,7 @@ VIEWS.macro = function (app) {
   });
 
   app.appendChild(el(`<div class="card" style="margin-top:16px"><div class="alert blue"><span class="icon">${icon('info')}</span><div>
-    <strong>为什么手动填、而不是让 AI 自动分析宏观？</strong>因为模型没有实时数据、有训练截止，直接问它"当前美联储/CPI"会自信地编造过时或错误数字——对认真投资是负资产。这里改成：<strong>你填真实数据（每月/每次会议更新一次）→ 工具按固定规则解读对你组合的含义</strong>，透明可复现。若日后你能提供 FRED 等数据源的 API key、且 ECS 可访问，我可以把利率/通胀/美债做成自动拉取。</div></div></div>`));
+    <strong>数据从哪来？</strong>市场行情/美元指数/VIX/美债走<strong>新浪</strong>、中国 CPI/PMI/LPR 走<strong>东方财富</strong>（均免 key、境内可达）——点「自动拉取宏观」一键填入。<strong>美国 CPI/失业率/联邦利率暂无可靠免 key 源，保持手填</strong>（每月更新一次即可，附了官方链接）。<br><strong>为什么不让 AI 自动"分析"宏观？</strong>因为模型没有实时数据、有训练截止，直接问它"当前美联储/CPI"会自信地编造过时或错误数字——对认真投资是负资产。所以这里是<strong>拉真实数据 → 工具按固定规则解读</strong>，透明可复现。<br><span style="color:var(--muted)">注：自动拉取的部分符号需真机核对，失败项会显示明细并保留手填；把失败项发我，我按你 ECS 的实际返回校准。</span></div></div></div>`));
 };
 
 /* =========================================================================
