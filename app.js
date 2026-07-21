@@ -1308,7 +1308,9 @@ VIEWS.positions = function (app) {
     } else {
       STATE.positions.push(pos);
     }
-    // 持仓若与「投资组合」某资产同代码，同步更新该资产（否则渲染时会被资产回填覆盖，编辑不生效）
+    // 持仓与「投资组合」同代码资产双向一致：
+    //  · 已存在该资产 → 同步更新（否则渲染时会被资产回填覆盖，编辑不生效）
+    //  · 新持仓且投资组合里没有 → 自动创建对应股票资产，出现在首页「投资组合」
     if (pos.code) {
       const fx = currentFx();
       const a = (STATE.assets || []).find(x => x.code === pos.code);
@@ -1319,6 +1321,23 @@ VIEWS.positions = function (app) {
         a.lastPx = px;
         if (cost > 0) a.pnl = Math.round(shares * (px - cost) * (a.currency === 'USD' ? fx : 1) * 100) / 100;
         a.cny = Math.round(assetCny(a, fx));
+      } else if (!a && !editId && shares > 0 && px > 0) {
+        const isUs = isUsCode(pos.code);
+        const na = {
+          id: uid(),
+          platform: isUs ? '美股券商' : '股票账户',
+          category: isUs ? '美股股票' : 'A股股票',
+          name: pos.name,
+          code: pos.code,
+          currency: isUs ? 'USD' : 'CNY',
+          shares,
+          lastPx: px,
+          amount: Math.round(shares * px * 100) / 100,
+          pnl: cost > 0 ? Math.round(shares * (px - cost) * (isUs ? fx : 1) * 100) / 100 : 0,
+          note: '由「持仓」录入自动创建，如为基金/其它可在此改类别',
+        };
+        na.cny = Math.round(assetCny(na, fx));
+        (STATE.assets = STATE.assets || []).push(na);
       }
     }
     // 持股数变动 → 现金自动结算：差额为正（净卖出）= 盈余计入现金池；
