@@ -2367,29 +2367,54 @@ const ROLE_BAND = { core: [8, 30], theme: [3, 12] };
 // 高分段无分辨率——AI 的 5 档估计一旦在 EV=0 两侧摆动，评分就会剧烈跳变。这里改用 tanh 压缩。
 // 组合健康分（确定性、可复现）：由代码按明确规则算出，AI 只负责解释——
 // 取代原来"让 LLM 每次凭空发明一个不稳定的分数"。0–100，越高越健康。
+// 分级评分：每个维度按"离理想有多远"给 0..满分的连续分（不是"没突破阈值就满分"）。
+// 这样结构不错但不完美的组合落在 75–90，而不是动辄 100——100 分几乎不该出现。
 function computePortfolioHealth(m) {
-  let score = 100;
-  const rows = [];
   const liqFloor = num(m.cashFloor, 10);
-  // 1 流动性（可用现金，已排除锁定理财/定存）
-  if (m.liqPct < liqFloor) { score -= Math.min(22, (liqFloor - m.liqPct) * 1.6); rows.push(['bad', '流动性', `可用现金 ${m.liqPct.toFixed(1)}% < 下限 ${liqFloor}%——回调加仓/应急能力不足`]); }
-  else rows.push(['ok', '流动性', `可用现金 ${m.liqPct.toFixed(1)}% ≥ 下限 ${liqFloor}%`]);
-  // 2 大类集中（最大大类占比）
-  if (m.maxBigPct > 70) { score -= Math.min(20, (m.maxBigPct - 70) * 0.8); rows.push(['bad', '大类集中', `最大单一大类占 ${m.maxBigPct.toFixed(0)}% > 70%——大类分散不足`]); }
-  else rows.push(['ok', '大类均衡', `最大单一大类占 ${m.maxBigPct.toFixed(0)}%`]);
-  // 3 股票子组合真实分散
-  if (m.nStocks >= 3 && m.corrEffN > 0 && m.corrEffN < 2) { score -= Math.min(15, (2 - m.corrEffN) * 10); rows.push(['bad', '股票分散', `相关性有效持仓数仅 ${m.corrEffN.toFixed(1)}（${m.corrSrc}）——多只同涨同跌`]); }
-  else if (m.nStocks > 0) rows.push(['ok', '股票分散', `相关性有效持仓数 ${m.corrEffN ? m.corrEffN.toFixed(1) : '—'}（${m.corrSrc}）`]);
-  // 4 回撤敞口
-  if (m.equityDD > m.maxDD) { score -= Math.min(20, (m.equityDD - m.maxDD) / Math.max(1, m.maxDD) * 30); rows.push(['bad', '回撤敞口', `弹性仓回撤贡献 ${m.equityDD.toFixed(1)}% > 承受线 ${m.maxDD}%`]); }
-  else rows.push(['ok', '回撤敞口', `弹性仓回撤贡献 ${m.equityDD.toFixed(1)}% ≤ ${m.maxDD}%`]);
-  // 5 因子集中
-  if (m.nStocks > 0 && m.maxFactorW * 100 > m.factorCap) { score -= Math.min(15, (m.maxFactorW * 100 - m.factorCap) * 0.5); rows.push(['bad', '因子集中', `最大因子占弹性仓 ${(m.maxFactorW * 100).toFixed(0)}% > ${m.factorCap}%`]); }
-  else if (m.nStocks > 0) rows.push(['ok', '因子集中', `最大因子 ${(m.maxFactorW * 100).toFixed(0)}% ≤ ${m.factorCap}%`]);
-  // 6 币种敞口（美元）——偏高提示汇率风险
-  if (m.usdPct > 60) { score -= Math.min(10, (m.usdPct - 60) * 0.3); rows.push(['warn', '币种敞口', `美元敞口 ${m.usdPct.toFixed(0)}% 偏高，人民币口径汇率风险集中`]); }
-  else rows.push(['ok', '币种敞口', `美元敞口 ${m.usdPct.toFixed(0)}%`]);
-  return { score: Math.max(5, Math.min(100, Math.round(score))), rows };
+  const c01 = x => Math.max(0, Math.min(1, x));
+  const rows = [];
+  let total = 0;
+  const add = (label, max, frac, detail) => {
+    const earned = Math.max(0, Math.min(max, max * frac));
+    total += earned;
+    const st = frac >= 0.85 ? 'ok' : frac >= 0.6 ? 'warn' : 'bad';
+    rows.push([st, label, `${detail}　—　得分 ${earned.toFixed(0)}/${max}`]);
+  };
+
+  // 1 流动性(15)：低于下限重扣；下限~40% 满分；>40% 现金拖累轻扣
+  let liqFrac;
+  if (m.liqPct < liqFloor) liqFrac = c01(m.liqPct / liqFloor) * 0.7;
+  else if (m.liqPct <= 40) liqFrac = 1;
+  else liqFrac = Math.max(0.6, 1 - (m.liqPct - 40) / 100);
+  add('流动性', 15, liqFrac, `可用现金 ${m.liqPct.toFixed(1)}%（下限 ${liqFloor}%，理想 ${liqFloor}–40%${m.liqPct>40?'；偏高有现金拖累':''}）`);
+
+  // 2 大类均衡(20)：最大大类 ≤40% 满分，越集中越低，85% 归零
+  add('大类均衡', 20, c01(1 - Math.max(0, m.maxBigPct - 40) / 45), `最大单一大类占 ${m.maxBigPct.toFixed(0)}%（理想 ≤40%）`);
+
+  // 3 股票分散(15)：相关性有效持仓数 / 目标 min(名义数,4)
+  if (m.nStocks > 0) {
+    const target = Math.min(Math.max(m.nStocks, 1), 4);
+    add('股票分散', 15, c01(m.corrEffN / target), `相关性有效持仓数 ${m.corrEffN?m.corrEffN.toFixed(1):'—'}（${m.corrSrc}，目标 ≥${target}）`);
+  } else { total += 15; rows.push(['ok', '股票分散', '无个股，不适用　—　得分 15/15']); }
+
+  // 4 回撤敞口(20)：预算用量 ≤50% 满分，用满(100%)→0.3，≥120% 归零
+  const usage = m.maxDD > 0 ? m.equityDD / m.maxDD : 0;
+  add('回撤敞口', 20, c01(1 - Math.max(0, usage - 0.5) / 0.7), `弹性仓回撤贡献 ${m.equityDD.toFixed(1)}% / 承受 ${m.maxDD}%（用了 ${(usage*100).toFixed(0)}% 预算，理想 ≤50%）`);
+
+  // 5 因子集中(15)：最大因子 ≤25% 满分，65% 归零
+  if (m.nStocks > 0) {
+    add('因子集中', 15, c01(1 - Math.max(0, m.maxFactorW*100 - 25) / 40), `最大因子占弹性仓 ${(m.maxFactorW*100).toFixed(0)}%（理想 ≤25%）`);
+  } else { total += 15; rows.push(['ok', '因子集中', '无个股，不适用　—　得分 15/15']); }
+
+  // 6 币种敞口(15)：适度美元=分散(10–45% 满分)；过高 FX 集中；过低缺跨币种分散
+  let curFrac;
+  if (m.usdPct >= 10 && m.usdPct <= 45) curFrac = 1;
+  else if (m.usdPct > 45) curFrac = c01(1 - (m.usdPct - 45) / 45);
+  else curFrac = c01(0.7 + m.usdPct / 10 * 0.3);
+  add('币种敞口', 15, curFrac, `美元敞口 ${m.usdPct.toFixed(0)}%（理想 10–45%${m.usdPct>45?'；偏高汇率集中':m.usdPct<10?'；跨币种分散不足':''}）`);
+
+  // 上限 98：满分几乎不存在，避免"100 分"这种不可信的极端
+  return { score: Math.max(5, Math.min(98, Math.round(total))), rows };
 }
 
 function betScore(ev, b, win) {
@@ -3913,7 +3938,8 @@ VIEWS.portfolio = function (app) {
   const health = computePortfolioHealth({ cashFloor: s.cashFloor, liqPct, maxBigPct, corrEffN, corrSrc, nStocks, equityDD, maxDD: num(s.maxDrawdown, 15), maxFactorW, factorCap: level.factor, usdPct });
 
   // —— 确定性健康分卡片（规则算出、可复现，不依赖 AI）——
-  const healthCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('gauge')} 组合健康分（客观规则算出 · 非 AI 猜测 · 可复现）</h3></div>`);
+  const healthCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('gauge')} 组合健康分（客观规则算出 · 非 AI 猜测 · 可复现）</h3>
+    <p class="hint">每个维度按"离理想有多远"打分（不是"没超阈值就满分"）。<strong>满分近乎不存在，80+ 已属结构良好</strong>；黄色=良好但有优化空间、红色=需处理。</p></div>`);
   healthCard.appendChild(el(`<div class="metric-row"><span class="k">健康分（越高越健康）</span><span class="v" style="font-size:22px;color:${health.score>=70?'var(--green-ink)':health.score>=50?'var(--amber-ink)':'var(--red-ink)'}">${health.score}<span style="font-size:13px;color:var(--muted)"> /100</span></span></div>`));
   health.rows.forEach(([st, label, detail]) => healthCard.appendChild(el(`<div class="alert ${st==='bad'?'red':st==='warn'?'amber':'green'}" style="margin-top:8px"><span class="icon">${st==='bad'?icon('danger'):st==='warn'?icon('warn'):icon('check')}</span><div><strong>${label}</strong>：${escapeHtml(detail)}</div></div>`)));
   app.appendChild(healthCard);
