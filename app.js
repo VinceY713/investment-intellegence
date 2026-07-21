@@ -4299,13 +4299,14 @@ VIEWS.macro = function (app) {
 
   // —— 自动拉取诊断（默认折叠，省地方；失败项的原始返回便于校准）——
   if (m.lastPull && Array.isArray(m.lastPull.diag) && m.lastPull.diag.length) {
+    // 合并：我的默认折叠(<details>) + 第三方的手机端 stack-mobile（窄屏逐行卡片）
     const okN = m.lastPull.diag.filter(d => d.ok).length, failN = m.lastPull.diag.length - okN;
     const rows = m.lastPull.diag.map(d => `<tr><td style="white-space:nowrap">${escapeHtml(d.label)}</td><td>${d.ok ? '<span class="pill green">成功</span>' : '<span class="pill red">失败</span>'}</td><td style="font-size:11px;font-family:monospace;word-break:break-all">${escapeHtml(d.raw)}</td></tr>`).join('');
     const dcard = el(`<div class="card" style="margin-top:12px;padding:10px 16px">
-      <details${failN ? '' : ''}>
+      <details>
         <summary style="cursor:pointer;font-weight:600;list-style:revert">${icon('search')} 自动拉取诊断（${escapeHtml(m.lastPull.date)} · 成功 ${okN} / 失败 ${failN}）<span style="color:var(--muted);font-weight:400;font-size:12px"> — 点击展开</span></summary>
         <p class="hint" style="margin-top:8px">失败项的<strong>原始返回</strong>在这里；把它截图发我可精确校准符号/参数。</p>
-        <div class="table-scroll"><table><thead><tr><th>指标</th><th>结果</th><th>原始返回 / 值</th></tr></thead><tbody>${rows}</tbody></table></div>
+        <div class="table-scroll"><table class="stack-mobile"><thead><tr><th>指标</th><th>结果</th><th>原始返回 / 值</th></tr></thead><tbody>${rows}</tbody></table></div>
       </details></div>`);
     app.appendChild(dcard);
   }
@@ -4323,7 +4324,7 @@ VIEWS.macro = function (app) {
         <td style="font-size:12px;line-height:1.5"><strong>含义</strong>：${escapeHtml(it.meaning)}<br><strong style="color:var(--accent-ink)">对你组合</strong>：${escapeHtml(it.impact)}<br><strong style="color:var(--amber-ink)">关注</strong>：${escapeHtml(it.watch)} · <a href="${it.src}" target="_blank" rel="noopener" style="color:var(--accent-ink)">官方来源↗</a></td>
       </tr>`;
     }).join('');
-    scroll.appendChild(el(`<table><thead><tr><th>指标</th><th class="num">当前值</th><th class="num">更新日期</th><th>说明 / 对你的影响 / 关注信号</th></tr></thead><tbody>${rows}</tbody></table>`));
+    scroll.appendChild(el(`<table class="stack-mobile"><thead><tr><th>指标</th><th class="num">当前值</th><th class="num">更新日期</th><th>说明 / 对你的影响 / 关注信号</th></tr></thead><tbody>${rows}</tbody></table>`));
     card.appendChild(scroll);
     app.appendChild(card);
     scroll.querySelectorAll('[data-mk]').forEach(inp => inp.onchange = () => {
