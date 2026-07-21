@@ -1823,8 +1823,9 @@ VIEWS.kelly = function (app) {
     evalBtns.forEach(b => b.disabled = true);
     out.innerHTML = '<div class="inline-note" style="margin-top:10px">' + icon('refresh', 'spin') + ' 正在请求 DeepSeek 评估「' + escapeHtml(p.name) + '」，约 10–30 秒…</div>';
     try {
-      // 会话内缓存：同一标的（同日）重复评估直接复用，保证结果完全一致（消除“每次差很多”）
-      const cacheKey = ((p.code || p.name || '').toLowerCase()) + '|' + todayStr();
+      // 会话内缓存：键随「真正影响评估的输入」变化（代码+日期+因子+趋势），
+      // 不含 maxDrop/浮盈亏/仓位——这些不该影响标的自身的下注质量评分，避免“回填回撤数据后评分突变”。
+      const cacheKey = ((p.code || p.name || '').toLowerCase()) + '|' + todayStr() + '|' + (p.factor || '') + '|' + (p.trend || '');
       let cached = KELLY_EVAL_CACHE[cacheKey], win, up, down, bulls, bears, note, fromCache = false;
       if (cached) {
         ({ win, up, down, bulls, bears, note } = cached); fromCache = true;
@@ -1837,9 +1838,10 @@ VIEWS.kelly = function (app) {
           + '只输出一个 JSON 对象，不要任何多余文字、解释或代码块标记。格式：'
           + '{"winRate":50,"upside":35,"downside":25,"bulls":["客观看多理由1","理由2"],"bears":["客观看空理由1","理由2"],"note":"一句话结论"}';
         const user = `标的：${p.name}（代码 ${p.code || '无'}）\n`
-          + `底层驱动因子：${p.factor}；用户标注趋势：${p.trend || '未知'}；当前浮盈亏：${num(p.pnl).toFixed(1)}%；`
-          + `用户预估最大跌幅：${num(p.maxDrop) || '未填'}%；当前占总资产：${num(p.weight).toFixed(2)}%。\n`
-          + `请给出胜率(winRate)、上涨空间(upside)、下跌空间(downside)与各 2-4 条客观多空理由。`;
+          + `底层驱动因子：${p.factor}；当前趋势：${p.trend || '未知'}。\n`
+          + `请仅基于该标的自身的基本面/行业/估值/趋势评估未来 6–12 个月，`
+          + `不要参考任何持仓成本、浮盈亏、仓位或用户填写的最大跌幅（这些与标的胜率无关）。`
+          + `给出胜率(winRate)、上涨空间(upside)、下跌空间(downside)与各 2-4 条客观多空理由。`;
         // 温度 0 + 5 分桶：把 AI 细小波动吸收掉，稳定评分与凯利结果
         const j = await aiChatJSON(sys, user, { temperature: 0 });
         const round5 = x => Math.round(num(x) / 5) * 5;
@@ -1907,6 +1909,7 @@ VIEWS.kelly = function (app) {
         ${advice}
         ${caveat}
         <div class="alert blue" style="margin-top:10px"><span class="icon">${icon('info')}</span><div><strong>凯利对胜率极敏感</strong>：胜率仅差 10 个点，满凯利从 ${(f*100).toFixed(0)}% 变成 ${(fLow*100).toFixed(0)}%。这就是为什么用<strong>${fracTxt}凯利 + 单股上限</strong>兜底——参数一定有误差，宁可小注。股票版凯利已修正原「二元赌注」把下跌当全损的错误。</div></div>
+        <div class="alert amber" style="margin-top:10px"><span class="icon">${icon('warn')}</span><div><strong>评分来自 AI 对胜率/空间的主观估计，不是事实</strong>：同一标的换一天或换趋势标注可能给出不同数值，评分随之波动——这是 AI 估计的固有不确定性，请把它当“参考锚”而非“精确分”。评分<strong>只由标的自身评估决定，已与你的最大跌幅/浮盈亏/仓位解耦</strong>（回填历史回撤不会再改变它）。想知道你的胜率判断到底准不准，用「记录此判断」+「复盘校准」长期检验。</div></div>
         <div class="grid grid-2" style="margin-top:12px">
           <div><div class="mini-label" style="color:var(--green-ink)">AI 看多理由</div>${bulls.map(t => `<p style="margin:4px 0;font-size:13px">· ${escapeHtml(t)}</p>`).join('') || '<p class="inline-note">无</p>'}</div>
           <div><div class="mini-label" style="color:var(--red-ink)">AI 看空理由</div>${bears.map(t => `<p style="margin:4px 0;font-size:13px">· ${escapeHtml(t)}</p>`).join('') || '<p class="inline-note">无</p>'}</div>
@@ -1928,9 +1931,9 @@ VIEWS.kelly = function (app) {
         recBtn.outerHTML = `<span class="pill green">已记录 · 到「复盘校准」页回填结果</span>`;
       };
 
-      // “重新评估”：清掉该标的缓存后重跑（用于确需刷新 AI 观点时）
+      // “重新评估”：清掉该标的缓存后重跑（键须与上方 cacheKey 一致：代码|日期|因子|趋势）
       const recompute = out.querySelector('#ka-recompute');
-      if (recompute) recompute.onclick = (e) => { e.preventDefault(); delete KELLY_EVAL_CACHE[((p.code || p.name || '').toLowerCase()) + '|' + todayStr()]; evaluateCandidate(p); };
+      if (recompute) recompute.onclick = (e) => { e.preventDefault(); delete KELLY_EVAL_CACHE[((p.code || p.name || '').toLowerCase()) + '|' + todayStr() + '|' + (p.factor || '') + '|' + (p.trend || '')]; evaluateCandidate(p); };
 
       // 回填手动计算器（含理由），方便微调
       card.querySelector('#k-up').value = up.toFixed(0);
