@@ -30,27 +30,40 @@ const EQUITY_RISK_LEVELS = {
 
 // 底层驱动因子标签库（可自由扩展）
 const FACTORS = [
-  'AI算力', 'AI电力', 'AI应用', '机器人', '半导体',
-  '创新药', '银行', '黄金', '能源', '消费',
-  '新能源车', '军工', '地产', '其它'
+  'AI算力', 'AI电力', 'AI应用', '科技互联网', '传媒游戏',
+  '半导体', '机器人', '创新药', '医疗器械', '银行',
+  '证券保险', '黄金', '有色金属', '能源', '公用事业',
+  '化工', '消费', '食品饮料', '新能源车', '光伏风电',
+  '军工', '地产', '农业', '其它'
 ];
 
-// 按名称粗分类底层因子，避免用户手选默认「AI算力」而错标。命中即返回，否则「其它」。
+// 按名称粗分类底层因子（中英双语，兼容美股/ETF 英文名），避免用户手选默认而错标。
+// 规则按“先具体后宽泛”顺序，命中即返回，否则「其它」。
 function guessFactor(name) {
   const s = String(name || '');
   const rules = [
-    [/银行/, '银行'],
-    [/黄金|金矿|金业|山东黄金|中金黄金|招金|赤峰|白银/, '黄金'],
-    [/半导体|芯片|集成电路|中芯|华虹|北方华创|光刻|存储|封测/, '半导体'],
-    [/机器人/, '机器人'],
-    [/新能源|锂电|锂矿|电池|宁德|比亚迪|整车|汽车|车/, '新能源车'],
-    [/医药|生物|制药|医疗|药业|创新药|疫苗|药明|恒瑞|百济|CXO/i, '创新药'],
-    [/白酒|茅台|五粮液|泸州|食品|饮料|乳业|伊利|蒙牛|家电|美的|格力|海尔|零售|免税|消费/, '消费'],
-    [/军工|航空|航天|兵器|船舶|国防|导弹/, '军工'],
-    [/地产|置业|万科|保利|招商蛇口|华润置地/, '地产'],
-    [/煤|石油|石化|油气|燃气|能源|矿业|有色|铜|铝|钢|稀土|化工|锌|铅|镍|电力|电网|水电|核电|风电|光伏/, '能源'],
-    [/算力|光模块|服务器|数据中心|CPO|GPU|人工智能|英伟达|NVDA/i, 'AI算力'],
-    [/软件|云计算|互联网|传媒|游戏|SaaS|应用|平台/i, 'AI应用'],
+    [/银行|Bank|JPMorgan|Goldman|Morgan\s*Stanley|Citi|Wells\s*Fargo|Berkshire/i, '银行'],
+    [/证券|券商|保险|Securit|Insuranc|Broker|Visa|Mastercard|PayPal/i, '证券保险'],
+    [/黄金|金矿|金业|山东黄金|中金黄金|招金|赤峰|白银|Gold|Silver|Barrick|Newmont/i, '黄金'],
+    [/半导体|芯片|集成电路|中芯|华虹|北方华创|光刻|存储|封测|Semiconduct|Chip|台积电|TSM|Intel|英特尔|Micron|美光|Broadcom|博通|Qualcomm|高通|\bAMD\b|\bARM\b/i, '半导体'],
+    [/机器人|Robot/i, '机器人'],
+    [/光伏|风电|太阳能|Solar|Wind|First\s*Solar/i, '光伏风电'],
+    [/新能源|锂电|锂矿|电池|宁德|比亚迪|整车|汽车|Auto|Battery|Lithium|\bEV\b|Tesla|特斯拉|蔚来|\bNIO\b|小鹏|Xpeng|理想|Li\s*Auto|Rivian|Lucid/i, '新能源车'],
+    [/医疗器械|器械|Medical\s*Device/i, '医疗器械'],
+    [/医药|生物|制药|医疗|药业|创新药|疫苗|药明|恒瑞|百济|CXO|Biotech|Pharma|Bio\b|Health|Medical|Pfizer|Merck|Lilly|Moderna|Amgen/i, '创新药'],
+    [/白酒|茅台|五粮液|泸州|食品|饮料|乳业|伊利|蒙牛|Food|Beverage|Staples|Coca|Pepsi|McDonald|Nike|Starbucks|星巴克/i, '食品饮料'],
+    [/家电|美的|格力|海尔|零售|免税|消费|Consumer|Retail|Discretionary|Walmart|Costco|Home\s*Depot/i, '消费'],
+    [/军工|航空|航天|兵器|船舶|国防|导弹|Defense|Aerospace|Lockheed|Boeing|Raytheon/i, '军工'],
+    [/地产|置业|万科|保利|招商蛇口|华润置地|Real\s*Estate|REIT|Property/i, '地产'],
+    [/化工|Chemical|Dow\b|DuPont/i, '化工'],
+    [/有色|铜|铝|钢|稀土|锌|铅|镍|Metal|Copper|Steel|Alumin|Freeport/i, '有色金属'],
+    [/煤|石油|石化|油气|燃气|能源|矿业|Energy|\bOil\b|\bGas\b|Coal|Mining|Exxon|Chevron|埃克森|雪佛龙|Mobil|Occidental|Conoco/i, '能源'],
+    [/电网|水电|核电|公用|Utilit/i, '公用事业'],
+    [/农业|养殖|种业|饲料|Agri|Farm/i, '农业'],
+    [/传媒|游戏|影视|Media|Game|Entertain|Netflix|奈飞|Disney|迪士尼|Spotify/i, '传媒游戏'],
+    [/算力|光模块|服务器|数据中心|CPO|GPU|人工智能|英伟达|NVIDIA|NVDA|Palantir|\bAI\b/i, 'AI算力'],
+    [/电力|Power/i, 'AI电力'],
+    [/软件|云计算|互联网|SaaS|平台|科技|Tech|Internet|Software|Cloud|Nasdaq|QQQ|Apple|苹果|Microsoft|微软|Google|Alphabet|谷歌|Amazon|亚马逊|Meta|Facebook|Oracle|甲骨文|Adobe|Salesforce|Alibaba|阿里|BABA|拼多多|\bPDD\b|京东|\bJD\b|携程|Trip|Uber|Airbnb|Coinbase|百度|Baidu/i, '科技互联网'],
   ];
   for (const [re, f] of rules) if (re.test(s)) return f;
   return '其它';
@@ -378,9 +391,17 @@ function portfolioTotal() {
 const STOCK_CASH_POOL_NAME = '股票现金池';
 const STOCK_CASH_POOL_NAME_USD = '美股现金池';
 // 按币种找现金池（A股→人民币池，美股→美元池；兼容旧版 autoPool='stockCash'）
+// 也认领用户在「投资组合」手建的现金池：按名称+币种识别并打上 autoPool 标记，
+// 以后加减仓一致地从这一笔联动，避免又新建一个重复的池子。
 function findStockCashPool(ccy = 'CNY') {
   const keys = ccy === 'USD' ? ['stockCashUSD'] : ['stockCashCNY', 'stockCash'];
-  return (STATE.assets || []).find(a => keys.includes(a.autoPool));
+  const assets = STATE.assets || [];
+  let p = assets.find(a => keys.includes(a.autoPool));
+  if (p) return p;
+  const nameRe = ccy === 'USD' ? /美股现金|美元现金/ : /A股现金|股票现金/;
+  p = assets.find(a => nameRe.test(a.name || '') && a.currency === ccy);
+  if (p) p.autoPool = (ccy === 'USD') ? 'stockCashUSD' : 'stockCashCNY';   // 认领
+  return p || null;
 }
 function stockCashPoolBalance(ccy = 'CNY') {
   const p = findStockCashPool(ccy);
@@ -965,7 +986,13 @@ function showBlockingModal({ title, lines, confirmText = '我已知晓风险，�
    4. 视图路由
    ------------------------------------------------------------------------- */
 const VIEWS = {};
-let currentView = 'portfolio';
+// 支持 ?view=xxx 直达某个模块（分享链接/书签/移动端测试都可用）
+let currentView = (() => {
+  try {
+    const v = new URLSearchParams(location.search).get('view');
+    return v && typeof v === 'string' ? v : 'portfolio';
+  } catch (_) { return 'portfolio'; }
+})();
 
 function render() {
   syncPositionsFromAssets();        // 渲染前先把持仓与最新资产对齐，各模块联动实时数据
@@ -974,10 +1001,20 @@ function render() {
   (VIEWS[currentView] || VIEWS.dashboard)(app);
 }
 
+// 移动端：把激活标签滚动进视野（11 个标签在手机上默认只露前几个）。
+// 注意：网页字体加载完成后标签宽度会变，过早居中会"差一截"，
+// 因此启动时除了立即居中，还要在 fonts.ready / load 后再补一次（见启动段）。
+function centerActiveTab(behavior = 'auto') {
+  const act = document.querySelector('.tab.active');
+  if (act && act.scrollIntoView) act.scrollIntoView({ block: 'nearest', inline: 'center', behavior });
+}
+
 function switchView(v) {
   currentView = v;
+  try { history.replaceState(null, '', '?view=' + v); } catch (_) {}
   document.querySelectorAll('.tab').forEach(t =>
     t.classList.toggle('active', t.dataset.view === v));
+  centerActiveTab('smooth');
   render();
 }
 
@@ -4126,6 +4163,11 @@ function backfillPositionAssets() {
    启动
    ------------------------------------------------------------------------- */
 applyTheme(currentTheme());
+// ?theme=dark|light 可强制指定主题（测试/分享链接用，不写入偏好）
+{
+  const qt = (() => { try { return new URLSearchParams(location.search).get('theme'); } catch (_) { return null; } })();
+  if (qt === 'dark' || qt === 'light') applyTheme(qt);
+}
 const themeBtn = document.getElementById('theme-toggle');
 if (themeBtn) {
   themeBtn.innerHTML = themeToggleInner(currentTheme());
@@ -4133,6 +4175,41 @@ if (themeBtn) {
 }
 render();                        // 先用本机缓存渲染（离线也能用）
 updateCloudBadges();
+// 初始化标签高亮（配合 ?view= 直达参数），并把激活标签滚动进视野
+document.querySelectorAll('.tab').forEach(t =>
+  t.classList.toggle('active', t.dataset.view === currentView));
+centerActiveTab();
+// 字体/资源加载后标签宽度会变，需补居中，否则激活标签仍可能露不出来
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => centerActiveTab());
+window.addEventListener('load', () => centerActiveTab());
+
+// 版本自检：服务器部署了新代码、而本页还是旧代码时（SPA 长期不关页/浏览器恢复标签页
+// 都不会自动拿新文件），弹「点此更新」。构建号在部署时写进 index.html 的 meta[name=build]。
+const BUILD_ID = (document.querySelector('meta[name="build"]') || {}).content || '__BUILD__';
+let updateToastShown = false;
+async function checkForUpdate() {
+  if (!BUILD_ID || BUILD_ID === '__BUILD__') return;   // 本地开发无构建号，跳过
+  try {
+    const r = await fetch('version.json?_=' + Date.now(), { cache: 'no-store' });
+    if (!r.ok) return;
+    const j = await r.json();
+    if (j && j.build && j.build !== BUILD_ID && !updateToastShown) {
+      updateToastShown = true;
+      const t = document.createElement('div');
+      t.id = 'update-toast';
+      t.textContent = '已有新版本，点此更新';
+      t.title = '服务器上的代码比当前页面新，点击刷新以加载最新版';
+      t.onclick = () => location.reload();
+      document.body.appendChild(t);
+    }
+  // 离线或无 version.json（本地开发）时静默跳过
+  } catch (_) {}
+}
+checkForUpdate();
+setInterval(checkForUpdate, 10 * 60 * 1000);                       // 每 10 分钟自检
+document.addEventListener('visibilitychange', () => {              // 切回标签页时自检
+  if (!document.hidden) checkForUpdate();
+});
 
 // 启动后台任务：先与云端对账（取较新者）→ 刷新基金/股票估值 → 记录今日快照
 (async () => {
