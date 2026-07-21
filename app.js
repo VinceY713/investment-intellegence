@@ -3993,15 +3993,17 @@ VIEWS.portfolio = function (app) {
    确定性的 regime 信号解读(不调用 AI、可复现、不臆造)。
    ========================================================================= */
 // 自动刷新的"市场温度"标的（用现有行情代理；指数用显式腾讯符号）
-// fmt：'cn'=A股指数走腾讯；'gb'=新浪 gb_$ 美股指数([1]价/[2]涨跌%)；'int'=新浪 int_([1]价/[3]涨跌%)
+// fmt：'cn'=A股/港股指数走腾讯(~分隔,价 p[3])；'us'=腾讯美股/指数(~分隔,价 p[3])；
+//      'gb'/'int'=新浪(可能被源封IP，作备用)
 const MACRO_MARKET = [
   { key: 'sh',    name: '上证指数', sym: 'sh000001', fmt: 'cn' },
   { key: 'hs300', name: '沪深300',  sym: 'sh000300', fmt: 'cn' },
   { key: 'cyb',   name: '创业板指', sym: 'sz399006', fmt: 'cn' },
   { key: 'kc50',  name: '科创50',   sym: 'sh000688', fmt: 'cn' },
-  { key: 'ndx',   name: '纳斯达克', sym: 'gb_$ixic', fmt: 'gb' },
-  { key: 'spx',   name: '标普500',  sym: 'gb_$inx',  fmt: 'gb' },
-  { key: 'hsi',   name: '恒生指数', sym: 'int_hangseng', fmt: 'int' },
+  { key: 'ndx',   name: '纳斯达克', sym: 'usIXIC', fmt: 'us' },   // 腾讯美股指数(新浪封IP，改腾讯)
+  { key: 'spx',   name: '标普500',  sym: 'usINX',  fmt: 'us' },
+  { key: 'dji',   name: '道琼斯',   sym: 'usDJI',  fmt: 'us' },
+  { key: 'hsi',   name: '恒生指数', sym: 'hkHSI',  fmt: 'cn' },   // 腾讯港股指数
 ];
 // 手动维护的关键宏观指标（分组）——每项：含义 / 对你组合(人民币本位·A股+美股+黄金+美元资产)的影响 / 关注信号 / 来源
 const MACRO_GROUPS = [
@@ -4038,9 +4040,10 @@ async function sinaFields(sym) {
 }
 async function fetchIndexQuote(item) {
   if (item.fmt === 'cn') return parseTencent(await getQuoteText('/api/quote?code=' + encodeURIComponent(item.sym)), { us: false });
-  const f = await sinaFields(item.sym);
+  if (item.fmt === 'us') return parseTencent(await getQuoteText('/api/quote?code=' + encodeURIComponent(item.sym)), { us: true });
+  const f = await sinaFields(item.sym);   // 新浪备用
   const price = parseFloat(f[1]);
-  const changePct = item.fmt === 'int' ? parseFloat(f[3]) : parseFloat(f[2]);   // gb_$ 涨跌%在[2]，int_在[3]
+  const changePct = item.fmt === 'int' ? parseFloat(f[3]) : parseFloat(f[2]);
   if (!isFinite(price)) throw new Error('解析失败');
   return { name: f[0], price, changePct: isFinite(changePct) ? changePct : null };
 }
@@ -4050,98 +4053,85 @@ async function fetchIndexQuote(item) {
    /api/quote_sina)；中国 CPI/PMI/LPR 走东财数据中心(/api/emmacro)。部分符号需真机验证，
    拉不到就保留手填、绝不覆盖为空。US CPI/失业/联邦利率暂无可靠免 key 源，保持手填。
    ------------------------------------------------------------------------- */
+// 每个指标配多个候选源，逐个尝试直到取到有效值（新浪被封→自动切腾讯/东财/金十）。
+// 源类型：sina(新浪 list=,逗号) / thf(腾讯 hf_外盘或us美股) / em(东财中国宏观) / emus(东财美国) / jin10(金十)
 const MACRO_AUTO = [
-  { key: 'dxy',    label: '美元指数',   kind: 'sina', sym: 'DINIW',    field: 1 },
-  { key: 'vix',    label: 'VIX',        kind: 'sina', sym: 'gb_$vix',  field: 1 },
-  { key: 'ust10',  label: '美债10Y',    kind: 'sina', sym: 'gb_$tnx',  field: 1, div: 10 },  // ^TNX = 10Y×10
-  { key: 'cnCPI',  label: '中国CPI',    kind: 'em', report: 'RPT_ECONOMY_CPI', sort: 'REPORT_DATE', pick: ['NATIONAL_SAME'] },
-  { key: 'cnPMI',  label: '中国PMI',    kind: 'em', report: 'RPT_ECONOMY_PMI', sort: 'REPORT_DATE', pick: ['MAKE_INDEX'] },
-  { key: 'cnLPR1', label: 'LPR 1年',    kind: 'em', report: 'RPTA_WEB_RATE', sort: 'TRADE_DATE', pick: ['LPR1Y', 'LPR_1Y', 'LPR1', 'LPR_1'] },
-  { key: 'cnLPR5', label: 'LPR 5年',    kind: 'em', report: 'RPTA_WEB_RATE', sort: 'TRADE_DATE', pick: ['LPR5Y', 'LPR_5Y', 'LPR5', 'LPR_5'] },
-  // 美国：CPI年率走东财(已验证 INDICATOR_ID)；失业/联邦利率/核心PCE/PMI 走金十(akshare 同款 attr_id)
-  { key: 'usCPI',   label: '美国CPI',   kind: 'emus',  ind: 'EMG00000733' },
-  { key: 'fedUpper',label: '美联储利率',kind: 'jin10', attr: 24 },
-  { key: 'usUnemp', label: '美国失业率',kind: 'jin10', attr: 47 },
-  { key: 'usPCE',   label: '美国核心PCE',kind:'jin10', attr: 80 },
-  { key: 'usPMI',   label: '美国PMI',   kind: 'jin10', attr: 28 },
+  { key: 'dxy',    label: '美元指数',   sources: [ { kind: 'thf', sym: 'hf_ZSD', field: 0 }, { kind: 'sina', sym: 'DINIW', field: 1 } ] },
+  { key: 'vix',    label: 'VIX',        sources: [ { kind: 'thf', sym: 'usVIX', field: 3 }, { kind: 'sina', sym: 'gb_$vix', field: 1 } ] },
+  { key: 'ust10',  label: '美债10Y',    sources: [ { kind: 'thf', sym: 'usUS10Y', field: 3 }, { kind: 'sina', sym: 'gb_$tnx', field: 1, div: 10 } ] },
+  { key: 'cnCPI',  label: '中国CPI',    sources: [ { kind: 'em', report: 'RPT_ECONOMY_CPI', sort: 'REPORT_DATE', pick: ['NATIONAL_SAME'] } ] },
+  { key: 'cnPMI',  label: '中国PMI',    sources: [ { kind: 'em', report: 'RPT_ECONOMY_PMI', sort: 'REPORT_DATE', pick: ['MAKE_INDEX'] } ] },
+  { key: 'cnLPR1', label: 'LPR 1年',    sources: [ { kind: 'em', report: 'RPTA_WEB_RATE', sort: 'TRADE_DATE', pick: ['LPR1Y', 'LPR_1Y', 'LPR1', 'LPR_1'] } ] },
+  { key: 'cnLPR5', label: 'LPR 5年',    sources: [ { kind: 'em', report: 'RPTA_WEB_RATE', sort: 'TRADE_DATE', pick: ['LPR5Y', 'LPR_5Y', 'LPR5', 'LPR_5'] } ] },
+  { key: 'usCPI',   label: '美国CPI',   sources: [ { kind: 'emus', ind: 'EMG00000733' } ] },
+  { key: 'fedUpper',label: '美联储利率',sources: [ { kind: 'jin10', attr: 24 } ] },
+  { key: 'usUnemp', label: '美国失业率',sources: [ { kind: 'jin10', attr: 47 } ] },
+  { key: 'usPCE',   label: '美国核心PCE',sources:[ { kind: 'jin10', attr: 80 } ] },
+  { key: 'usPMI',   label: '美国PMI',   sources: [ { kind: 'jin10', attr: 28 } ] },
 ];
-async function fetchEmMacro(report, sort) {
-  const url = '/api/emmacro?reportName=' + encodeURIComponent(report) +
-    '&columns=ALL&pageSize=1&sortColumns=' + encodeURIComponent(sort || '') +
-    '&sortTypes=-1&source=WEB&client=WEB';
-  const res = await fetch(url, { cache: 'no-store' });
-  if (!res.ok) throw new Error('接口 ' + res.status);
-  const j = await res.json();
-  const data = j && j.result && j.result.data;
-  if (!Array.isArray(data) || !data.length) throw new Error('无数据');
-  return data[0];
-}
-// 美国经济数据（东财 RPT_ECONOMICVALUE_USA，按 INDICATOR_ID 过滤，取 VALUE=今值）
-async function fetchEmUsMacro(indicatorId) {
-  const url = '/api/emmacro?reportName=RPT_ECONOMICVALUE_USA&columns=ALL&pageSize=1' +
-    '&filter=' + encodeURIComponent('(INDICATOR_ID="' + indicatorId + '")') +
-    '&sortColumns=REPORT_DATE&sortTypes=-1&source=WEB&client=WEB';
-  const res = await fetch(url, { cache: 'no-store' });
-  if (!res.ok) throw new Error('接口 ' + res.status);
-  const j = await res.json();
-  const data = j && j.result && j.result.data;
-  if (!Array.isArray(data) || !data.length) throw new Error('无数据');
-  const v = parseFloat(data[0].VALUE);
-  if (!isFinite(v)) throw new Error('无值');
-  return v;
-}
-// 金十数据（datacenter-api.jin10.com/reports/list_v2）data.values[0] = [日期,今值,预测,前值]，取今值[1]
-async function fetchJin10(attrId) {
-  const url = '/api/jin10?category=ec&attr_id=' + attrId + '&max_date=&_=' + Date.now();
-  const res = await fetch(url, { cache: 'no-store' });
-  if (!res.ok) throw new Error('接口 ' + res.status);
-  const j = await res.json();
-  const vals = j && j.data && j.data.values;
-  if (!Array.isArray(vals) || !vals.length) throw new Error('无数据');
-  const v = parseFloat(vals[0][1]);
-  if (!isFinite(v)) throw new Error('无值');
-  return v;
-}
-// 通用取原始文本（诊断用）：返回 { ok, status, text }
+// 通用取原始文本（诊断用）
 async function fetchRaw(url) {
   const res = await fetch(url, { cache: 'no-store' });
-  let text = '';
-  try { text = await res.text(); } catch (e) { text = '(读取失败)'; }
+  let text = ''; try { text = await res.text(); } catch (e) { text = '(读取失败)'; }
   return { ok: res.ok, status: res.status, text };
+}
+const macroClip = s => String(s == null ? '' : s).replace(/\s+/g, ' ').slice(0, 380);
+// 单个源取值 → { value, raw }（value 为 null 表示该源没取到，继续下一个源）
+async function fetchMacroSource(src) {
+  try {
+    if (src.kind === 'sina') {
+      const r = await fetchRaw('/api/quote_sina?code=' + encodeURIComponent(src.sym));
+      const mm = r.text.match(/"([^"]*)"/); const f = mm ? mm[1].split(',') : [];
+      let v = parseFloat(f[src.field]); if (src.div && isFinite(v)) v = v / src.div;
+      return { value: isFinite(v) ? v : null, raw: 'sina/' + src.sym + ' HTTP' + r.status + ' ' + macroClip(r.text) };
+    }
+    if (src.kind === 'thf') {
+      const r = await fetchRaw('/api/quote?code=' + encodeURIComponent(src.sym));
+      const mm = r.text.match(/"([^"]*)"/); const delim = /^hf_/.test(src.sym) ? ',' : '~';
+      const p = mm ? mm[1].split(delim) : [];
+      let v = parseFloat(p[src.field]); if (src.div && isFinite(v)) v = v / src.div;
+      return { value: isFinite(v) ? v : null, raw: 'tx/' + src.sym + ' HTTP' + r.status + ' ' + macroClip(r.text) };
+    }
+    if (src.kind === 'em') {
+      const r = await fetchRaw('/api/emmacro?reportName=' + src.report + '&columns=ALL&pageSize=1&sortColumns=' + src.sort + '&sortTypes=-1&source=WEB&client=WEB');
+      let v = null; try { const row = JSON.parse(r.text).result.data[0]; for (const k of src.pick) { const x = parseFloat(row[k]); if (isFinite(x)) { v = x; break; } } } catch (e) {}
+      return { value: v, raw: 'em/' + src.report + ' HTTP' + r.status + ' ' + macroClip(r.text) };
+    }
+    if (src.kind === 'emus') {
+      const r = await fetchRaw('/api/emmacro?reportName=RPT_ECONOMICVALUE_USA&columns=ALL&pageSize=1&filter=' + encodeURIComponent('(INDICATOR_ID="' + src.ind + '")') + '&sortColumns=REPORT_DATE&sortTypes=-1&source=WEB&client=WEB');
+      let v = null; try {
+        const rows = JSON.parse(r.text).result.data;
+        for (const row of rows) { let x = parseFloat(row.VALUE); if (!isFinite(x)) for (const k of Object.keys(row)) { if (/VALUE/i.test(k) && !/PRE|PREV|LAST|BEFORE/i.test(k)) { const y = parseFloat(row[k]); if (isFinite(y)) { x = y; break; } } } if (isFinite(x)) { v = x; break; } }
+      } catch (e) {}
+      return { value: v, raw: 'emus/' + src.ind + ' HTTP' + r.status + ' ' + macroClip(r.text) };
+    }
+    if (src.kind === 'jin10') {
+      const r = await fetchRaw('/api/jin10?category=ec&attr_id=' + src.attr + '&max_date=&_=' + Date.now());
+      let v = null; try {
+        const jd = JSON.parse(r.text).data;
+        let vi = 1; if (Array.isArray(jd.keys)) { const ki = jd.keys.findIndex(x => /今值|现值/.test(x && x.name)); if (ki >= 0) vi = ki; }
+        for (const row of (jd.values || [])) { const x = parseFloat(row[vi]); if (isFinite(x)) { v = x; break; } }
+      } catch (e) {}
+      return { value: v, raw: 'jin10/' + src.attr + ' HTTP' + r.status + ' ' + macroClip(r.text) };
+    }
+  } catch (e) { return { value: null, raw: (src.kind || '?') + ' 异常:' + macroClip(e.message) }; }
+  return { value: null, raw: '未知源' };
 }
 async function autoPullMacro() {
   const m = STATE.macro; m.market = m.market || {}; m.ind = m.ind || {};
   const detail = []; const diag = []; let ok = 0, fail = 0;
-  const clip = s => String(s == null ? '' : s).replace(/\s+/g, ' ').slice(0, 120);
-  // 市场温度（指数）
   await Promise.all(MACRO_MARKET.map(async it => {
     try { const q = await fetchIndexQuote(it); if (isFinite(q.price)) { m.market[it.key] = { price: q.price, changePct: q.changePct, date: todayStr() }; } } catch (e) { /* 保留旧值 */ }
   }));
-  // 宏观指标（逐项，失败不覆盖）——每项都记录原始返回片段，便于精确校准
   for (const a of MACRO_AUTO) {
-    let v = null, url = '', raw = '';
-    try {
-      if (a.kind === 'sina') {
-        url = '/api/quote_sina?code=' + encodeURIComponent(a.sym);
-        const r = await fetchRaw(url); raw = 'HTTP' + r.status + ' ' + clip(r.text);
-        const mm = r.text.match(/"([^"]*)"/); const f = mm ? mm[1].split(',') : [];
-        v = parseFloat(f[a.field]); if (a.div && isFinite(v)) v = v / a.div;
-      } else if (a.kind === 'em') {
-        url = '/api/emmacro?reportName=' + a.report + '&columns=ALL&pageSize=1&sortColumns=' + a.sort + '&sortTypes=-1&source=WEB&client=WEB';
-        const r = await fetchRaw(url); raw = 'HTTP' + r.status + ' ' + clip(r.text);
-        try { const row = JSON.parse(r.text).result.data[0]; for (const key of a.pick) { const x = parseFloat(row[key]); if (isFinite(x)) { v = x; break; } } } catch (e) {}
-      } else if (a.kind === 'emus') {
-        url = '/api/emmacro?reportName=RPT_ECONOMICVALUE_USA&columns=ALL&pageSize=1&filter=' + encodeURIComponent('(INDICATOR_ID="' + a.ind + '")') + '&sortColumns=REPORT_DATE&sortTypes=-1&source=WEB&client=WEB';
-        const r = await fetchRaw(url); raw = 'HTTP' + r.status + ' ' + clip(r.text);
-        try { v = parseFloat(JSON.parse(r.text).result.data[0].VALUE); } catch (e) {}
-      } else if (a.kind === 'jin10') {
-        url = '/api/jin10?category=ec&attr_id=' + a.attr + '&max_date=&_=' + Date.now();
-        const r = await fetchRaw(url); raw = 'HTTP' + r.status + ' ' + clip(r.text);
-        try { v = parseFloat(JSON.parse(r.text).data.values[0][1]); } catch (e) {}
-      }
-    } catch (e) { raw = '异常:' + clip(e.message); }
+    let v = null; const attempts = [];
+    for (const src of a.sources) {                 // 逐个候选源尝试，取到就停
+      const res = await fetchMacroSource(src);
+      attempts.push(res.raw);
+      if (res.value != null && isFinite(res.value)) { v = res.value; break; }
+    }
     if (v != null && isFinite(v)) { m.ind[a.key] = { value: +v.toFixed(2), date: todayStr() }; ok++; detail.push(a.label + '✓'); diag.push({ label: a.label, ok: true, raw: String(+v.toFixed(2)) }); }
-    else { fail++; detail.push(a.label + '✗'); diag.push({ label: a.label, ok: false, raw: raw || '无返回' }); }
+    else { fail++; detail.push(a.label + '✗'); diag.push({ label: a.label, ok: false, raw: attempts.join('  ‖  ') }); }
   }
   m.updatedAt = todayStr(); m.lastPull = { date: todayStr(), diag }; saveState();
   return { ok, fail, detail, diag };
