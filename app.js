@@ -609,7 +609,11 @@ function dayPnlCny(a, fx) {
       if (t.type === 'sell') pnl += num(t.shares) * (num(t.price) - prev);   // 昨收→卖出价
       else if (t.type === 'buy') pnl += num(t.shares) * (px - num(t.price)); // 买入价→收盘
     });
-    if (sod === 0 && a.sodDate === todayStr() && !trades.length) return 0;   // 当日纯新建仓、无交易记录
+    if (sod === 0 && a.sodDate === todayStr() && !trades.length) {
+      // 当日纯新建仓、无当日交易明细：整仓都是今天建的，全部浮盈亏都发生在今天——
+      // 今日盈亏 = 该仓总浮盈亏（现价−成本），而非 0。没有成本(pnl 缺失)才回退 0。
+      return a.pnl != null ? num(a.pnl) : 0;
+    }
     return pnl * cf;
   }
   // 无持股数（手填金额资产）→ 回退按当前市值估算
