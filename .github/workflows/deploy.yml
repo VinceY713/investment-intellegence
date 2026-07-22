@@ -159,10 +159,10 @@ jobs:
                     add_header Cache-Control "no-store";
                 }
 
-                # 基金历史净值序列：/api/fundhist?code=020602&size=200 → 东财 lsjz 多行（算场外基金真实相关/波动/回撤）
-                # 与 /api/fund_nav 同源，仅 pageSize 由前端传入（$arg_size），拉够样本天数
+                # 基金历史净值序列：/api/fundhist?fundCode=020602&pageIndex=1&pageSize=200 → 东财 lsjz 多行
+                # 整段 query 透传（$is_args$args，与 /api/emmacro 同款最稳），前端拼好全部参数；拉场外基金真实相关/波动/回撤
                 location = /api/fundhist {
-                    proxy_pass https://api.fund.eastmoney.com/f10/lsjz?fundCode=$arg_code&pageIndex=1&pageSize=$arg_size;
+                    proxy_pass https://api.fund.eastmoney.com/f10/lsjz$is_args$args;
                     proxy_http_version 1.1;
                     proxy_set_header Connection "";
                     proxy_set_header Host api.fund.eastmoney.com;

@@ -228,8 +228,9 @@ async function fetchKlines(code, count = 160) {
   return arr.map(r => ({ date: r[0], close: parseFloat(r[2]) })).filter(x => isFinite(x.close) && x.close > 0);
 }
 // 场外基金历史净值序列（东财 lsjz，返回按日期倒序）；转成「与日K同形」的 {date,close} 升序序列
+// 用整段 query 透传（与 /api/emmacro 同款、最稳），fundCode/pageIndex/pageSize 都由前端拼好
 async function fetchFundSeries(code, count = 200) {
-  const res = await fetch('/api/fundhist?code=' + encodeURIComponent(code) + '&size=' + count, { cache: 'no-store' });
+  const res = await fetch('/api/fundhist?fundCode=' + encodeURIComponent(code) + '&pageIndex=1&pageSize=' + count, { cache: 'no-store' });
   if (!res.ok) throw new Error('净值接口 ' + res.status);
   const txt = await res.text();
   let j; try { j = JSON.parse(txt); } catch (e) { throw new Error('净值解析失败'); }
@@ -286,16 +287,25 @@ async function buildRealCorr(holdings) {
   const stats = ok.map(f => ({ code: f.p.code, name: f.p.name, role: f.p.role || 'stock', days: f.closes.length, vol: annVolPct(retsOf(f.closes)), mdd: histMaxDrawdownPct(f.closes) }));
   return { date: todayStr(), codes, index, names: ok.map(f => f.p.name), roles: ok.map(f => f.p.role || 'stock'), matrix, stats, failed };
 }
-// 参与相关性分析的全部标的：弹性仓个股（STATE.positions）+ 压舱基金（STATE.assets 中 category='基金'）。
-// 两者 weight 统一为「占总资产%」，便于比较核心(基金)/卫星(个股)在组合里的真实份量。
+// 参与相关性分析的全部标的：
+//  · 弹性仓个股（STATE.positions，含 A股/港股通/美股）
+//  · 美股（STATE.assets 中 category='美股股票'，若未在弹性仓里）—— 用户可能只在「投资组合」持有、没进弹性仓
+//  · 压舱基金（STATE.assets 中 category='基金'）
+// weight 统一为「占总资产%」，便于比较核心(基金)/卫星(个股)在组合里的真实份量。
 function corrHoldings() {
   const positions = (STATE.positions || []).filter(p => p.code).map(p => ({ code: p.code, name: p.name, weight: num(p.weight), role: 'stock' }));
   const seen = new Set(positions.map(p => p.code));
   const fx = currentFx(), total = portfolioTotal();
-  const funds = (STATE.assets || [])
-    .filter(a => a.category === '基金' && /^\d{6}$/.test(String(a.code || '')) && !isCashLikeAsset(a) && !seen.has(a.code))
-    .map(a => ({ code: a.code, name: a.name, category: '基金', role: 'fund', weight: total > 0 ? +(assetCny(a, fx) / total * 100).toFixed(4) : 0 }));
-  return positions.concat(funds);
+  const wPct = a => total > 0 ? +(assetCny(a, fx) / total * 100).toFixed(4) : 0;
+  const extra = [];
+  (STATE.assets || []).forEach(a => {
+    const code = String(a.code || '').trim();
+    if (!code || seen.has(code)) return;
+    // 美股（含字母代码）作为个股弹性；场外基金作为压舱基金
+    if (a.category === '美股股票' && isUsCode(code)) { extra.push({ code, name: a.name, category: '美股股票', role: 'stock', weight: wPct(a) }); seen.add(code); }
+    else if (a.category === '基金' && /^\d{6}$/.test(code) && !isCashLikeAsset(a)) { extra.push({ code, name: a.name, category: '基金', role: 'fund', weight: wPct(a) }); seen.add(code); }
+  });
+  return positions.concat(extra);
 }
 // 相关性解析器：有缓存则用实测相关，缺失的（场外基金）回退因子先验
 function corrResolver(cache) {
@@ -1284,7 +1294,8 @@ function renderRealCorrCard(app, positions) {
       <td class="num" style="font-size:11px;color:var(--muted)">${st.role==='fund'?'基金':'个股/美股'}</td><td class="num">${st.days}</td>
       <td class="num">${st.vol!=null?fmtPct(st.vol,0):'—'}</td>
       <td class="num" style="color:var(--red-ink)">${fmtPct(st.mdd,0)}</td></tr>`).join('');
-    const failNote = (c.failed && c.failed.length) ? `<p class="inline-note">${c.failed.length} 只未取到历史序列（代码不支持/接口异常），这些仍用因子先验：${c.failed.map(f=>escapeHtml(f.name)).join('、')}。</p>` : '';
+    // 失败诊断：带出每只的错误原因，方便定位是接口没通还是代码不支持
+    const failNote = (c.failed && c.failed.length) ? `<div class="alert amber" style="margin-top:10px"><span class="icon">${icon('warn')}</span><div><strong>${c.failed.length} 只未取到历史序列</strong>（这些仍用因子先验，不影响其它）：<br>${c.failed.map(f=>`· ${escapeHtml(f.name)}（${escapeHtml(f.code||'无代码')}）：${escapeHtml(f.err||'未知')}`).join('<br>')}</div></div>` : '';
     // 智能解读（自动、确定性）
     const analysis = analyzeCorrelation(c, corrHoldings());
     const anaAlert = (t, m) => {
@@ -1296,12 +1307,12 @@ function renderRealCorrCard(app, positions) {
     const anaHtml = analysis.length ? `<h4 style="margin:18px 0 6px">${icon('sparkles')} 智能解读（自动）</h4>` + analysis.map(x => anaAlert(x[0], x[1])).join('') : '';
     out.innerHTML = `
       <p class="inline-note" style="margin-top:6px">数据日期 ${escapeHtml(c.date)} · 颜色越红＝相关性越高（同涨同跌）、越绿＝越低/负相关。</p>
+      ${failNote}
       <div class="table-scroll"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>
       ${anaHtml}
       <div class="table-scroll" style="margin-top:14px"><table>
         <thead><tr><th>标的</th><th class="num">类型</th><th class="num">样本天数</th><th class="num">年化波动</th><th class="num">历史最大回撤</th></tr></thead>
         <tbody>${statRows}</tbody></table></div>
-      ${failNote}
       <div class="row" style="gap:8px;margin-top:10px"><button class="btn secondary" id="rc-fill" style="flex:0 0 auto">${icon('download')} 用历史最大回撤回填各股「最大跌幅」</button></div>
       <p class="inline-note">回填后「③ 回撤控制」「股票体检」的回撤口径将基于真实历史，而非手填估计。回填只覆盖能取到序列的<strong>个股</strong>（基金不进弹性仓回撤口径）。</p>`;
     const fill = out.querySelector('#rc-fill');
