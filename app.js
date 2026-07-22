@@ -287,21 +287,31 @@ async function buildRealCorr(holdings) {
     return { p, err: lastErr ? lastErr.message : '未知' };
   };
   const fetched = await mapLimit(targets, 3, fetchOne);
-  const ok = fetched.filter(f => f.map && f.map.size >= 30);
-  const failed = fetched.filter(f => !f.map).map(f => ({ name: f.p.name, code: f.p.code, err: f.err }));
-  if (!ok.length) throw new Error('全部历史序列获取失败：' + (failed[0] ? failed[0].err : '未知'));
-  const codes = ok.map(f => f.p.code), index = {}; codes.forEach((c, i) => index[c] = i);
-  const n = ok.length;
+  // 全部标的都纳入矩阵：有效历史序列(≥30点)用实测相关；取不到序列(美股/基金接口失败或样本不足)
+  // 的仍显示，用「因子先验」相关代替——保证美股/基金一定出现在热力图，绝不消失。
+  fetched.forEach(f => { f.hasReal = !!(f.map && f.map.size >= 30); });
+  const failed = fetched.filter(f => !f.hasReal).map(f => ({ name: f.p.name, code: f.p.code, err: f.err || '样本不足(<30日)' }));
+  const codes = fetched.map(f => f.p.code), index = {}; codes.forEach((c, i) => index[c] = i);
+  const n = fetched.length;
   const matrix = Array.from({ length: n }, () => Array(n).fill(1));
   for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
-    const a = ok[i], b = ok[j];
-    const common = a.dates.filter(d => b.map.has(d));       // 交集日期对齐（A股/美股/基金披露日各不同）
-    if (common.length < 25) { matrix[i][j] = matrix[j][i] = null; continue; }
-    const rho = pearson(retsOf(common.map(d => a.map.get(d))), retsOf(common.map(d => b.map.get(d))));
-    matrix[i][j] = matrix[j][i] = (rho == null ? null : rho);
+    const a = fetched[i], b = fetched[j];
+    let rho;
+    if (a.hasReal && b.hasReal) {
+      const common = a.dates.filter(d => b.map.has(d));     // 交集日期对齐（A股/美股/基金披露日各不同）
+      rho = common.length < 25 ? null : pearson(retsOf(common.map(d => a.map.get(d))), retsOf(common.map(d => b.map.get(d))));
+    }
+    if (rho == null) rho = factorCorr(a.p.factor || '其它', b.p.factor || '其它');   // 至少给因子先验
+    matrix[i][j] = matrix[j][i] = rho;
   }
-  const stats = ok.map(f => ({ code: f.p.code, name: f.p.name, role: f.p.role || 'stock', days: f.closes.length, vol: annVolPct(retsOf(f.closes)), mdd: histMaxDrawdownPct(f.closes) }));
-  return { date: todayStr(), codes, index, names: ok.map(f => f.p.name), roles: ok.map(f => f.p.role || 'stock'), matrix, stats, failed };
+  const stats = fetched.map(f => ({
+    code: f.p.code, name: f.p.name, role: f.p.role || 'stock',
+    days: f.hasReal ? f.closes.length : 0,
+    vol: f.hasReal ? annVolPct(retsOf(f.closes)) : null,
+    mdd: f.hasReal ? histMaxDrawdownPct(f.closes) : null,
+    prior: !f.hasReal,
+  }));
+  return { date: todayStr(), codes, index, names: fetched.map(f => f.p.name), roles: fetched.map(f => f.p.role || 'stock'), matrix, stats, failed };
 }
 // 参与相关性分析的全部标的：
 //  · 弹性仓个股（STATE.positions，含 A股/港股通/美股）
@@ -309,7 +319,7 @@ async function buildRealCorr(holdings) {
 //  · 压舱基金（STATE.assets 中 category='基金'）
 // weight 统一为「占总资产%」，便于比较核心(基金)/卫星(个股)在组合里的真实份量。
 function corrHoldings() {
-  const positions = (STATE.positions || []).filter(p => p.code).map(p => ({ code: p.code, name: p.name, weight: num(p.weight), role: 'stock' }));
+  const positions = (STATE.positions || []).filter(p => p.code).map(p => ({ code: p.code, name: p.name, weight: num(p.weight), role: 'stock', factor: p.factor || guessFactor(p.name) }));
   const seen = new Set(positions.map(p => p.code));
   const fx = currentFx(), total = portfolioTotal();
   const wPct = a => total > 0 ? +(assetCny(a, fx) / total * 100).toFixed(4) : 0;
@@ -318,8 +328,8 @@ function corrHoldings() {
     const code = String(a.code || '').trim();
     if (!code || seen.has(code)) return;
     // 美股（含字母代码）作为个股弹性；场外基金作为压舱基金
-    if (a.category === '美股股票' && isUsCode(code)) { extra.push({ code, name: a.name, category: '美股股票', role: 'stock', weight: wPct(a) }); seen.add(code); }
-    else if (a.category === '基金' && /^\d{6}$/.test(code) && !isCashLikeAsset(a)) { extra.push({ code, name: a.name, category: '基金', role: 'fund', weight: wPct(a) }); seen.add(code); }
+    if (a.category === '美股股票' && isUsCode(code)) { extra.push({ code, name: a.name, category: '美股股票', role: 'stock', weight: wPct(a), factor: guessFactor(a.name) }); seen.add(code); }
+    else if (a.category === '基金' && /^\d{6}$/.test(code) && !isCashLikeAsset(a)) { extra.push({ code, name: a.name, category: '基金', role: 'fund', weight: wPct(a), factor: guessFactor(a.name) }); seen.add(code); }
   });
   return positions.concat(extra);
 }
@@ -1369,10 +1379,10 @@ function renderRealCorrCard(app, positions) {
     const head = '<th></th>' + shortN.map((nm, i) => `<th class="num" style="font-size:11px">${dot(i)}${escapeHtml(nm)}</th>`).join('');
     const body = c.matrix.map((row, i) => `<tr><td style="font-size:11px;white-space:nowrap">${dot(i)}${escapeHtml(shortN[i])}</td>` +
       row.map((v, j) => `<td class="num" style="background:${i===j?'var(--surface-soft)':heat(v)};color:${i===j?'var(--muted)':'#fff'};font-size:11px">${i===j?'1.00':(v==null?'—':v.toFixed(2))}</td>`).join('') + '</tr>').join('');
-    const statRows = c.stats.map(st => `<tr><td>${st.role==='fund'?'<span style="color:var(--accent)">◆</span>':'<span style="color:var(--muted)">●</span>'}${escapeHtml(st.name)}</td>
-      <td class="num" style="font-size:11px;color:var(--muted)">${st.role==='fund'?'基金':'个股/美股'}</td><td class="num">${st.days}</td>
+    const statRows = c.stats.map(st => `<tr><td>${st.role==='fund'?'<span style="color:var(--accent)">◆</span>':'<span style="color:var(--muted)">●</span>'}${escapeHtml(st.name)}${st.prior?'<span class="inline-note"> · 因子先验</span>':''}</td>
+      <td class="num" style="font-size:11px;color:var(--muted)">${st.role==='fund'?'基金':'个股/美股'}</td><td class="num">${st.days||'—'}</td>
       <td class="num">${st.vol!=null?fmtPct(st.vol,0):'—'}</td>
-      <td class="num" style="color:var(--red-ink)">${fmtPct(st.mdd,0)}</td></tr>`).join('');
+      <td class="num" style="color:var(--red-ink)">${st.mdd!=null?fmtPct(st.mdd,0):'—'}</td></tr>`).join('');
     // 失败诊断：带出每只的错误原因，方便定位是接口没通还是代码不支持
     const failNote = (c.failed && c.failed.length) ? `<div class="alert amber" style="margin-top:10px"><span class="icon">${icon('warn')}</span><div><strong>${c.failed.length} 只未取到历史序列</strong>（这些仍用因子先验，不影响其它）：<br>${c.failed.map(f=>`· ${escapeHtml(f.name)}（${escapeHtml(f.code||'无代码')}）：${escapeHtml(f.err||'未知')}`).join('<br>')}</div></div>` : '';
     // 智能解读（自动、确定性）
