@@ -537,7 +537,7 @@ function applySellToPool(posId, amtCny) {
     ratio = vCny > 0 ? Math.min(1, amtCny / vCny) : 0;
     const amtOrig = a.currency === 'USD' ? amtCny / fx : amtCny;
     a.amount = Math.max(0, Math.round((num(a.amount) - amtOrig) * 100) / 100);
-    if (num(a.shares) > 0) a.shares = Math.max(0, Math.round(a.shares * (1 - ratio) * 100) / 100);
+    if (num(a.shares) > 0) { captureSod(a); a.shares = Math.max(0, Math.round(a.shares * (1 - ratio) * 100) / 100); }
     if (a.pnl != null) a.pnl = Math.round(a.pnl * (1 - ratio) * 100) / 100;   // 卖出部分的浮盈亏按比例结转
     a.cny = Math.round(assetCny(a, fx));
   }
@@ -554,6 +554,23 @@ function applySellToPool(posId, amtCny) {
   const pool = settleToPool(ccy === 'USD' ? amtCny / fx : amtCny, ccy, '卖出' + (p ? p.name : '股票') + '回笼');
   saveState();
   return { pool, ratio, ccy };
+}
+
+// 当日盈亏金额（人民币，带正负）——按「当日开盘持股(sodShares)」算，而非当前持股。
+// 这样今天改过股数（增/减持）时，当日盈亏只算你当日开盘时就持有的那部分，和实际一致。
+function dayPnlCny(a, fx) {
+  fx = fx || currentFx();
+  const dp = num(a.dayPct), px = num(a.lastPx);
+  if (!isFinite(dp) || dp === 0 || !(px > 0)) return 0;
+  const prev = px / (1 + dp / 100);                       // 昨收
+  const sod = (a.sodDate === todayStr() && a.sodShares != null) ? num(a.sodShares) : num(a.shares);
+  if (sod > 0) return sod * (px - prev) * (a.currency === 'USD' ? fx : 1);
+  // 无持股数（手填金额资产）→ 回退按当前市值估算；开盘持股为 0（当日新建仓）→ 计 0
+  return (a.sodDate === todayStr()) ? 0 : assetCny(a, fx) * dp / (100 + dp);
+}
+// 每天第一次改动某资产股数「之前」，快照当日开盘持股数；同日多次改动只记第一次。
+function captureSod(a) {
+  if (a && a.sodDate !== todayStr()) { a.sodShares = num(a.shares); a.sodDate = todayStr(); }
 }
 
 // 年化利率：理财/存款 —— 美元 3%，人民币按实际（从名称/备注的“x%”解析，默认按类别兜底）
@@ -1886,6 +1903,7 @@ VIEWS.positions = function (app) {
       const a = (STATE.assets || []).find(x => x.code === pos.code);
       const px = price > 0 ? price : (a ? num(a.lastPx) : 0);
       if (a && shares > 0 && px > 0) {
+        captureSod(a);                          // 改股数前记录当日开盘持股，供「当日盈亏」正确计算
         a.shares = shares;
         a.amount = Math.round(shares * px * 100) / 100;
         a.lastPx = px;
@@ -1904,6 +1922,7 @@ VIEWS.positions = function (app) {
           lastPx: px,
           amount: Math.round(shares * px * 100) / 100,
           pnl: cost > 0 ? Math.round(shares * (px - cost) * (isUs ? fx : 1) * 100) / 100 : 0,
+          sodShares: 0, sodDate: todayStr(),      // 当日新建仓：当日开盘持股为 0 → 当日盈亏计 0
           note: '由「持仓」录入自动创建，如为基金/其它可在此改类别',
         };
         na.cny = Math.round(assetCny(na, fx));
@@ -3998,8 +4017,8 @@ VIEWS.portfolio = function (app) {
     let dayCell = '—';
     if (a.dayPct != null && isFinite(a.dayPct)) {
       const up = a.dayPct >= 0;
-      // 当日涨跌金额（人民币）= 现市值 − 昨市值 = v × dayPct/(100+dayPct)
-      const dayAmt = v * a.dayPct / (100 + a.dayPct);
+      // 当日涨跌金额（人民币）——按「当日开盘持股」算，改过股数(增/减持)也与实际一致
+      const dayAmt = dayPnlCny(a, fx);
       dayCell = `<span class="pill ${up?'green':'red'}">${up?'+':''}${fmtPct(a.dayPct,2)}</span>`
         + `<br><span class="inline-note" style="color:${up?'var(--green-ink)':'var(--red-ink)'}">${dayAmt>=0?'+':'−'}${fmtMoney(Math.abs(dayAmt))}</span>`;
     } else if (assetFetchable(a) && !(num(a.lastPx) > 0)) {
