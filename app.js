@@ -174,9 +174,11 @@ function isCashLikeAsset(a) {
    ------------------------------------------------------------------------- */
 const FACTOR_GROUPS = {
   'AI算力': '科技成长', 'AI电力': '科技成长', 'AI应用': '科技成长',
+  '科技互联网': '科技成长', '传媒游戏': '科技成长', '光伏风电': '科技成长',
   '半导体': '科技成长', '机器人': '科技成长', '新能源车': '科技成长',
-  '创新药': '医药消费', '消费': '医药消费',
-  '银行': '价值周期', '地产': '价值周期', '能源': '价值周期',
+  '创新药': '医药消费', '医疗器械': '医药消费', '消费': '医药消费', '食品饮料': '医药消费',
+  '银行': '价值周期', '证券保险': '价值周期', '地产': '价值周期', '能源': '价值周期',
+  '有色金属': '价值周期', '化工': '价值周期', '公用事业': '价值周期', '农业': '价值周期',
   '军工': '主题', '其它': '其它', '黄金': '避险',
 };
 const GROUP_CORR = 0.72;   // 同一大组（如均属科技成长）默认相关
@@ -185,6 +187,7 @@ function factorCorr(a, b) {
   if (a === b) return 1;
   const ga = FACTOR_GROUPS[a] || '其它', gb = FACTOR_GROUPS[b] || '其它';
   if (ga === '避险' || gb === '避险') return (ga === '避险' && gb === '避险') ? 1 : -0.05; // 黄金 vs 权益
+  if (ga === '其它' || gb === '其它') return CROSS_CORR;   // 未分组因子之间不按同组高估（彼此未必同向）
   return ga === gb ? GROUP_CORR : CROSS_CORR;
 }
 
@@ -563,7 +566,7 @@ function applySellToPool(posId, amtCny) {
               : (p && p.code && isUsCode(p.code) ? 'USD' : 'CNY');
   const pool = settleToPool(ccy === 'USD' ? amtCny / fx : amtCny, ccy, '卖出' + (p ? p.name : '股票') + '回笼');
   saveState();
-  return { pool, ratio, ccy };
+  return { pool, ratio, ccy, unbooked: !a };   // unbooked：无对应资产，入池金额此前未入账，总资产会增加
 }
 
 // 当日开盘持股：① 当日编辑时快照的 sodShares；② 否则取「今天之前最近一份快照」里同标的股数
@@ -587,6 +590,7 @@ function dayPnlCny(a, fx) {
   fx = fx || currentFx();
   const dp = num(a.dayPct), px = num(a.lastPx);
   if (!isFinite(dp) || dp === 0 || !(px > 0)) return 0;
+  if (a.pxDate && a.pxDate !== todayStr()) return 0;   // 价格不是今天刷的：旧涨跌不能算当日盈亏
   const prev = px / (1 + dp / 100);                       // 昨收
   const cf = a.currency === 'USD' ? fx : 1;
   const trades = todayTradesOf(a);
@@ -646,7 +650,8 @@ function recordDayTrade(a, type, shares, price) {
 function undoDayTrade(a, idx) {
   const trades = todayTradesOf(a);
   const t = trades[idx];
-  if (!t) return;
+  // 只允许撤销最后一笔：每笔只记录自身前态，撤销中间笔会把后续交易的股数/现金池链打乱
+  if (!t || idx !== trades.length - 1) return;
   const fx = currentFx();
   a.shares = num(t.prevShares);
   if (t.prevPnl !== undefined) a.pnl = t.prevPnl;
@@ -1826,7 +1831,7 @@ function syncPositionsFromAssets() {
     }
     if (num(a.lastPx) > 0) p.price = a.lastPx;
     if (a.dayPct != null) p.dayPct = a.dayPct;
-    if (num(a.shares) > 0) p.shares = a.shares;
+    if (a.shares != null) p.shares = num(a.shares);      // 含归零：资产股数清空后持仓也要同步
   });
 }
 
@@ -1917,11 +1922,18 @@ VIEWS.positions = function (app) {
       prefill(); dtAsset.onchange = prefill;
       const box = tradeCard.querySelector('#dt-list');
       const rows = [];
-      (STATE.assets || []).forEach(a => todayTradesOf(a).forEach((t, i) => {
-        rows.push(`<tr><td>${escapeHtml(a.name)}</td><td>${t.type === 'buy' ? '<span style="color:var(--red-ink)">买入</span>' : '<span style="color:var(--green-ink)">卖出</span>'}</td>
-          <td class="num">${Math.round(num(t.shares)).toLocaleString()}</td><td class="num">${num(t.price)}</td>
-          <td class="num"><button class="btn danger small" data-undo="${a.id}:${i}">撤销</button></td></tr>`);
-      }));
+      (STATE.assets || []).forEach(a => {
+        const trs = todayTradesOf(a);
+        trs.forEach((t, i) => {
+          // 仅最后一笔可撤销：撤销中间笔会把后续交易的股数链打乱（undoDayTrade 也只认最后一笔）
+          const undoCell = i === trs.length - 1
+            ? `<button class="btn danger small" data-undo="${a.id}:${i}">撤销</button>`
+            : '<span class="inline-note">—</span>';
+          rows.push(`<tr><td>${escapeHtml(a.name)}</td><td>${t.type === 'buy' ? '<span style="color:var(--red-ink)">买入</span>' : '<span style="color:var(--green-ink)">卖出</span>'}</td>
+            <td class="num">${Math.round(num(t.shares)).toLocaleString()}</td><td class="num">${num(t.price)}</td>
+            <td class="num">${undoCell}</td></tr>`);
+        });
+      });
       box.innerHTML = rows.length
         ? `<div class="mini-label" style="margin-top:8px">今日交易记录</div><div class="table-scroll"><table><thead><tr><th>标的</th><th>方向</th><th class="num">股数</th><th class="num">成交价</th><th></th></tr></thead><tbody>${rows.join('')}</tbody></table></div>`
         : '<p class="inline-note">今天还没有交易记录。</p>';
@@ -3084,7 +3096,8 @@ VIEWS.rules = function (app) {
       const posCopy = positions.map(p => ({ factor: p.factor, weight: num(p.weight), id: p.id }));
       if (selId) {
         const t = posCopy.find(p => p.id === selId);
-        if (t) t.weight += add; else posCopy.push({ factor, weight: cur + add });
+        // 用下拉选定的因子归因（用户手动改了下拉时，加仓权重也归到该因子，校验口径才一致）
+        if (t) { t.factor = factor; t.weight += add; } else posCopy.push({ factor, weight: cur + add });
       } else {
         posCopy.push({ factor, weight: cur + add });
       }
@@ -3271,7 +3284,7 @@ VIEWS.planner = function (app) {
     const rows = prices.map((price, i) => {
       const amt = total * weights[i] / wsum;
       const shares = sharesFromCny(amt, price, pyCode);  // 金额(¥)先折币种再÷单价；A股取整到手
-      costSum += tradeCost(pyCode, shares * price, 'buy');
+      costSum += tradeCost(pyCode, shares * price * (isUsCode(pyCode) ? currentFx() : 1), 'buy');   // 美股股数×美元价 → 先折人民币再估费
       return `<tr>
         <td>第 ${i+1} 批</td>
         <td class="num">${price.toFixed(2)}</td>
@@ -3488,7 +3501,8 @@ VIEWS.planner = function (app) {
         if (!confirm(`确认记账：卖出「${p.name}」${fmtMoney(amt)}？\n资产/股数自动减少，所得进入股票现金池。`)) return;
         const r = applySellToPool(p.id, amt);
         recordDailySnapshot();            // 资产结构变了 → 覆盖今日快照
-        alert(`已记账：${fmtMoney(amt)} 计入「${poolName(r.ccy)}」（当前余额 ${fmtOrig(r.pool, r.ccy)}）。`);
+        alert(`已记账：${fmtMoney(amt)} 计入「${poolName(r.ccy)}」（当前余额 ${fmtOrig(r.pool, r.ccy)}）。`
+          + (r.unbooked ? '\n注意：该标的未在「投资组合」登记资产，卖出款入池会使总资产增加（市值此前未入账），建议补录该资产。' : ''));
         render();
       };
     };
@@ -3712,11 +3726,17 @@ VIEWS.settings = function (app) {
     reader.onload = () => {
       try {
         const imported = JSON.parse(reader.result);
-        STATE.settings = Object.assign({}, DEFAULT_SETTINGS, imported.settings || {});
-        STATE.positions = imported.positions || [];
-        STATE.assets = imported.assets || [];
-        STATE.portfolio = Object.assign({ totalAssets: Math.round(SEED_TOTAL) }, imported.portfolio || {});
-        STATE.snapshots = imported.snapshots || STATE.snapshots || [];
+        // 全量恢复（与导出对称）：forecasts/corrCache/macro 一并还原，缺失字段走默认值
+        STATE = applyStateDefaults({
+          settings: imported.settings,
+          positions: imported.positions,
+          assets: imported.assets,
+          portfolio: imported.portfolio,
+          snapshots: imported.snapshots,
+          forecasts: imported.forecasts,
+          corrCache: imported.corrCache,
+          macro: imported.macro,
+        });
         saveState(); alert('导入成功'); render();
       } catch (err) { alert('导入失败：文件格式不正确'); }
     };
@@ -4158,12 +4178,15 @@ VIEWS.portfolio = function (app) {
       incCell = `<span style="color:${inc.value>=0?'var(--green-ink)':'var(--red-ink)'}">${inc.value>=0?'+':''}${fmtMoney(inc.value)}</span>`;
     } else { incCell = '—'; }
     let dayCell = '—';
-    if (a.dayPct != null && isFinite(a.dayPct)) {
+    const pxStale = a.pxDate && a.pxDate !== todayStr();   // 价格不是今天刷的：旧涨跌不冒充「今日」
+    if (a.dayPct != null && isFinite(a.dayPct) && !pxStale) {
       const up = a.dayPct >= 0;
       // 当日涨跌金额（人民币）——按「当日开盘持股」算，改过股数(增/减持)也与实际一致
       const dayAmt = dayPnlCny(a, fx);
       dayCell = `<span class="pill ${up?'green':'red'}">${up?'+':''}${fmtPct(a.dayPct,2)}</span>`
         + `<br><span class="inline-note" style="color:${up?'var(--green-ink)':'var(--red-ink)'}">${dayAmt>=0?'+':'−'}${fmtMoney(Math.abs(dayAmt))}</span>`;
+    } else if (a.dayPct != null && isFinite(a.dayPct) && pxStale) {
+      dayCell = `<span class="inline-note">上次(${escapeHtml(String(a.pxDate).slice(5))}) ${a.dayPct>=0?'+':''}${fmtPct(a.dayPct,2)}<br>今日待刷新</span>`;
     } else if (assetFetchable(a) && !(num(a.lastPx) > 0)) {
       dayCell = '<span class="inline-note">待刷新</span>';   // 仅「从未取过价」时提示，取过价则显示 —
     }
@@ -4244,7 +4267,18 @@ VIEWS.portfolio = function (app) {
       // dayPct / pxDate / sodShares / sodDate / todayTrades 等运行期字段。
       // 否则改「金额」或「浮盈亏」时会把持股数、当日盈亏、当日交易记录一并清空——
       // 下次刷新又用 金额÷现价 反推出非整数股数，当日盈亏就和真实持股对不上了。
-      if (i >= 0) Object.assign(STATE.assets[i], asset);
+      if (i >= 0) {
+        Object.assign(STATE.assets[i], asset);
+        // 可刷新资产（基金/股票/黄金）直接改金额＝按现价补/减仓：同步校准份额，
+        // 否则下次刷新会用「旧份额×最新价」把刚改的金额弹回、浮盈亏按差额跳变
+        const oa = STATE.assets[i];
+        if (assetFetchable(oa) && num(oa.lastPx) > 0 && num(oa.amount) > 0) {
+          const implied = num(oa.shares) * num(oa.lastPx);
+          if (!(implied > 0) || Math.abs(num(oa.amount) - implied) / implied > 0.001) {
+            oa.shares = num(oa.amount) / num(oa.lastPx);
+          }
+        }
+      }
     } else { STATE.assets.push(asset); }
     saveState(); render();
   };
