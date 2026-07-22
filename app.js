@@ -1311,6 +1311,9 @@ function renderRealCorrCard(app, positions) {
   const renderCache = (c) => {
     if (!c || !c.codes || !c.codes.length) { out.innerHTML = ''; return; }
     const n = c.codes.length;
+    // 缓存比当前可纳入的标的少（多半是旧版本算的、没含基金/美股）→ 提示重算，避免"看着还是6只"的误会
+    const avail = corrHoldings().length;
+    const staleHint = (avail > n) ? `<div class="alert amber" style="margin-top:10px"><span class="icon">${icon('warn')}</span><div>下面是<strong>上次缓存</strong>的结果（${n} 个标的）。当前可纳入 <strong>${avail}</strong> 个（含基金/美股），点上方蓝色<strong>「拉取历史序列」</strong>重算即可纳入。</div></div>` : '';
     const roles = c.roles || c.codes.map(() => 'stock');
     const dot = i => roles[i] === 'fund' ? '<span title="压舱基金" style="color:var(--accent)">◆</span>' : '<span title="个股/美股弹性" style="color:var(--muted)">●</span>';
     const shortN = c.names.map(nm => (nm || '').slice(0, 4));
@@ -1334,6 +1337,7 @@ function renderRealCorrCard(app, positions) {
     const anaHtml = analysis.length ? `<h4 style="margin:18px 0 6px">${icon('sparkles')} 智能解读（自动）</h4>` + analysis.map(x => anaAlert(x[0], x[1])).join('') : '';
     out.innerHTML = `
       <p class="inline-note" style="margin-top:6px">数据日期 ${escapeHtml(c.date)} · 颜色越红＝相关性越高（同涨同跌）、越绿＝越低/负相关。</p>
+      ${staleHint}
       ${failNote}
       <div class="table-scroll"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>
       ${anaHtml}
