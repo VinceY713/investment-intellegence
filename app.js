@@ -580,16 +580,29 @@ function sodSharesOf(a) {
 }
 // 当日盈亏金额（人民币，带正负）——按「当日开盘持股」算，而非当前持股。
 // 今天增/减持后，当日盈亏只算你当日开盘时就持有的那部分，和实际一致。
+function todayTradesOf(a) {
+  return (a && a.tradesDate === todayStr() && Array.isArray(a.todayTrades)) ? a.todayTrades : [];
+}
 function dayPnlCny(a, fx) {
   fx = fx || currentFx();
   const dp = num(a.dayPct), px = num(a.lastPx);
   if (!isFinite(dp) || dp === 0 || !(px > 0)) return 0;
   const prev = px / (1 + dp / 100);                       // 昨收
-  // 当日新建仓（显式标记 sodShares=0）→ 当日盈亏计 0
-  if (a.sodDate === todayStr() && num(a.sodShares) === 0 && a.sodShares != null) return 0;
-  if (num(a.shares) > 0 || (a.sodDate === todayStr() && a.sodShares != null)) {
+  const cf = a.currency === 'USD' ? fx : 1;
+  const trades = todayTradesOf(a);
+  const hasPos = num(a.shares) > 0 || (a.sodDate === todayStr() && a.sodShares != null) || trades.length;
+  if (hasPos) {
     const sod = sodSharesOf(a);
-    return sod * (px - prev) * (a.currency === 'USD' ? fx : 1);
+    // 精确分解：开盘持股 = 全天持有 + 当日卖出；再加当日买入(买入价→收盘)
+    let totalSell = 0; trades.forEach(t => { if (t.type === 'sell') totalSell += num(t.shares); });
+    const heldThrough = Math.max(0, sod - totalSell);      // 从开盘持有到收盘
+    let pnl = heldThrough * (px - prev);
+    trades.forEach(t => {
+      if (t.type === 'sell') pnl += num(t.shares) * (num(t.price) - prev);   // 昨收→卖出价
+      else if (t.type === 'buy') pnl += num(t.shares) * (px - num(t.price)); // 买入价→收盘
+    });
+    if (sod === 0 && a.sodDate === todayStr() && !trades.length) return 0;   // 当日纯新建仓、无交易记录
+    return pnl * cf;
   }
   // 无持股数（手填金额资产）→ 回退按当前市值估算
   return assetCny(a, fx) * dp / (100 + dp);
@@ -597,6 +610,50 @@ function dayPnlCny(a, fx) {
 // 每天第一次改动某资产股数「之前」，快照当日开盘持股数；同日多次改动只记第一次。
 function captureSod(a) {
   if (a && a.sodDate !== todayStr()) { a.sodShares = num(a.shares); a.sodDate = todayStr(); }
+}
+// 记录一笔当日交易（买/卖，带成交价）：更新股数、按成交价结算现金池、维护浮盈亏与当日交易明细。
+// 每笔记录 prevShares/prevPnl 以便「撤销」。返回是否成功。
+function recordDayTrade(a, type, shares, price) {
+  const sh = num(shares), pr = num(price);
+  if (!a || !(sh > 0) || !(pr > 0)) return false;
+  const fx = currentFx(), cf = a.currency === 'USD' ? fx : 1;
+  const px = num(a.lastPx) > 0 ? num(a.lastPx) : pr;
+  captureSod(a);                                            // 先记开盘持股
+  if (a.tradesDate !== todayStr()) { a.todayTrades = []; a.tradesDate = todayStr(); }
+  const oldShares = num(a.shares), oldPnl = a.pnl;
+  if (type === 'buy') {
+    a.shares = oldShares + sh;
+    if (a.pnl != null) a.pnl = Math.round((num(a.pnl) + sh * (px - pr) * cf) * 100) / 100;
+    settleToPool(-(sh * pr), a.currency === 'USD' ? 'USD' : 'CNY', '买入' + a.name);
+  } else {
+    a.shares = Math.max(0, oldShares - sh);
+    const ratio = oldShares > 0 ? a.shares / oldShares : 0;
+    if (a.pnl != null) a.pnl = Math.round(num(a.pnl) * ratio * 100) / 100;
+    settleToPool(sh * pr, a.currency === 'USD' ? 'USD' : 'CNY', '卖出' + a.name);
+  }
+  a.amount = Math.round(num(a.shares) * px * 100) / 100;
+  a.cny = Math.round(assetCny(a, fx));
+  a.todayTrades.push({ type, shares: sh, price: pr, prevShares: oldShares, prevPnl: oldPnl });
+  const p = (STATE.positions || []).find(x => x.code === a.code);
+  if (p) p.shares = num(a.shares);                          // 同步持仓股数
+  return true;
+}
+// 撤销某资产的第 idx 笔当日交易：还原股数/浮盈亏，并反向结算现金池。
+function undoDayTrade(a, idx) {
+  const trades = todayTradesOf(a);
+  const t = trades[idx];
+  if (!t) return;
+  const fx = currentFx();
+  a.shares = num(t.prevShares);
+  if (t.prevPnl !== undefined) a.pnl = t.prevPnl;
+  settleToPool(t.type === 'buy' ? (t.shares * t.price) : -(t.shares * t.price),
+    a.currency === 'USD' ? 'USD' : 'CNY', '撤销' + a.name);   // 反向
+  const px = num(a.lastPx) > 0 ? num(a.lastPx) : num(t.price);
+  a.amount = Math.round(num(a.shares) * px * 100) / 100;
+  a.cny = Math.round(assetCny(a, fx));
+  a.todayTrades.splice(idx, 1);
+  const p = (STATE.positions || []).find(x => x.code === a.code);
+  if (p) p.shares = num(a.shares);
 }
 
 // 年化利率：理财/存款 —— 美元 3%，人民币按实际（从名称/备注的“x%”解析，默认按类别兜底）
@@ -1826,6 +1883,62 @@ VIEWS.positions = function (app) {
     <input type="hidden" id="np-pnl"/>
   `));
   app.appendChild(form);
+
+  // —— 当日交易录入（精确当日盈亏）——
+  {
+    const tradeCard = el('<div class="card" style="margin-top:16px"><h3>' + icon('coins') + ' 当日交易 · 精确当日盈亏</h3></div>');
+    const tradables = (STATE.assets || []).filter(a => a.code && ['A股股票', '美股股票', '基金'].includes(a.category));
+    if (!tradables.length) {
+      tradeCard.appendChild(el('<p class="hint">在「投资组合」里有股票/ETF/基金后，这里可录入当日买入/卖出（带成交价）：按成交价精确算当日盈亏，并自动更新股数与现金池，比"直接改数量"更准。</p>'));
+    } else {
+      tradeCard.appendChild(el(`
+        <p class="hint">当日盈亏 = 开盘持股×(现价−昨收) ＋ 当日买入×(现价−买入价) ＋ 当日卖出×(卖出价−昨收)；记录后自动更新股数、现金池与浮盈亏。当天调仓请在这里录，别直接改数量。</p>
+        <div class="grid grid-3">
+          <div class="field"><label>标的</label><select id="dt-asset">${tradables.map(a => `<option value="${a.id}">${escapeHtml(a.name)}（${escapeHtml(a.code)}·${Math.round(num(a.shares)).toLocaleString()}股）</option>`).join('')}</select></div>
+          <div class="field"><label>方向</label><select id="dt-type"><option value="buy">买入</option><option value="sell">卖出</option></select></div>
+          <div class="field"><label>股数</label><input id="dt-shares" type="number" step="100" placeholder="如 1400"/></div>
+        </div>
+        <div class="grid grid-3">
+          <div class="field"><label>成交价（原币）</label><input id="dt-price" type="number" step="0.001" placeholder="实际成交价"/></div>
+          <div class="field" style="display:flex;align-items:flex-end"><button class="btn" id="dt-record" style="width:100%">${icon('plus')} 记录当日交易</button></div>
+          <div></div>
+        </div>
+        <div id="dt-list" style="margin-top:6px"></div>
+      `));
+    }
+    app.appendChild(tradeCard);
+    const dtAsset = tradeCard.querySelector('#dt-asset');
+    if (dtAsset) {
+      const prefill = () => { const a = tradables.find(x => x.id === dtAsset.value); if (a && num(a.lastPx) > 0) tradeCard.querySelector('#dt-price').value = num(a.lastPx); };
+      prefill(); dtAsset.onchange = prefill;
+      const box = tradeCard.querySelector('#dt-list');
+      const rows = [];
+      (STATE.assets || []).forEach(a => todayTradesOf(a).forEach((t, i) => {
+        rows.push(`<tr><td>${escapeHtml(a.name)}</td><td>${t.type === 'buy' ? '<span style="color:var(--red-ink)">买入</span>' : '<span style="color:var(--green-ink)">卖出</span>'}</td>
+          <td class="num">${Math.round(num(t.shares)).toLocaleString()}</td><td class="num">${num(t.price)}</td>
+          <td class="num"><button class="btn danger small" data-undo="${a.id}:${i}">撤销</button></td></tr>`);
+      }));
+      box.innerHTML = rows.length
+        ? `<div class="mini-label" style="margin-top:8px">今日交易记录</div><div class="table-scroll"><table><thead><tr><th>标的</th><th>方向</th><th class="num">股数</th><th class="num">成交价</th><th></th></tr></thead><tbody>${rows.join('')}</tbody></table></div>`
+        : '<p class="inline-note">今天还没有交易记录。</p>';
+      box.querySelectorAll('[data-undo]').forEach(btn => btn.onclick = () => {
+        const [id, i] = btn.dataset.undo.split(':');
+        const a = (STATE.assets || []).find(x => x.id === id);
+        if (a && confirm('撤销这笔当日交易？将还原股数、现金池与浮盈亏。')) { undoDayTrade(a, +i); saveState(); render(); }
+      });
+      tradeCard.querySelector('#dt-record').onclick = () => {
+        const a = tradables.find(x => x.id === dtAsset.value);
+        const type = tradeCard.querySelector('#dt-type').value;
+        const shares = num(tradeCard.querySelector('#dt-shares').value);
+        const price = num(tradeCard.querySelector('#dt-price').value);
+        if (!a) { alert('请选择标的'); return; }
+        if (!(shares > 0)) { alert('请填写股数'); return; }
+        if (!(price > 0)) { alert('请填写成交价'); return; }
+        if (type === 'sell' && shares > num(a.shares) && !confirm(`卖出 ${shares} 股超过当前持股 ${Math.round(num(a.shares))} 股，仍继续？`)) return;
+        if (recordDayTrade(a, type, shares, price)) { saveState(); render(); }
+      };
+    }
+  }
 
   const $ = sel => form.querySelector(sel);
 
