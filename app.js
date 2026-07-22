@@ -251,7 +251,7 @@ async function fetchSeries(h) {
 function retsOf(closes) { const r = []; for (let i = 1; i < closes.length; i++) if (closes[i - 1] > 0) r.push(closes[i] / closes[i - 1] - 1); return r; }
 function pearson(x, y) {
   const n = Math.min(x.length, y.length);
-  if (n < 20) return null;                         // 样本过少不给相关，回退先验
+  if (n < 10) return null;                         // 样本过少不给相关，回退先验
   let sx = 0, sy = 0; for (let i = 0; i < n; i++) { sx += x[i]; sy += y[i]; }
   const mx = sx / n, my = sy / n;
   let cov = 0, vx = 0, vy = 0;
@@ -289,7 +289,7 @@ async function buildRealCorr(holdings) {
   const fetched = await mapLimit(targets, 3, fetchOne);
   // 全部标的都纳入矩阵：有效历史序列(≥30点)用实测相关；取不到序列(美股/基金接口失败或样本不足)
   // 的仍显示，用「因子先验」相关代替——保证美股/基金一定出现在热力图，绝不消失。
-  fetched.forEach(f => { f.hasReal = !!(f.map && f.map.size >= 30); });
+  fetched.forEach(f => { f.hasReal = !!(f.map && f.map.size >= 15); });   // 门槛 30→15：短序列(如新基金/美股返回条数少)也用实测
   const failed = fetched.filter(f => !f.hasReal).map(f => ({ name: f.p.name, code: f.p.code, err: f.err || '样本不足(<30日)' }));
   const codes = fetched.map(f => f.p.code), index = {}; codes.forEach((c, i) => index[c] = i);
   const n = fetched.length;
@@ -299,7 +299,7 @@ async function buildRealCorr(holdings) {
     let rho;
     if (a.hasReal && b.hasReal) {
       const common = a.dates.filter(d => b.map.has(d));     // 交集日期对齐（A股/美股/基金披露日各不同）
-      rho = common.length < 25 ? null : pearson(retsOf(common.map(d => a.map.get(d))), retsOf(common.map(d => b.map.get(d))));
+      rho = common.length < 12 ? null : pearson(retsOf(common.map(d => a.map.get(d))), retsOf(common.map(d => b.map.get(d))));
     }
     if (rho == null) rho = factorCorr(a.p.factor || '其它', b.p.factor || '其它');   // 至少给因子先验
     matrix[i][j] = matrix[j][i] = rho;
