@@ -2141,15 +2141,23 @@ VIEWS.positions = function (app) {
 
     scroll.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
       const p = STATE.positions.find(x => x.id === b.dataset.del);
-      // 有股数的持仓：删除可视为「全部卖出」并把所得计入现金池（有联动资产的不重复结算，资产仍在投资组合里）
-      if (p) {
-        const hasAsset = p.code && (STATE.assets || []).some(x => x.code === p.code);
-        const prev = hasAsset ? null : previewSharesSettlement(num(p.shares), 0, num(p.price), p.code);
-        if (prev && confirm(`删除「${p.name}」视为全部卖出：${p.shares} 股 ≈ ${fmtOrig(-prev.deltaOrig, prev.ccy)}，盈余计入「${poolName(prev.ccy)}」？\n「确定」=卖出并入账，「取消」=仅删除记录、不动现金池。`)) {
-          settleToPool(-prev.deltaOrig, prev.ccy, '卖出' + p.name + '（删除持仓）');
-        }
+      if (!p) { STATE.positions = STATE.positions.filter(x => x.id !== b.dataset.del); saveState(); render(); return; }
+      // 两表联动：同一只股票（同 code）在「全部持仓/资产」里也有时，一起删——
+      // 否则删了持仓、资产还躺着，再当日交易买入就会叠加翻倍。
+      const linkedAsset = p.code ? (STATE.assets || []).find(x => x.code === p.code) : null;
+      if (linkedAsset) {
+        if (!confirm(`「${p.name}」在「当前持仓」和「全部持仓/资产」里都有。\n「确定」= 两处一起删除（不动现金池，用于清理/纠错）；「取消」= 不删。`)) return;
+        STATE.positions = STATE.positions.filter(x => x.id !== p.id);
+        STATE.assets = (STATE.assets || []).filter(x => x.id !== linkedAsset.id);
+        saveState(); render();
+        return;
       }
-      STATE.positions = STATE.positions.filter(x => x.id !== b.dataset.del);
+      // 无联动资产：删除可视为「全部卖出」并把所得计入现金池
+      const prev = previewSharesSettlement(num(p.shares), 0, num(p.price), p.code);
+      if (prev && confirm(`删除「${p.name}」视为全部卖出：${p.shares} 股 ≈ ${fmtOrig(-prev.deltaOrig, prev.ccy)}，盈余计入「${poolName(prev.ccy)}」？\n「确定」=卖出并入账，「取消」=仅删除记录、不动现金池。`)) {
+        settleToPool(-prev.deltaOrig, prev.ccy, '卖出' + p.name + '（删除持仓）');
+      }
+      STATE.positions = STATE.positions.filter(x => x.id !== p.id);
       saveState(); render();
     });
     scroll.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => {
@@ -4249,8 +4257,15 @@ VIEWS.portfolio = function (app) {
     saveState(); render();
   };
   holdScroll.querySelectorAll('[data-adel]').forEach(b => b.onclick = () => {
-    if (!confirm('删除这笔资产？')) return;
+    const a = STATE.assets.find(x => x.id === b.dataset.adel);
+    // 两表联动：同一只股票（同 code）在「当前持仓」里也有时，一起删，避免残留、重复计数。
+    const linkedPos = a && a.code ? (STATE.positions || []).find(x => x.code === a.code) : null;
+    const msg = linkedPos
+      ? `「${a.name}」在「全部持仓/资产」和「当前持仓」里都有。\n「确定」= 两处一起删除；「取消」= 不删。`
+      : '删除这笔资产？';
+    if (!confirm(msg)) return;
     STATE.assets = STATE.assets.filter(x => x.id !== b.dataset.adel);
+    if (linkedPos) STATE.positions = (STATE.positions || []).filter(x => x.id !== linkedPos.id);
     saveState(); render();
   });
   holdScroll.querySelectorAll('[data-aedit]').forEach(b => b.onclick = () => {
