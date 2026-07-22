@@ -590,11 +590,15 @@ function dayPnlCny(a, fx) {
   const prev = px / (1 + dp / 100);                       // 昨收
   const cf = a.currency === 'USD' ? fx : 1;
   const trades = todayTradesOf(a);
+  let totalSell = 0, totalBuy = 0;
+  trades.forEach(t => { if (t.type === 'sell') totalSell += num(t.shares); else if (t.type === 'buy') totalBuy += num(t.shares); });
   const hasPos = num(a.shares) > 0 || (a.sodDate === todayStr() && a.sodShares != null) || trades.length;
   if (hasPos) {
-    const sod = sodSharesOf(a);
+    // 开盘持股：有当日交易记录时用「现持股 + 当日卖出 − 当日买入」反推——
+    // 与实际成交自洽，不受 captureSod 快照/手动纠错/隔日污染影响；
+    // 无交易记录时才回退到快照/当前持股。
+    const sod = trades.length ? Math.max(0, num(a.shares) + totalSell - totalBuy) : sodSharesOf(a);
     // 精确分解：开盘持股 = 全天持有 + 当日卖出；再加当日买入(买入价→收盘)
-    let totalSell = 0; trades.forEach(t => { if (t.type === 'sell') totalSell += num(t.shares); });
     const heldThrough = Math.max(0, sod - totalSell);      // 从开盘持有到收盘
     let pnl = heldThrough * (px - prev);
     trades.forEach(t => {
