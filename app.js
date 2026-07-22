@@ -205,9 +205,9 @@ function klineSymbol(code) {
   return null;
 }
 // 一个持仓/资产用哪种历史序列源：
-//  · us   → 腾讯美股前复权日K（usfqkline，经 /api/uskline）
+//  · us   → 东财美股前复权日K（push2his，经 /api/uskline；原腾讯 usfqkline 已失效）
 //  · fund → 场外公募基金历史净值（东财 lsjz，经 /api/fundhist）—— 联接/QDII 无盘中日K，用确认净值序列算相关
-//  · a    → A股/港股通/场内ETF 前复权日K（fqkline，经 /api/kline）
+//  · a    → A股/港股通/场内ETF 前复权日K（腾讯 fqkline，经 /api/kline）
 // category 传入时，'基金' 且为 6 位代码 → 走净值；否则按代码形态判断。无法取历史 → null（回退因子先验）。
 function seriesSourceOf(h) {
   const code = String((h && h.code) || '').trim();
@@ -220,15 +220,38 @@ function seriesSourceOf(h) {
 async function fetchKlines(code, count = 160) {
   const sym = klineSymbol(code);
   if (!sym) throw new Error('该代码无日K（场外基金/无代码）');
-  // 美股走腾讯 usfqkline（与 A股 fqkline 不同路径），否则回不来数据
-  const ep = isUsCode(code) ? '/api/uskline' : '/api/kline';
-  const res = await fetch(ep + '?param=' + encodeURIComponent(sym + ',day,,,' + count + ',qfq'), { cache: 'no-store' });
+  // 美股：腾讯 usfqkline 已于 2026-07 失效（只回 1~2 行），改走东财 push2his
+  if (isUsCode(code)) return await fetchUsKlinesEM(code, count);
+  const res = await fetch('/api/kline?param=' + encodeURIComponent(sym + ',day,,,' + count + ',qfq'), { cache: 'no-store' });
   if (!res.ok) throw new Error('接口返回 ' + res.status);
   const j = await res.json();
   const node = j && j.data && j.data[sym];
   const arr = node && (node.qfqday || node.day || node.week || node.qfqweek);
   if (!Array.isArray(arr) || !arr.length) throw new Error('无K线数据');
   return arr.map(r => ({ date: r[0], close: parseFloat(r[2]) })).filter(x => isFinite(x.close) && x.close > 0);
+}
+// 美股日K（东财 push2his，经 /api/uskline 代理，query 整段透传）。
+// secid 市场前缀：105 纳斯达克 / 106 纽交所 / 107 美交所（SPY 等 NYSE Arca ETF 在 107），逐个试到有数据。
+// fields2=f51,f53 → 每行 "日期,收盘"；fqt=1 前复权，klt=101 日K。
+async function fetchUsKlinesEM(code, count = 160) {
+  const sym = String(code).toUpperCase().replace(/\s+/g, '');
+  const endD = new Date();
+  const begD = new Date(endD.getTime() - Math.ceil(count * 2.2) * 864e5);
+  const ymd = d => d.toISOString().slice(0, 10).replace(/-/g, '');
+  const q = 'fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f53&klt=101&fqt=1&beg=' + ymd(begD) + '&end=' + ymd(endD);
+  for (const mkt of [105, 106, 107]) {
+    try {
+      const res = await fetch('/api/uskline?secid=' + mkt + '.' + encodeURIComponent(sym) + '&' + q, { cache: 'no-store' });
+      if (!res.ok) continue;
+      const j = await res.json();
+      const list = j && j.data && j.data.klines;
+      if (!Array.isArray(list) || !list.length) continue;
+      const out = list.map(line => { const p = String(line).split(','); return { date: p[0], close: parseFloat(p[1]) }; })
+        .filter(x => x.date && isFinite(x.close) && x.close > 0);
+      if (out.length) return out;
+    } catch (e) { /* 试下一个市场 */ }
+  }
+  throw new Error('美股日K获取失败（东财 105/106/107 均无该代码）');
 }
 // 场外基金历史净值序列（东财 lsjz，返回按日期倒序）；转成「与日K同形」的 {date,close} 升序序列
 // 用整段 query 透传（与 /api/emmacro 同款、最稳），fundCode/pageIndex/pageSize 都由前端拼好
@@ -1664,20 +1687,35 @@ function parseSina(text, opts) {
   return { name, price, changePct: isFinite(changePct) ? changePct : null, prevClose: prevClose > 0 ? prevClose : null };
 }
 
+// 东财实时报价（经 /api/emquote 代理）：secid 形如 105.AAPL（105纳斯达克/106纽交所/107美交所）、
+// 1.600000（沪）/0.000001（深）。f43 现价、f60 昨收（都要 ÷10^f59）、f58 名称。无数据返回 null。
+async function emQuote(secid) {
+  try {
+    const res = await fetch('/api/emquote?secid=' + encodeURIComponent(secid) + '&fields=f43,f58,f59,f60', { cache: 'no-store' });
+    if (!res.ok) return null;
+    const d = (await res.json()).data;
+    if (!d || !isFinite(d.f43)) return null;
+    const scale = Math.pow(10, d.f59 || 0);
+    const price = d.f43 / scale, prevClose = d.f60 / scale;
+    if (!(price > 0)) return null;
+    return { name: d.f58 || '', price, changePct: prevClose > 0 ? (price - prevClose) / prevClose * 100 : null, prevClose: prevClose > 0 ? prevClose : null };
+  } catch (e) { return null; }
+}
+
 async function fetchQuote(rawCode) {
   const code = String(rawCode || '').trim();
 
-  // 美股（含字母代码，如 TCOM / AAPL）：腾讯 us 前缀；新浪 gb_ 前缀兜底
+  // 美股（含字母代码，如 TCOM / AAPL）：腾讯 us 前缀主源；新浪已封服务器 IP，备用改东财（三个市场逐个试）
   if (isUsCode(code)) {
     const sym = code.toUpperCase().replace(/\s+/g, '');
     try {
       return parseTencent(await getQuoteText('/api/quote?code=' + encodeURIComponent('us' + sym)), { us: true });
     } catch (e1) {
-      try {
-        return parseSina(await getQuoteText('/api/quote_sina?code=' + encodeURIComponent('gb_' + sym.toLowerCase())), { us: true });
-      } catch (e2) {
-        throw new Error('美股行情获取失败（代码可能有误或已休市），可手动填名称与现价');
+      for (const mkt of [105, 106, 107]) {
+        const q2 = await emQuote(mkt + '.' + sym);
+        if (q2) return q2;
       }
+      throw new Error('美股行情获取失败（代码可能有误或已休市），可手动填名称与现价');
     }
   }
 
@@ -1685,15 +1723,13 @@ async function fetchQuote(rawCode) {
   if (!/^\d{5,6}$/.test(code)) throw new Error('请输入 5–6 位数字代码（A股/ETF），或美股字母代码（如 TCOM）');
   const full = detectMarket(code) + code;
   const q = encodeURIComponent(full);
-  // 先腾讯，失败再退回新浪
+  // 先腾讯，失败再退回东财（新浪已封服务器 IP，不再作备用）
   try {
     return parseTencent(await getQuoteText('/api/quote?code=' + q));
   } catch (e1) {
-    try {
-      return parseSina(await getQuoteText('/api/quote_sina?code=' + q));
-    } catch (e2) {
-      throw new Error('腾讯/新浪均失败（代码可能有误或已休市）');
-    }
+    const q2 = await emQuote((detectMarket(code) === 'sh' ? '1.' : '0.') + code);
+    if (q2) return q2;
+    throw new Error('腾讯/东财均失败（代码可能有误或已休市）');
   }
 }
 
@@ -4452,18 +4488,18 @@ async function fetchIndexQuote(item) {
 }
 
 /* -------------------------------------------------------------------------
-   宏观自动拉取（试验）：免 key、境内可达的数据源。市场行情/DXY/VIX/美债走新浪(复用
-   /api/quote_sina)；中国 CPI/PMI/LPR 走东财数据中心(/api/emmacro)。部分符号需真机验证，
-   拉不到就保留手填、绝不覆盖为空。US CPI/失业/联邦利率暂无可靠免 key 源，保持手填。
+   宏观自动拉取（试验）：免 key、境内可达的数据源。VIX/美股指数走腾讯(/api/quote)；
+   美元指数走东财(/api/emquote)；中国 CPI/PMI/LPR 走东财数据中心(/api/emmacro)；
+   美国 CPI/失业/联邦利率/核心PCE/PMI 走金十(/api/jin10)。拉不到就保留手填、绝不覆盖为空。
+   美债10Y 暂无可靠免 key 源（腾讯 usTNX/hf_TNX 均下架、新浪封 IP），保持手填。
    ------------------------------------------------------------------------- */
-// 每个指标配多个候选源，逐个尝试直到取到有效值（新浪被封→自动切腾讯/东财/金十）。
-// 源类型：sina(新浪 list=,逗号) / thf(腾讯 hf_外盘或us美股) / em(东财中国宏观) / emus(东财美国) / jin10(金十)
+// 每个指标配多个候选源，逐个尝试直到取到有效值（新浪已封服务器 IP，不再作候选源）。
+// 源类型：thf(腾讯 hf_外盘或us美股) / emq(东财实时报价) / em(东财中国宏观) / emus(东财美国) / jin10(金十)
 // range=[min,max] 合理区间：取到但超区间→判为无效(避免"假成功"，如美元指数取到 3554)，
 // 并在诊断里附上原始返回，便于校准取值位置。
 const MACRO_AUTO = [
-  { key: 'dxy',    label: '美元指数',   range: [70, 130], sources: [ { kind: 'thf', sym: 'hf_ZSD', field: 0 }, { kind: 'thf', sym: 'hf_USDX', field: 0 }, { kind: 'sina', sym: 'DINIW', field: 1 } ] },
-  { key: 'vix',    label: 'VIX',        range: [5, 95],   sources: [ { kind: 'thf', sym: 'usVIX', field: 3 }, { kind: 'sina', sym: 'gb_$vix', field: 1 } ] },
-  { key: 'ust10',  label: '美债10Y',    range: [0, 12],   sources: [ { kind: 'thf', sym: 'usTNX', field: 3 }, { kind: 'thf', sym: 'hf_TNX' }, { kind: 'sina', sym: 'gb_$tnx', field: 1, div: 10 } ] },
+  { key: 'dxy',    label: '美元指数',   range: [70, 130], sources: [ { kind: 'emq', secid: '100.UDI' } ] },
+  { key: 'vix',    label: 'VIX',        range: [5, 95],   sources: [ { kind: 'thf', sym: 'usVIX', field: 3 } ] },
   { key: 'cnCPI',  label: '中国CPI',    range: [-6, 20],  sources: [ { kind: 'em', report: 'RPT_ECONOMY_CPI', sort: 'REPORT_DATE', pick: ['NATIONAL_SAME'] } ] },
   { key: 'cnPMI',  label: '中国PMI',    range: [20, 80],  sources: [ { kind: 'em', report: 'RPT_ECONOMY_PMI', sort: 'REPORT_DATE', pick: ['MAKE_INDEX'] } ] },
   { key: 'cnLPR1', label: 'LPR 1年',    range: [0, 15],   sources: [ { kind: 'em', report: 'RPTA_WEB_RATE', sort: 'TRADE_DATE', pick: ['LPR1Y', 'LPR_1Y', 'LPR1', 'LPR_1'] } ] },
@@ -4496,6 +4532,12 @@ async function fetchMacroSource(src) {
       const p = mm ? mm[1].split(delim) : [];
       let v = parseFloat(p[src.field]); if (src.div && isFinite(v)) v = v / src.div;
       return { value: isFinite(v) ? v : null, raw: 'tx/' + src.sym + ' HTTP' + r.status + ' ' + macroClip(r.text) };
+    }
+    if (src.kind === 'emq') {
+      // 东财实时报价（/api/emquote）：f43 现价需 ÷10^f59，如美元指数 100.UDI
+      const r = await fetchRaw('/api/emquote?secid=' + encodeURIComponent(src.secid) + '&fields=f43,f59');
+      let v = null; try { const d = JSON.parse(r.text).data; if (d && isFinite(d.f43)) v = d.f43 / Math.pow(10, d.f59 || 0); } catch (e) {}
+      return { value: v, raw: 'emq/' + src.secid + ' HTTP' + r.status + ' ' + macroClip(r.text) };
     }
     if (src.kind === 'em') {
       const r = await fetchRaw('/api/emmacro?reportName=' + src.report + '&columns=ALL&pageSize=1&sortColumns=' + src.sort + '&sortTypes=-1&source=WEB&client=WEB');
