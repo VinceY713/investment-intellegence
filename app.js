@@ -264,13 +264,29 @@ function histMaxDrawdownPct(closes) { let peak = 0, mdd = 0; for (const c of clo
 
 // 拉全部持仓历史序列（股票日K + 基金净值）→ 真实相关矩阵 + 每标的统计；缓存到 STATE.corrCache
 // holdings：{code,name,weight,role,category}，role='stock'(弹性仓) 或 'fund'(压舱基金)
+// 限并发执行（保序）：一次最多 limit 个，避免同时打 16 个请求被行情源限流
+async function mapLimit(arr, limit, fn) {
+  const ret = new Array(arr.length);
+  let i = 0;
+  const worker = async () => { while (i < arr.length) { const idx = i++; ret[idx] = await fn(arr[idx], idx); } };
+  await Promise.all(Array.from({ length: Math.min(limit, arr.length) }, worker));
+  return ret;
+}
+const corrSleep = ms => new Promise(r => setTimeout(r, ms));
+
 async function buildRealCorr(holdings) {
   const targets = holdings.filter(p => seriesSourceOf(p));
   if (!targets.length) throw new Error('没有可取历史的标的（需 A股/美股代码或场外基金代码）');
-  const fetched = await Promise.all(targets.map(async p => {
-    try { const k = await fetchSeries(p); return { p, map: new Map(k.map(x => [x.date, x.close])), closes: k.map(x => x.close), dates: k.map(x => x.date) }; }
-    catch (e) { return { p, err: e.message }; }
-  }));
+  // 限并发 3 + 失败重试 1 次：东财/腾讯对同 IP 高并发敏感，一次性并发拉会被限流导致基金/美股拿不回来
+  const fetchOne = async (p) => {
+    let lastErr;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try { const k = await fetchSeries(p); return { p, map: new Map(k.map(x => [x.date, x.close])), closes: k.map(x => x.close), dates: k.map(x => x.date) }; }
+      catch (e) { lastErr = e; await corrSleep(350); }
+    }
+    return { p, err: lastErr ? lastErr.message : '未知' };
+  };
+  const fetched = await mapLimit(targets, 3, fetchOne);
   const ok = fetched.filter(f => f.map && f.map.size >= 30);
   const failed = fetched.filter(f => !f.map).map(f => ({ name: f.p.name, code: f.p.code, err: f.err }));
   if (!ok.length) throw new Error('全部历史序列获取失败：' + (failed[0] ? failed[0].err : '未知'));
