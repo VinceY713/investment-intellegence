@@ -201,16 +201,50 @@ function klineSymbol(code) {
   if (/^\d{6}$/.test(c)) return detectMarket(c) + c;
   return null;
 }
+// 一个持仓/资产用哪种历史序列源：
+//  · us   → 腾讯美股前复权日K（usfqkline，经 /api/uskline）
+//  · fund → 场外公募基金历史净值（东财 lsjz，经 /api/fundhist）—— 联接/QDII 无盘中日K，用确认净值序列算相关
+//  · a    → A股/港股通/场内ETF 前复权日K（fqkline，经 /api/kline）
+// category 传入时，'基金' 且为 6 位代码 → 走净值；否则按代码形态判断。无法取历史 → null（回退因子先验）。
+function seriesSourceOf(h) {
+  const code = String((h && h.code) || '').trim();
+  if (!code) return null;
+  if (isUsCode(code)) return { kind: 'us', sym: 'us' + code.toUpperCase().replace(/\s+/g, '') };
+  if (h && h.category === '基金' && /^\d{6}$/.test(code)) return { kind: 'fund', sym: code };
+  if (/^\d{6}$/.test(code)) return { kind: 'a', sym: detectMarket(code) + code };
+  return null;
+}
 async function fetchKlines(code, count = 160) {
   const sym = klineSymbol(code);
   if (!sym) throw new Error('该代码无日K（场外基金/无代码）');
-  const res = await fetch('/api/kline?param=' + encodeURIComponent(sym + ',day,,,' + count + ',qfq'), { cache: 'no-store' });
+  // 美股走腾讯 usfqkline（与 A股 fqkline 不同路径），否则回不来数据
+  const ep = isUsCode(code) ? '/api/uskline' : '/api/kline';
+  const res = await fetch(ep + '?param=' + encodeURIComponent(sym + ',day,,,' + count + ',qfq'), { cache: 'no-store' });
   if (!res.ok) throw new Error('接口返回 ' + res.status);
   const j = await res.json();
   const node = j && j.data && j.data[sym];
   const arr = node && (node.qfqday || node.day || node.week || node.qfqweek);
   if (!Array.isArray(arr) || !arr.length) throw new Error('无K线数据');
   return arr.map(r => ({ date: r[0], close: parseFloat(r[2]) })).filter(x => isFinite(x.close) && x.close > 0);
+}
+// 场外基金历史净值序列（东财 lsjz，返回按日期倒序）；转成「与日K同形」的 {date,close} 升序序列
+async function fetchFundSeries(code, count = 200) {
+  const res = await fetch('/api/fundhist?code=' + encodeURIComponent(code) + '&size=' + count, { cache: 'no-store' });
+  if (!res.ok) throw new Error('净值接口 ' + res.status);
+  const txt = await res.text();
+  let j; try { j = JSON.parse(txt); } catch (e) { throw new Error('净值解析失败'); }
+  const list = j && j.Data && j.Data.LSJZList;
+  if (!Array.isArray(list) || !list.length) throw new Error('无净值历史');
+  return list.map(r => ({ date: r.FSRQ, close: parseFloat(r.DWJZ) }))
+    .filter(x => x.date && isFinite(x.close) && x.close > 0)
+    .reverse();                                     // 东财倒序 → 升序，和日K对齐
+}
+// 统一取历史序列：按 seriesSourceOf 分派到日K或净值
+async function fetchSeries(h) {
+  const src = seriesSourceOf(h);
+  if (!src) throw new Error('无历史序列（场外/无代码）');
+  if (src.kind === 'fund') return await fetchFundSeries(h.code);
+  return await fetchKlines(h.code);
 }
 // 日收益率序列 / 皮尔逊相关 / 年化波动 / 历史最大回撤
 function retsOf(closes) { const r = []; for (let i = 1; i < closes.length; i++) if (closes[i - 1] > 0) r.push(closes[i] / closes[i - 1] - 1); return r; }
@@ -227,29 +261,41 @@ function pearson(x, y) {
 function annVolPct(rets) { if (rets.length < 2) return null; const m = rets.reduce((a, b) => a + b, 0) / rets.length; let v = 0; for (const r of rets) v += (r - m) * (r - m); v /= (rets.length - 1); return Math.sqrt(v * 252) * 100; }
 function histMaxDrawdownPct(closes) { let peak = 0, mdd = 0; for (const c of closes) { if (c > peak) peak = c; if (peak > 0) { const dd = (peak - c) / peak; if (dd > mdd) mdd = dd; } } return mdd * 100; }
 
-// 拉全部持仓日K → 真实相关矩阵 + 每股统计；缓存到 STATE.corrCache
-async function buildRealCorr(positions) {
-  const targets = positions.filter(p => klineSymbol(p.code));
-  if (!targets.length) throw new Error('没有可取日K的持仓（需 A股/美股代码，场外基金不支持）');
+// 拉全部持仓历史序列（股票日K + 基金净值）→ 真实相关矩阵 + 每标的统计；缓存到 STATE.corrCache
+// holdings：{code,name,weight,role,category}，role='stock'(弹性仓) 或 'fund'(压舱基金)
+async function buildRealCorr(holdings) {
+  const targets = holdings.filter(p => seriesSourceOf(p));
+  if (!targets.length) throw new Error('没有可取历史的标的（需 A股/美股代码或场外基金代码）');
   const fetched = await Promise.all(targets.map(async p => {
-    try { const k = await fetchKlines(p.code); return { p, map: new Map(k.map(x => [x.date, x.close])), closes: k.map(x => x.close), dates: k.map(x => x.date) }; }
+    try { const k = await fetchSeries(p); return { p, map: new Map(k.map(x => [x.date, x.close])), closes: k.map(x => x.close), dates: k.map(x => x.date) }; }
     catch (e) { return { p, err: e.message }; }
   }));
   const ok = fetched.filter(f => f.map && f.map.size >= 30);
   const failed = fetched.filter(f => !f.map).map(f => ({ name: f.p.name, code: f.p.code, err: f.err }));
-  if (!ok.length) throw new Error('全部日K获取失败：' + (failed[0] ? failed[0].err : '未知'));
+  if (!ok.length) throw new Error('全部历史序列获取失败：' + (failed[0] ? failed[0].err : '未知'));
   const codes = ok.map(f => f.p.code), index = {}; codes.forEach((c, i) => index[c] = i);
   const n = ok.length;
   const matrix = Array.from({ length: n }, () => Array(n).fill(1));
   for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
     const a = ok[i], b = ok[j];
-    const common = a.dates.filter(d => b.map.has(d));       // 交集日期对齐（A股/美股不同休市日）
+    const common = a.dates.filter(d => b.map.has(d));       // 交集日期对齐（A股/美股/基金披露日各不同）
     if (common.length < 25) { matrix[i][j] = matrix[j][i] = null; continue; }
     const rho = pearson(retsOf(common.map(d => a.map.get(d))), retsOf(common.map(d => b.map.get(d))));
     matrix[i][j] = matrix[j][i] = (rho == null ? null : rho);
   }
-  const stats = ok.map(f => ({ code: f.p.code, name: f.p.name, days: f.closes.length, vol: annVolPct(retsOf(f.closes)), mdd: histMaxDrawdownPct(f.closes) }));
-  return { date: todayStr(), codes, index, names: ok.map(f => f.p.name), matrix, stats, failed };
+  const stats = ok.map(f => ({ code: f.p.code, name: f.p.name, role: f.p.role || 'stock', days: f.closes.length, vol: annVolPct(retsOf(f.closes)), mdd: histMaxDrawdownPct(f.closes) }));
+  return { date: todayStr(), codes, index, names: ok.map(f => f.p.name), roles: ok.map(f => f.p.role || 'stock'), matrix, stats, failed };
+}
+// 参与相关性分析的全部标的：弹性仓个股（STATE.positions）+ 压舱基金（STATE.assets 中 category='基金'）。
+// 两者 weight 统一为「占总资产%」，便于比较核心(基金)/卫星(个股)在组合里的真实份量。
+function corrHoldings() {
+  const positions = (STATE.positions || []).filter(p => p.code).map(p => ({ code: p.code, name: p.name, weight: num(p.weight), role: 'stock' }));
+  const seen = new Set(positions.map(p => p.code));
+  const fx = currentFx(), total = portfolioTotal();
+  const funds = (STATE.assets || [])
+    .filter(a => a.category === '基金' && /^\d{6}$/.test(String(a.code || '')) && !isCashLikeAsset(a) && !seen.has(a.code))
+    .map(a => ({ code: a.code, name: a.name, category: '基金', role: 'fund', weight: total > 0 ? +(assetCny(a, fx) / total * 100).toFixed(4) : 0 }));
+  return positions.concat(funds);
 }
 // 相关性解析器：有缓存则用实测相关，缺失的（场外基金）回退因子先验
 function corrResolver(cache) {
@@ -1144,39 +1190,63 @@ VIEWS.dashboard = function (app) {
 
 /* 真实相关性卡片：拉历史日K → 实测相关矩阵 + 每股波动/历史最大回撤 + 一键回填 maxDrop */
 // 相关性热力图的确定性解读（无 AI、可复现）：找高相关对、冗余股、最佳分散器、隐藏集中度、行动建议
-function analyzeCorrelation(c, positions) {
+function analyzeCorrelation(c, holdings) {
   const out = [];
   if (!c || !c.matrix || !c.codes || c.codes.length < 2) return out;
   const n = c.codes.length, names = c.names || c.codes;
-  const wOf = code => { const p = (positions || []).find(x => x.code === code); return p ? num(p.weight) : 0; };
-  // 1 两两相关对排序
+  const roles = c.roles || c.codes.map(() => 'stock');
+  const isFund = i => roles[i] === 'fund';
+  const tag = i => isFund(i) ? '（基金·压舱）' : '（个股·弹性）';
+  const wOf = code => { const p = (holdings || []).find(x => x.code === code); return p ? num(p.weight) : 0; };
+  const stockIdx = [], fundIdx = [];
+  for (let i = 0; i < n; i++) (isFund(i) ? fundIdx : stockIdx).push(i);
+  // 1 两两相关对排序（跨核心/卫星都看）
   const pairs = [];
   for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) { const r = c.matrix[i][j]; if (r != null && isFinite(r)) pairs.push({ i, j, r }); }
   pairs.sort((a, b) => b.r - a.r);
   const hi = pairs.filter(p => p.r >= 0.7), mid = pairs.filter(p => p.r >= 0.5 && p.r < 0.7);
   if (hi.length) {
     out.push(['red', `发现 ${hi.length} 对<strong>高度同涨同跌（ρ≥0.7）</strong>——这些就是"假分散"的元凶，实际近似<strong>一注</strong>：`]);
-    hi.slice(0, 6).forEach(p => out.push(['pair', `${escapeHtml(names[p.i])} ↔ ${escapeHtml(names[p.j])}　ρ=${p.r.toFixed(2)}（占比 ${wOf(c.codes[p.i]).toFixed(1)}% / ${wOf(c.codes[p.j]).toFixed(1)}%）`]));
+    hi.slice(0, 6).forEach(p => out.push(['pair', `${escapeHtml(names[p.i])}${tag(p.i)} ↔ ${escapeHtml(names[p.j])}${tag(p.j)}　ρ=${p.r.toFixed(2)}（占比 ${wOf(c.codes[p.i]).toFixed(1)}% / ${wOf(c.codes[p.j]).toFixed(1)}%）`]));
   } else if (mid.length) {
     out.push(['amber', `无 ρ≥0.7 的对，但有 ${mid.length} 对中度相关（0.5–0.7）：`]);
-    mid.slice(0, 5).forEach(p => out.push(['pair', `${escapeHtml(names[p.i])} ↔ ${escapeHtml(names[p.j])}　ρ=${p.r.toFixed(2)}`]));
+    mid.slice(0, 5).forEach(p => out.push(['pair', `${escapeHtml(names[p.i])}${tag(p.i)} ↔ ${escapeHtml(names[p.j])}${tag(p.j)}　ρ=${p.r.toFixed(2)}`]));
   } else {
-    out.push(['green', '未发现 ρ≥0.5 的高相关对，个股层面分散良好。']);
+    out.push(['green', '未发现 ρ≥0.5 的高相关对，整体分散良好。']);
   }
-  // 2 冗余度（对其余的平均相关）：最高=最冗余，最低/负=最佳分散器
+  // 2 核心/卫星：每只压舱基金对「个股弹性仓」的平均相关 = 压舱质量（越低越能对冲个股回撤）
+  if (fundIdx.length && stockIdx.length) {
+    const fundAvg = fundIdx.map(fi => {
+      let s = 0, cnt = 0;
+      stockIdx.forEach(si => { const r = c.matrix[fi][si]; if (r != null && isFinite(r)) { s += r; cnt++; } });
+      return { fi, a: cnt ? s / cnt : null };
+    }).filter(x => x.a != null).sort((a, b) => a.a - b.a);
+    if (fundAvg.length) {
+      out.push(['info', `<strong>核心/卫星（基金压舱 vs 个股弹性）</strong>：每只基金与你个股仓的平均相关——越低越能在个股回撤时稳住组合。`]);
+      fundAvg.forEach(x => {
+        const q = x.a < 0.3 ? '压舱强' : x.a < 0.55 ? '压舱中' : '与个股同向、压舱弱';
+        out.push(['pair', `${escapeHtml(names[x.fi])}　平均相关 ${x.a.toFixed(2)}　→ ${q}`]);
+      });
+      const best = fundAvg[0], worst = fundAvg[fundAvg.length - 1];
+      if (best.a < 0.3) out.push(['green', `<strong>${escapeHtml(names[best.fi])}</strong> 与个股几乎不同向（${best.a.toFixed(2)}）——真正的压舱石，红利低波/高股息该有的样子，值得作为底仓。`]);
+      if (worst.a >= 0.6) out.push(['amber', `<strong>${escapeHtml(names[worst.fi])}</strong> 与个股高度同向（${worst.a.toFixed(2)}）——多半是宽基/科技类，和你的弹性仓吃同一波市场beta，别把它当"分散"，它更像加杠杆的个股。`]);
+    }
+  }
+  // 3 冗余度（对其余的平均相关）：最高=最冗余，最低/负=最佳分散器
   const avg = [];
   for (let i = 0; i < n; i++) { let s = 0, cnt = 0; for (let j = 0; j < n; j++) if (i !== j && c.matrix[i][j] != null) { s += c.matrix[i][j]; cnt++; } avg.push({ i, a: cnt ? s / cnt : 0 }); }
   avg.sort((x, y) => y.a - x.a);
   if (avg.length >= 2) {
     const worst = avg[0], best = avg[avg.length - 1];
-    out.push(['info', `最"冗余"的一只：<strong>${escapeHtml(names[worst.i])}</strong>（与其余平均相关 ${worst.a.toFixed(2)}）——对分散贡献最小，要精简优先考虑它。`]);
-    if (best.a < 0.35) out.push(['green', `最好的分散器：<strong>${escapeHtml(names[best.i])}</strong>（平均相关 ${best.a.toFixed(2)}）——在压低组合共振，值得保留。`]);
+    out.push(['info', `最"冗余"的一只：<strong>${escapeHtml(names[worst.i])}</strong>${tag(worst.i)}（与其余平均相关 ${worst.a.toFixed(2)}）——对分散贡献最小，要精简优先考虑它。`]);
+    if (best.a < 0.35) out.push(['green', `最好的分散器：<strong>${escapeHtml(names[best.i])}</strong>${tag(best.i)}（平均相关 ${best.a.toFixed(2)}）——在压低组合共振，值得保留。`]);
   }
-  // 3 隐藏集中度：标签 effN vs 相关性 effN
-  const labelEff = Calc.effectiveBets(positions).effN;
-  const corrEff = Calc.corrEffectiveBets(positions, corrResolver(c));
-  if (labelEff && corrEff) out.push([(labelEff - corrEff) >= 0.8 ? 'amber' : 'info', `按因子标签有效持仓数 ${labelEff.toFixed(1)}，按真实相关只剩 <strong>${corrEff.toFixed(1)}</strong>${(labelEff - corrEff) >= 0.8 ? '——差距=被标签掩盖的隐藏集中度' : ''}。`]);
-  // 4 行动建议
+  // 4 隐藏集中度：只对「个股弹性仓」算（基金无因子标签），标签 effN vs 相关性 effN
+  const stockPositions = (STATE.positions || []).filter(p => p.code);
+  const labelEff = Calc.effectiveBets(stockPositions).effN;
+  const corrEff = Calc.corrEffectiveBets(stockPositions, corrResolver(c));
+  if (labelEff && corrEff) out.push([(labelEff - corrEff) >= 0.8 ? 'amber' : 'info', `个股弹性仓：按因子标签有效持仓数 ${labelEff.toFixed(1)}，按真实相关只剩 <strong>${corrEff.toFixed(1)}</strong>${(labelEff - corrEff) >= 0.8 ? '——差距=被标签掩盖的隐藏集中度' : ''}。`]);
+  // 5 行动建议
   if (hi.length) {
     const p = hi[0], wi = wOf(c.codes[p.i]), wj = wOf(c.codes[p.j]);
     const trim = wi >= wj ? names[p.i] : names[p.j];
@@ -1186,9 +1256,9 @@ function analyzeCorrelation(c, positions) {
 }
 
 function renderRealCorrCard(app, positions) {
-  const card = el(`<div class="card" style="margin-top:16px"><h3>${icon('globe')} 真实相关性（历史日K）</h3>
-    <p class="hint">拉每只持仓约 160 个交易日收盘价，算<strong>实测</strong>两两相关（替代因子先验），并给出各股年化波动与<strong>历史最大回撤</strong>，可一键回填到「最大跌幅」。场外基金无日K，自动回退先验。</p></div>`);
-  const bar = el(`<div class="row" style="gap:8px;flex-wrap:wrap"><button class="btn" id="rc-go" style="flex:0 0 auto">${icon('refresh')} 拉取历史K线·计算真实相关性</button><span id="rc-note" class="inline-note" style="align-self:center"></span></div>`);
+  const card = el(`<div class="card" style="margin-top:16px"><h3>${icon('globe')} 真实相关性（历史序列）</h3>
+    <p class="hint">把<strong>个股弹性仓 + 压舱基金 + 美股</strong>放一起：个股/ETF/美股取约 160 个交易日前复权收盘价，场外基金取历史净值序列，算<strong>实测</strong>两两相关（替代因子先验），并给出各标的年化波动与<strong>历史最大回撤</strong>，可一键回填个股「最大跌幅」。<strong>核心/卫星</strong>视角看基金能否真正对冲个股回撤。取不到序列的标的自动回退因子先验。</p></div>`);
+  const bar = el(`<div class="row" style="gap:8px;flex-wrap:wrap"><button class="btn" id="rc-go" style="flex:0 0 auto">${icon('refresh')} 拉取历史序列·计算真实相关性</button><span id="rc-note" class="inline-note" style="align-self:center"></span></div>`);
   card.appendChild(bar);
   const out = el('<div id="rc-out"></div>');
   card.appendChild(out);
@@ -1204,16 +1274,19 @@ function renderRealCorrCard(app, positions) {
   const renderCache = (c) => {
     if (!c || !c.codes || !c.codes.length) { out.innerHTML = ''; return; }
     const n = c.codes.length;
+    const roles = c.roles || c.codes.map(() => 'stock');
+    const dot = i => roles[i] === 'fund' ? '<span title="压舱基金" style="color:var(--accent)">◆</span>' : '<span title="个股/美股弹性" style="color:var(--muted)">●</span>';
     const shortN = c.names.map(nm => (nm || '').slice(0, 4));
-    const head = '<th></th>' + shortN.map(nm => `<th class="num" style="font-size:11px">${escapeHtml(nm)}</th>`).join('');
-    const body = c.matrix.map((row, i) => `<tr><td style="font-size:11px;white-space:nowrap">${escapeHtml(shortN[i])}</td>` +
+    const head = '<th></th>' + shortN.map((nm, i) => `<th class="num" style="font-size:11px">${dot(i)}${escapeHtml(nm)}</th>`).join('');
+    const body = c.matrix.map((row, i) => `<tr><td style="font-size:11px;white-space:nowrap">${dot(i)}${escapeHtml(shortN[i])}</td>` +
       row.map((v, j) => `<td class="num" style="background:${i===j?'var(--surface-soft)':heat(v)};color:${i===j?'var(--muted)':'#fff'};font-size:11px">${i===j?'1.00':(v==null?'—':v.toFixed(2))}</td>`).join('') + '</tr>').join('');
-    const statRows = c.stats.map(st => `<tr><td>${escapeHtml(st.name)}</td><td class="num">${st.days}</td>
+    const statRows = c.stats.map(st => `<tr><td>${st.role==='fund'?'<span style="color:var(--accent)">◆</span>':'<span style="color:var(--muted)">●</span>'}${escapeHtml(st.name)}</td>
+      <td class="num" style="font-size:11px;color:var(--muted)">${st.role==='fund'?'基金':'个股/美股'}</td><td class="num">${st.days}</td>
       <td class="num">${st.vol!=null?fmtPct(st.vol,0):'—'}</td>
       <td class="num" style="color:var(--red-ink)">${fmtPct(st.mdd,0)}</td></tr>`).join('');
-    const failNote = (c.failed && c.failed.length) ? `<p class="inline-note">${c.failed.length} 只未取到日K（场外基金/代码不支持），这些仍用因子先验：${c.failed.map(f=>escapeHtml(f.name)).join('、')}。</p>` : '';
+    const failNote = (c.failed && c.failed.length) ? `<p class="inline-note">${c.failed.length} 只未取到历史序列（代码不支持/接口异常），这些仍用因子先验：${c.failed.map(f=>escapeHtml(f.name)).join('、')}。</p>` : '';
     // 智能解读（自动、确定性）
-    const analysis = analyzeCorrelation(c, STATE.positions || []);
+    const analysis = analyzeCorrelation(c, corrHoldings());
     const anaAlert = (t, m) => {
       if (t === 'pair') return `<div style="font-size:12px;margin:2px 0 2px 32px;font-family:monospace;color:var(--muted)">· ${m}</div>`;
       const cls = t === 'red' ? 'red' : t === 'amber' ? 'amber' : t === 'green' ? 'green' : 'blue';
@@ -1226,11 +1299,11 @@ function renderRealCorrCard(app, positions) {
       <div class="table-scroll"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>
       ${anaHtml}
       <div class="table-scroll" style="margin-top:14px"><table>
-        <thead><tr><th>标的</th><th class="num">样本天数</th><th class="num">年化波动</th><th class="num">历史最大回撤</th></tr></thead>
+        <thead><tr><th>标的</th><th class="num">类型</th><th class="num">样本天数</th><th class="num">年化波动</th><th class="num">历史最大回撤</th></tr></thead>
         <tbody>${statRows}</tbody></table></div>
       ${failNote}
       <div class="row" style="gap:8px;margin-top:10px"><button class="btn secondary" id="rc-fill" style="flex:0 0 auto">${icon('download')} 用历史最大回撤回填各股「最大跌幅」</button></div>
-      <p class="inline-note">回填后「③ 回撤控制」「股票体检」的回撤口径将基于真实历史，而非手填估计。回填只覆盖能取到日K的标的。</p>`;
+      <p class="inline-note">回填后「③ 回撤控制」「股票体检」的回撤口径将基于真实历史，而非手填估计。回填只覆盖能取到序列的<strong>个股</strong>（基金不进弹性仓回撤口径）。</p>`;
     const fill = out.querySelector('#rc-fill');
     if (fill) fill.onclick = () => {
       let cnt = 0;
@@ -1245,11 +1318,12 @@ function renderRealCorrCard(app, positions) {
 
   bar.querySelector('#rc-go').onclick = async () => {
     const btn = bar.querySelector('#rc-go'), note = bar.querySelector('#rc-note');
-    btn.disabled = true; note.innerHTML = icon('refresh', 'spin') + ' 拉取历史K线中，约 5–20 秒…';
+    btn.disabled = true; note.innerHTML = icon('refresh', 'spin') + ' 拉取历史序列中（个股日K + 基金净值），约 5–25 秒…';
     try {
-      const c = await buildRealCorr(STATE.positions || []);
+      const c = await buildRealCorr(corrHoldings());
       STATE.corrCache = c; saveState();
-      note.innerHTML = `${icon('check')} 已更新（${c.codes.length} 只，数据日期 ${c.date}）`;
+      const nf = (c.roles || []).filter(r => r === 'fund').length, ns = (c.codes.length - nf);
+      note.innerHTML = `${icon('check')} 已更新（个股/美股 ${ns} + 基金 ${nf}，数据日期 ${c.date}）`;
       renderCache(c);
     } catch (e) {
       note.innerHTML = `${icon('warn')} 获取失败：${escapeHtml(e.message)}——已保留因子先验，不影响其它功能`;

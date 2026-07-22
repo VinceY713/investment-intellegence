@@ -159,10 +159,50 @@ jobs:
                     add_header Cache-Control "no-store";
                 }
 
+                # 基金历史净值序列：/api/fundhist?code=020602&size=200 → 东财 lsjz 多行（算场外基金真实相关/波动/回撤）
+                # 与 /api/fund_nav 同源，仅 pageSize 由前端传入（$arg_size），拉够样本天数
+                location = /api/fundhist {
+                    proxy_pass https://api.fund.eastmoney.com/f10/lsjz?fundCode=$arg_code&pageIndex=1&pageSize=$arg_size;
+                    proxy_http_version 1.1;
+                    proxy_set_header Connection "";
+                    proxy_set_header Host api.fund.eastmoney.com;
+                    proxy_set_header Referer https://fundf10.eastmoney.com/;
+                    proxy_set_header User-Agent "Mozilla/5.0";
+                    proxy_set_header Accept "*/*";
+                    proxy_ssl_server_name on;
+                    proxy_ssl_name api.fund.eastmoney.com;
+                    proxy_ssl_protocols TLSv1.2 TLSv1.3;
+                    resolver 119.29.29.29 223.5.5.5 valid=300s;
+                    resolver_timeout 5s;
+                    proxy_connect_timeout 10s;
+                    proxy_read_timeout 15s;
+                    add_header Cache-Control "no-store";
+                }
+
                 # 日K历史代理：/api/kline?param=sh600000,day,,,160,qfq → 腾讯前复权日K（算真实相关性/波动/历史最大回撤用）
                 # 与 /api/quote 同为腾讯行情源；param 原样透传（含逗号，query 允许）
                 location = /api/kline {
                     proxy_pass https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=$arg_param;
+                    proxy_http_version 1.1;
+                    proxy_set_header Connection "";
+                    proxy_set_header Host web.ifzq.gtimg.cn;
+                    proxy_set_header Referer https://gu.qq.com/;
+                    proxy_set_header User-Agent "Mozilla/5.0";
+                    proxy_set_header Accept "*/*";
+                    proxy_ssl_server_name on;
+                    proxy_ssl_name web.ifzq.gtimg.cn;
+                    proxy_ssl_protocols TLSv1.2 TLSv1.3;
+                    resolver 119.29.29.29 223.5.5.5 valid=300s;
+                    resolver_timeout 5s;
+                    proxy_connect_timeout 10s;
+                    proxy_read_timeout 15s;
+                    add_header Cache-Control "no-store";
+                }
+
+                # 美股日K历史代理：/api/uskline?param=usTCOM,day,,,160,qfq → 腾讯美股前复权日K（usfqkline）
+                # 美股与 A股不同路径（usfqkline≠fqkline），否则拿不到美股K线；用于把美股纳入真实相关性
+                location = /api/uskline {
+                    proxy_pass https://web.ifzq.gtimg.cn/appstock/app/usfqkline/get?param=$arg_param;
                     proxy_http_version 1.1;
                     proxy_set_header Connection "";
                     proxy_set_header Host web.ifzq.gtimg.cn;
