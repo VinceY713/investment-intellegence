@@ -1268,11 +1268,38 @@ function analyzeCorrelation(c, holdings) {
 function renderRealCorrCard(app, positions) {
   const card = el(`<div class="card" style="margin-top:16px"><h3>${icon('globe')} 真实相关性（历史序列）</h3>
     <p class="hint">把<strong>个股弹性仓 + 压舱基金 + 美股</strong>放一起：个股/ETF/美股取约 160 个交易日前复权收盘价，场外基金取历史净值序列，算<strong>实测</strong>两两相关（替代因子先验），并给出各标的年化波动与<strong>历史最大回撤</strong>，可一键回填个股「最大跌幅」。<strong>核心/卫星</strong>视角看基金能否真正对冲个股回撤。取不到序列的标的自动回退因子先验。</p></div>`);
-  const bar = el(`<div class="row" style="gap:8px;flex-wrap:wrap"><button class="btn" id="rc-go" style="flex:0 0 auto">${icon('refresh')} 拉取历史序列·计算真实相关性</button><span id="rc-note" class="inline-note" style="align-self:center"></span></div>`);
+  const bar = el(`<div class="row" style="gap:8px;flex-wrap:wrap"><button class="btn" id="rc-go" style="flex:0 0 auto">${icon('refresh')} 拉取历史序列·计算真实相关性</button><button class="btn secondary" id="rc-diag" style="flex:0 0 auto">${icon('search')} 接口自检</button><span id="rc-note" class="inline-note" style="align-self:center"></span></div>`);
   card.appendChild(bar);
   const out = el('<div id="rc-out"></div>');
+  const diag = el('<div id="rc-diag-out"></div>');
+  card.appendChild(diag);
   card.appendChild(out);
   app.appendChild(card);
+
+  // 接口自检：显示「本地状态识别出的标的」+「新接口原始返回」，一眼看清是没识别到还是接口没通
+  bar.querySelector('#rc-diag').onclick = async () => {
+    const btn = bar.querySelector('#rc-diag');
+    btn.disabled = true; diag.innerHTML = `<p class="inline-note">${icon('refresh','spin')} 自检中…</p>`;
+    const lines = [];
+    const hs = corrHoldings();
+    const funds = hs.filter(h => h.role === 'fund'), stocks = hs.filter(h => h.role === 'stock');
+    const usH = hs.filter(h => isUsCode(h.code));
+    lines.push(`<strong>状态识别</strong>：共 ${hs.length} 个标的 → 个股/美股 ${stocks.length}、基金 ${funds.length}；其中美股 ${usH.length} 只（${usH.map(h=>escapeHtml(h.code)).join('、')||'无'}）`);
+    lines.push(`基金清单：${funds.length? funds.map(f=>escapeHtml(f.code+' '+f.name)).join('；') : '<span style="color:var(--red-ink)">0 只——说明「投资组合」里没有 category=基金 且代码为6位的资产，或都被当成现金类排除了</span>'}`);
+    const probe = async (label, url) => {
+      try {
+        const r = await fetch(url, { cache: 'no-store' });
+        const t = await r.text();
+        lines.push(`<strong>${label}</strong> [HTTP ${r.status}] 前240字：<code style="font-size:11px;word-break:break-all">${escapeHtml(t.slice(0,240))||'(空)'}</code>`);
+      } catch (e) { lines.push(`<strong>${label}</strong> 请求异常：${escapeHtml(e.message)}`); }
+    };
+    const oneFund = funds[0] ? funds[0].code : '020602';
+    const oneUs = usH[0] ? ('us' + usH[0].code.toUpperCase()) : 'usTCOM';
+    await probe(`基金净值接口 /api/fundhist（${oneFund}）`, '/api/fundhist?fundCode=' + encodeURIComponent(oneFund) + '&pageIndex=1&pageSize=20');
+    await probe(`美股K线接口 /api/uskline（${oneUs}）`, '/api/uskline?param=' + encodeURIComponent(oneUs + ',day,,,20,qfq'));
+    diag.innerHTML = `<div class="alert blue" style="margin-top:10px"><span class="icon">${icon('info')}</span><div style="line-height:1.7">${lines.join('<br>')}</div></div>`;
+    btn.disabled = false;
+  };
 
   const cache = STATE.corrCache;
   const heat = (v) => {
