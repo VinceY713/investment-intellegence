@@ -556,17 +556,33 @@ function applySellToPool(posId, amtCny) {
   return { pool, ratio, ccy };
 }
 
-// 当日盈亏金额（人民币，带正负）——按「当日开盘持股(sodShares)」算，而非当前持股。
-// 这样今天改过股数（增/减持）时，当日盈亏只算你当日开盘时就持有的那部分，和实际一致。
+// 当日开盘持股：① 当日编辑时快照的 sodShares；② 否则取「今天之前最近一份快照」里同标的股数
+// （= 今日开盘持仓，能对已发生的改动追溯生效）；③ 再否则用当前股数。
+function sodSharesOf(a) {
+  const today = todayStr();
+  if (a.sodDate === today && a.sodShares != null) return num(a.sodShares);
+  const snaps = (STATE.snapshots || []).filter(s => s && s.date && s.date < today).sort((x, y) => (x.date < y.date ? 1 : -1));
+  for (const s of snaps) {
+    const sa = (s.assets || []).find(x => (a.code && x.code === a.code) || (a.id && x.id === a.id));
+    if (sa && num(sa.shares) > 0) return num(sa.shares);
+  }
+  return num(a.shares);
+}
+// 当日盈亏金额（人民币，带正负）——按「当日开盘持股」算，而非当前持股。
+// 今天增/减持后，当日盈亏只算你当日开盘时就持有的那部分，和实际一致。
 function dayPnlCny(a, fx) {
   fx = fx || currentFx();
   const dp = num(a.dayPct), px = num(a.lastPx);
   if (!isFinite(dp) || dp === 0 || !(px > 0)) return 0;
   const prev = px / (1 + dp / 100);                       // 昨收
-  const sod = (a.sodDate === todayStr() && a.sodShares != null) ? num(a.sodShares) : num(a.shares);
-  if (sod > 0) return sod * (px - prev) * (a.currency === 'USD' ? fx : 1);
-  // 无持股数（手填金额资产）→ 回退按当前市值估算；开盘持股为 0（当日新建仓）→ 计 0
-  return (a.sodDate === todayStr()) ? 0 : assetCny(a, fx) * dp / (100 + dp);
+  // 当日新建仓（显式标记 sodShares=0）→ 当日盈亏计 0
+  if (a.sodDate === todayStr() && num(a.sodShares) === 0 && a.sodShares != null) return 0;
+  if (num(a.shares) > 0 || (a.sodDate === todayStr() && a.sodShares != null)) {
+    const sod = sodSharesOf(a);
+    return sod * (px - prev) * (a.currency === 'USD' ? fx : 1);
+  }
+  // 无持股数（手填金额资产）→ 回退按当前市值估算
+  return assetCny(a, fx) * dp / (100 + dp);
 }
 // 每天第一次改动某资产股数「之前」，快照当日开盘持股数；同日多次改动只记第一次。
 function captureSod(a) {
