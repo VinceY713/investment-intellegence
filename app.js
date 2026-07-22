@@ -4236,7 +4236,11 @@ VIEWS.portfolio = function (app) {
     if (pnlStr !== '') asset.pnl = num(pnlStr);
     if (editId) {
       const i = STATE.assets.findIndex(x => x.id === editId);
-      if (i >= 0) STATE.assets[i] = asset;
+      // 合并保存（不整体替换）：表单只覆盖它能编辑的字段，保留 shares / lastPx /
+      // dayPct / pxDate / sodShares / sodDate / todayTrades 等运行期字段。
+      // 否则改「金额」或「浮盈亏」时会把持股数、当日盈亏、当日交易记录一并清空——
+      // 下次刷新又用 金额÷现价 反推出非整数股数，当日盈亏就和真实持股对不上了。
+      if (i >= 0) Object.assign(STATE.assets[i], asset);
     } else { STATE.assets.push(asset); }
     saveState(); render();
   };
