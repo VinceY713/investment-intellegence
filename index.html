@@ -71,6 +71,7 @@
     <div class="modal" id="modal"></div>
   </div>
 
-  <script src="app.js"></script>
+  <!-- 版本化 URL：部署时 __BUILD__ 替换为提交 SHA，每次发布自动失效旧缓存，避免浏览器一直用旧 app.js -->
+  <script src="app.js?b=__BUILD__"></script>
 </body>
 </html>
