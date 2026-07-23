@@ -642,6 +642,34 @@ function dayPnlCny(a, fx) {
   // 无持股数（手填金额资产）→ 回退按当前市值估算
   return assetCny(a, fx) * dp / (100 + dp);
 }
+// 个人当日收益率% —— 当日盈亏 ÷ 当日成本基础（开盘持仓×昨收 ＋ 当日买入×买入价）。
+// 中途建仓/加仓的日子，标的全天涨幅(dayPct)≠你的实际收益率，本函数算的是后者；
+// 手填金额资产等算不出成本基础的，回退标的天涨幅。返回 null 表示「今日」列不可用。
+function dayPnlPct(a, fx) {
+  fx = fx || currentFx();
+  const dp = num(a.dayPct), px = num(a.lastPx);
+  if (!isFinite(dp) || dp === 0 || !(px > 0)) return null;
+  if (a.pxDate && a.pxDate !== todayStr()) return null;
+  const prev = px / (1 + dp / 100);
+  const cf = a.currency === 'USD' ? fx : 1;
+  const trades = todayTradesOf(a);
+  let totalSell = 0, totalBuy = 0;
+  trades.forEach(t => { if (t.type === 'sell') totalSell += num(t.shares); else if (t.type === 'buy') totalBuy += num(t.shares); });
+  const hasPos = num(a.shares) > 0 || (a.sodDate === todayStr() && a.sodShares != null) || trades.length;
+  if (!hasPos) return dp;                                // 手填金额资产：无份额口径，用标的天涨幅
+  const sod = trades.length ? Math.max(0, num(a.shares) + totalSell - totalBuy) : sodSharesOf(a);
+  if (sod === 0 && a.sodDate === todayStr() && !trades.length) {
+    // 当日纯新建仓：收益率 = 总浮盈亏 ÷ 成本（成本 = 市值 − 浮盈亏）
+    if (a.pnl == null) return dp;
+    const costCny = num(a.amount) * cf - num(a.pnl);
+    return costCny > 0 ? num(a.pnl) / costCny * 100 : dp;
+  }
+  const heldThrough = Math.max(0, sod - totalSell);
+  let base = heldThrough * prev;                          // 开盘持仓的昨收市值（原币）
+  trades.forEach(t => { if (t.type === 'buy') base += num(t.shares) * num(t.price); });
+  if (!(base > 0)) return dp;
+  return dayPnlCny(a, fx) / (base * cf) * 100;
+}
 // 每天第一次改动某资产股数「之前」，快照当日开盘持股数；同日多次改动只记第一次。
 function captureSod(a) {
   if (a && a.sodDate !== todayStr()) { a.sodShares = num(a.shares); a.sodDate = todayStr(); }
@@ -1617,7 +1645,44 @@ function buildLineChart(points, opts) {
     <path d="${line}" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
     ${dots}${xlab}
   </svg>`);
-  return svg;
+  if (typeof opts.tooltip !== 'function') return svg;
+  // 悬停交互：鼠标移动 → 吸附最近数据点，显示引导线 + 高亮点 + 提示框（内容由调用方格式化）
+  const NS = 'http://www.w3.org/2000/svg';
+  const guide = document.createElementNS(NS, 'line');
+  guide.setAttribute('class', 'chart-guide');
+  guide.setAttribute('y1', padT); guide.setAttribute('y2', padT + ih);
+  guide.style.display = 'none';
+  const marker = document.createElementNS(NS, 'circle');
+  marker.setAttribute('class', 'chart-dot-hover');
+  marker.setAttribute('r', 4.5);
+  marker.style.display = 'none';
+  svg.appendChild(guide); svg.appendChild(marker);
+  const wrap = el('<div style="position:relative"></div>');
+  wrap.appendChild(svg);
+  const tip = el('<div class="chart-tip"></div>');
+  wrap.appendChild(tip);
+  svg.style.cursor = 'crosshair';
+  svg.addEventListener('mousemove', e => {
+    const r = svg.getBoundingClientRect();
+    if (!(r.width > 0)) return;
+    const vx = (e.clientX - r.left) / r.width * w;          // 像素 → viewBox 坐标
+    let i = n === 1 ? 0 : Math.round((vx - padL) / iw * (n - 1));
+    i = Math.max(0, Math.min(n - 1, i));
+    guide.setAttribute('x1', X(i)); guide.setAttribute('x2', X(i));
+    guide.style.display = '';
+    marker.setAttribute('cx', X(i)); marker.setAttribute('cy', Y(points[i].value));
+    marker.style.display = '';
+    tip.innerHTML = opts.tooltip(i, points);
+    tip.style.display = 'block';
+    const pxX = X(i) / w * r.width;
+    const left = Math.max(0, Math.min(pxX - tip.offsetWidth / 2, r.width - tip.offsetWidth));
+    tip.style.left = left + 'px';
+    tip.style.top = Math.max(0, Y(points[i].value) / h * r.height - tip.offsetHeight - 10) + 'px';
+  });
+  svg.addEventListener('mouseleave', () => {
+    guide.style.display = 'none'; marker.style.display = 'none'; tip.style.display = 'none';
+  });
+  return wrap;
 }
 
 /* -------------------------------------------------------------------------
@@ -3960,7 +4025,7 @@ VIEWS.trends = function (app) {
       </div>
     </div>
     <div id="trend-chart" style="margin-top:14px"></div>
-    <p class="inline-note" style="margin-top:10px">切换「维度」可分别看总资产或某个大类/类别（如权益、基金、黄金）随时间的走势。</p>
+    <p class="inline-note" style="margin-top:10px">切换「维度」可分别看总资产或某个大类/类别（如权益、基金、黄金）随时间的走势。<strong>鼠标移到折线上</strong>可查看任一日期的数值，及较昨日 / 较上月 / 较期初累计的变化。</p>
   </div>`);
   app.appendChild(chartCard);
 
@@ -4042,7 +4107,30 @@ VIEWS.trends = function (app) {
     const pts = aggregate(gran, dim);
     const box = chartCard.querySelector('#trend-chart');
     box.innerHTML = '';
-    box.appendChild(buildLineChart(pts.map(p => ({ label: p.label, value: p.value }))));
+    box.appendChild(buildLineChart(pts, { tooltip: (i) => trendTip(i, pts, gran) }));
+  }
+
+  // 悬停提示：当日数值 ＋ 较昨日（日粒度）/较上一期 ＋ 较上月（日粒度，30 天前最近点）＋ 较期初累计
+  function trendTip(i, pts, gran) {
+    const p = pts[i];
+    const head = `<div style="font-weight:600">${escapeHtml(p.date || p.label)}</div>`
+      + `<div style="margin-bottom:3px">${fmtMoney(p.value)}</div>`;
+    const rows = [];
+    const cmp = (label, ref) => {
+      if (!(ref > 0)) return;
+      const d = p.value - ref, pc = d / ref * 100;
+      const col = d >= 0 ? 'var(--green-ink)' : 'var(--red-ink)';
+      rows.push(`<div style="color:${col}">${label} ${d >= 0 ? '+' : ''}${fmtMoney(d)}（${d >= 0 ? '+' : ''}${fmtPct(pc, 2)}）</div>`);
+    };
+    if (i > 0) cmp(gran === 'day' ? '较昨日' : '较上一期', pts[i - 1].value);
+    if (gran === 'day' && p.date && i > 0) {
+      const cutoff = new Date(new Date(p.date + 'T00:00:00').getTime() - 30 * 864e5).toISOString().slice(0, 10);
+      for (let j = i - 1; j >= 0; j--) {
+        if ((pts[j].date || '') <= cutoff) { cmp('较上月', pts[j].value); break; }
+      }
+    }
+    if (i > 0) cmp('较期初累计', pts[0].value);
+    return head + (rows.join('') || '<div style="color:var(--muted)">首个数据点</div>');
   }
 
   function drawTable(gran, dim) {
@@ -4213,9 +4301,15 @@ VIEWS.portfolio = function (app) {
       <h3 style="margin:0">${icon('coins')} 全部持仓（${assets.length}）</h3>
       ${fetchableCount ? `<button class="btn secondary small" id="pf-refresh" style="flex:0 0 auto">${icon('refresh')} 一键刷新估值</button>` : ''}
     </div>
-    <p class="hint">组合会随时间变化——可随时在下方「管理资产」增删改。按大类排序：股票 → 基金 → 理财 → 黄金 → 现金。
+    <p class="hint">组合会随时间变化——可随时在下方「管理资产」增删改。<strong>按住行可拖拽排序</strong>（顺序自动保存）；未拖拽时默认按大类排序：股票 → 基金 → 理财 → 黄金 → 现金。
       ${fetchableCount ? `<br>其中 <strong>${fetchableCount}</strong> 只基金/股票可自动更新（打开页面自动刷新，最近 <span id="pf-lastref">${lastRefStr}</span>）。理财为银行自有产品无公开接口，请手动维护。` : ''}</p></div>`);
-  const sorted = assets.slice().sort((a, b) => classRank(a.category) - classRank(b.category) || cnyOf(b) - cnyOf(a));
+  const orderMap = new Map((STATE.assetOrder || []).map((id, i) => [id, i]));
+  const sorted = assets.slice().sort((a, b) => {
+    const ia = orderMap.has(a.id) ? orderMap.get(a.id) : Infinity;
+    const ib = orderMap.has(b.id) ? orderMap.get(b.id) : Infinity;
+    if (ia !== ib) return ia - ib;                 // 用户拖拽过的自定义顺序优先
+    return classRank(a.category) - classRank(b.category) || cnyOf(b) - cnyOf(a);
+  });
   const hrows = sorted.map(a => {
     const v = cnyOf(a);
     const inc = assetIncome(a, fx);
@@ -4228,17 +4322,22 @@ VIEWS.portfolio = function (app) {
     let dayCell = '—';
     const pxStale = a.pxDate && a.pxDate !== todayStr();   // 价格不是今天刷的：旧涨跌不冒充「今日」
     if (a.dayPct != null && isFinite(a.dayPct) && !pxStale) {
-      const up = a.dayPct >= 0;
+      // 个人当日收益率：中途建仓/加仓的日子按你的成本基础算，区别于标的全天涨幅
+      const effPct = dayPnlPct(a, fx);
+      const showPct = effPct != null ? effPct : a.dayPct;
+      const up = showPct >= 0;
       // 当日涨跌金额（人民币）——按「当日开盘持股」算，改过股数(增/减持)也与实际一致
       const dayAmt = dayPnlCny(a, fx);
-      dayCell = `<span class="pill ${up?'green':'red'}">${up?'+':''}${fmtPct(a.dayPct,2)}</span>`
+      const diffTip = effPct != null && Math.abs(effPct - a.dayPct) > 0.05
+        ? ` title="你的当日收益率（按持仓成本基础）；标的全天涨幅 ${a.dayPct >= 0 ? '+' : ''}${fmtPct(a.dayPct, 2)}"` : '';
+      dayCell = `<span class="pill ${up?'green':'red'}"${diffTip}>${up?'+':''}${fmtPct(showPct,2)}</span>`
         + `<br><span class="inline-note" style="color:${up?'var(--green-ink)':'var(--red-ink)'}">${dayAmt>=0?'+':'−'}${fmtMoney(Math.abs(dayAmt))}</span>`;
     } else if (a.dayPct != null && isFinite(a.dayPct) && pxStale) {
       dayCell = `<span class="inline-note">上次(${escapeHtml(String(a.pxDate).slice(5))}) ${a.dayPct>=0?'+':''}${fmtPct(a.dayPct,2)}<br>今日待刷新</span>`;
     } else if (assetFetchable(a) && !(num(a.lastPx) > 0)) {
       dayCell = '<span class="inline-note">待刷新</span>';   // 仅「从未取过价」时提示，取过价则显示 —
     }
-    return `<tr>
+    return `<tr draggable="true" data-aid="${a.id}" class="asset-row">
       <td>${escapeHtml(a.name)}${a.code?`<br><span class="inline-note">${escapeHtml(a.code)}</span>`:''}</td>
       <td><span class="tag-chip">${escapeHtml(a.category)}</span></td>
       <td>${a.currency}</td>
@@ -4254,6 +4353,30 @@ VIEWS.portfolio = function (app) {
     <thead><tr><th>名称</th><th>类别</th><th>币种</th><th class="num">折合人民币</th><th class="num">占比</th><th class="num">今日</th><th class="num">收益/利息</th><th></th></tr></thead>
     <tbody>${hrows}</tbody></table></div>`);
   holdCard.appendChild(holdScroll);
+  // 行拖拽排序：拖动「全部持仓」行自定义顺序，存入 STATE.assetOrder 并同步云端
+  {
+    const tbody = holdScroll.querySelector('tbody');
+    let dragId = null;
+    tbody.querySelectorAll('tr.asset-row').forEach(tr => {
+      tr.addEventListener('dragstart', () => { dragId = tr.dataset.aid; tr.classList.add('dragging'); });
+      tr.addEventListener('dragend', () => tr.classList.remove('dragging'));
+      tr.addEventListener('dragover', e => { e.preventDefault(); tr.classList.add('drag-over'); });
+      tr.addEventListener('dragleave', () => tr.classList.remove('drag-over'));
+      tr.addEventListener('drop', e => {
+        e.preventDefault();
+        tr.classList.remove('drag-over');
+        const targetId = tr.dataset.aid;
+        if (!dragId || dragId === targetId) return;
+        const order = sorted.map(x => x.id);
+        const from = order.indexOf(dragId), to = order.indexOf(targetId);
+        if (from < 0 || to < 0) return;
+        order.splice(to, 0, order.splice(from, 1)[0]);
+        STATE.assetOrder = order;
+        saveState();                             // saveState 自动回传云端
+        render();
+      });
+    });
+  }
   holdCard.appendChild(el(`<p class="inline-note">「今日」为基金估算涨跌 / 股票当日涨跌；收益列：理财/存款显示<strong>年化利息</strong>（美元按 3%、人民币按实际利率，美元金额按当日中间价 ${fx.toFixed(4)} 折人民币），股票/基金/黄金显示<strong>浮盈亏</strong>。</p>`));
   app.appendChild(holdCard);
   const refBtn = holdCard.querySelector('#pf-refresh');

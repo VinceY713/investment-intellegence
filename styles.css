@@ -413,6 +413,14 @@ tr.total-row td.num { white-space: normal; }   /* 合计行可在 token 间换�
 .linechart .chart-grid { stroke: var(--chart-grid); stroke-width: 1; }
 .linechart .chart-dot { fill: var(--accent); stroke: var(--pie-hole); stroke-width: 1.5; }
 .linechart .chart-xlab { fill: var(--muted); font-size: 11px; }
+.linechart .chart-guide { stroke: var(--accent); stroke-width: 1; stroke-dasharray: 3 3; opacity: 0.55; }
+.linechart .chart-dot-hover { fill: var(--accent); stroke: var(--pie-hole); stroke-width: 2; }
+.chart-tip { position: absolute; display: none; pointer-events: none; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 8px 11px; font-size: 12px; line-height: 1.55; box-shadow: 0 6px 20px rgba(0,0,0,0.14); z-index: 6; white-space: nowrap; }
+
+/* 全部持仓：行拖拽排序 */
+tr.asset-row { cursor: grab; }
+tr.asset-row.dragging { opacity: 0.35; cursor: grabbing; }
+tr.asset-row.drag-over td { border-top: 2px solid var(--accent); }
 
 .progress { height: 12px; background: rgba(120,120,128,0.16); border-radius: 999px; overflow: hidden; }
 .progress .fill { height: 100%; border-radius: 999px; transition: width 0.4s ease; }
