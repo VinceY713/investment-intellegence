@@ -174,9 +174,11 @@ function isCashLikeAsset(a) {
    ------------------------------------------------------------------------- */
 const FACTOR_GROUPS = {
   'AI算力': '科技成长', 'AI电力': '科技成长', 'AI应用': '科技成长',
+  '科技互联网': '科技成长', '传媒游戏': '科技成长', '光伏风电': '科技成长',
   '半导体': '科技成长', '机器人': '科技成长', '新能源车': '科技成长',
-  '创新药': '医药消费', '消费': '医药消费',
-  '银行': '价值周期', '地产': '价值周期', '能源': '价值周期',
+  '创新药': '医药消费', '医疗器械': '医药消费', '消费': '医药消费', '食品饮料': '医药消费',
+  '银行': '价值周期', '证券保险': '价值周期', '地产': '价值周期', '能源': '价值周期',
+  '有色金属': '价值周期', '化工': '价值周期', '公用事业': '价值周期', '农业': '价值周期',
   '军工': '主题', '其它': '其它', '黄金': '避险',
 };
 const GROUP_CORR = 0.72;   // 同一大组（如均属科技成长）默认相关
@@ -185,6 +187,7 @@ function factorCorr(a, b) {
   if (a === b) return 1;
   const ga = FACTOR_GROUPS[a] || '其它', gb = FACTOR_GROUPS[b] || '其它';
   if (ga === '避险' || gb === '避险') return (ga === '避险' && gb === '避险') ? 1 : -0.05; // 黄金 vs 权益
+  if (ga === '其它' || gb === '其它') return CROSS_CORR;   // 未分组因子之间不按同组高估（彼此未必同向）
   return ga === gb ? GROUP_CORR : CROSS_CORR;
 }
 
@@ -202,9 +205,9 @@ function klineSymbol(code) {
   return null;
 }
 // 一个持仓/资产用哪种历史序列源：
-//  · us   → 腾讯美股前复权日K（usfqkline，经 /api/uskline）
+//  · us   → 东财美股前复权日K（push2his，经 /api/uskline；原腾讯 usfqkline 已失效）
 //  · fund → 场外公募基金历史净值（东财 lsjz，经 /api/fundhist）—— 联接/QDII 无盘中日K，用确认净值序列算相关
-//  · a    → A股/港股通/场内ETF 前复权日K（fqkline，经 /api/kline）
+//  · a    → A股/港股通/场内ETF 前复权日K（腾讯 fqkline，经 /api/kline）
 // category 传入时，'基金' 且为 6 位代码 → 走净值；否则按代码形态判断。无法取历史 → null（回退因子先验）。
 function seriesSourceOf(h) {
   const code = String((h && h.code) || '').trim();
@@ -217,15 +220,85 @@ function seriesSourceOf(h) {
 async function fetchKlines(code, count = 160) {
   const sym = klineSymbol(code);
   if (!sym) throw new Error('该代码无日K（场外基金/无代码）');
-  // 美股走腾讯 usfqkline（与 A股 fqkline 不同路径），否则回不来数据
-  const ep = isUsCode(code) ? '/api/uskline' : '/api/kline';
-  const res = await fetch(ep + '?param=' + encodeURIComponent(sym + ',day,,,' + count + ',qfq'), { cache: 'no-store' });
+  // 美股：腾讯 usfqkline 已于 2026-07 失效（只回 1~2 行），改走东财 push2his
+  if (isUsCode(code)) return await fetchUsKlinesEM(code, count);
+  const res = await fetch('/api/kline?param=' + encodeURIComponent(sym + ',day,,,' + count + ',qfq'), { cache: 'no-store' });
   if (!res.ok) throw new Error('接口返回 ' + res.status);
   const j = await res.json();
   const node = j && j.data && j.data[sym];
   const arr = node && (node.qfqday || node.day || node.week || node.qfqweek);
   if (!Array.isArray(arr) || !arr.length) throw new Error('无K线数据');
   return arr.map(r => ({ date: r[0], close: parseFloat(r[2]) })).filter(x => isFinite(x.close) && x.close > 0);
+}
+// 美股日K（东财 push2his，经 /api/uskline 代理，query 整段透传）。
+// secid 市场前缀：105 纳斯达克 / 106 纽交所 / 107 美交所（SPY 等 NYSE Arca ETF 在 107），逐个试到有数据。
+// fields2=f51,f53 → 每行 "日期,收盘"；fqt=1 前复权，klt=101 日K。
+async function fetchUsKlinesEM(code, count = 160) {
+  const sym = String(code).toUpperCase().replace(/\s+/g, '');
+  const endD = new Date();
+  const begD = new Date(endD.getTime() - Math.ceil(count * 2.2) * 864e5);
+  const ymd = d => d.toISOString().slice(0, 10).replace(/-/g, '');
+  const q = 'fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f53&klt=101&fqt=1&beg=' + ymd(begD) + '&end=' + ymd(endD);
+  for (const mkt of [105, 106, 107]) {
+    try {
+      const res = await fetch('/api/uskline?secid=' + mkt + '.' + encodeURIComponent(sym) + '&' + q, { cache: 'no-store' });
+      if (!res.ok) continue;
+      const j = await res.json();
+      const list = j && j.data && j.data.klines;
+      if (!Array.isArray(list) || !list.length) continue;
+      const out = list.map(line => { const p = String(line).split(','); return { date: p[0], close: parseFloat(p[1]) }; })
+        .filter(x => x.date && isFinite(x.close) && x.close > 0);
+      if (out.length) return out;
+    } catch (e) { /* 试下一个市场 */ }
+  }
+  throw new Error('美股日K获取失败（东财 105/106/107 均无该代码）');
+}
+// 基准指数日K序列：hs300 → 腾讯 fqkline(sh000300，经 /api/kline)；spx → 东财 push2his(secid=100.SPX，经 /api/uskline 透传)
+async function fetchBenchmarkSeries(key, count) {
+  count = count || 400;
+  if (key === 'hs300') {
+    const res = await fetch('/api/kline?param=' + encodeURIComponent('sh000300,day,,,' + count + ',qfq'), { cache: 'no-store' });
+    if (!res.ok) throw new Error('沪深300 K线接口 ' + res.status);
+    const j = await res.json();
+    const node = j && j.data && j.data['sh000300'];
+    const arr = node && (node.qfqday || node.day);
+    if (!Array.isArray(arr) || !arr.length) throw new Error('沪深300 无K线数据');
+    return arr.map(r => ({ date: r[0], close: parseFloat(r[2]) })).filter(x => isFinite(x.close) && x.close > 0);
+  }
+  if (key === 'spx') {
+    const endD = new Date(), begD = new Date(endD.getTime() - Math.ceil(count * 2.2) * 864e5);
+    const ymd = d => d.toISOString().slice(0, 10).replace(/-/g, '');
+    const res = await fetch('/api/uskline?secid=100.SPX&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f53&klt=101&fqt=1&beg=' + ymd(begD) + '&end=' + ymd(endD), { cache: 'no-store' });
+    if (!res.ok) throw new Error('标普500 K线接口 ' + res.status);
+    const j = await res.json();
+    const list = j && j.data && j.data.klines;
+    if (!Array.isArray(list) || !list.length) throw new Error('标普500 无K线数据');
+    return list.map(line => { const p = String(line).split(','); return { date: p[0], close: parseFloat(p[1]) }; })
+      .filter(x => x.date && isFinite(x.close) && x.close > 0);
+  }
+  throw new Error('未知基准 ' + key);
+}
+// 组合自身的 TWR 净值指数（首个快照 = 100）：剔除出入金，与基准对比才公平
+function twrIndexSeries(snaps) {
+  let acc = 100;
+  const out = [{ date: snaps[0].date, value: 100 }];
+  for (let i = 1; i < snaps.length; i++) {
+    const prev = num(snaps[i - 1].total), cur = num(snaps[i].total);
+    if (prev > 0) acc *= 1 + (cur - cashflowOn(snaps[i].date) - prev) / prev;
+    out.push({ date: snaps[i].date, value: acc });
+  }
+  return out;
+}
+// 基准序列按快照日期对齐（非交易日用此前最近收盘价填充），并以首个有数据的快照日 = 100 归一
+function alignBenchmark(snaps, series) {
+  const dates = series.map(x => x.date);                 // 已升序
+  const close = new Map(series.map(x => [x.date, x.close]));
+  let lastV = null, base = null;
+  return snaps.map(s => {
+    for (let i = dates.length - 1; i >= 0; i--) { if (dates[i] <= s.date) { lastV = close.get(dates[i]); break; } }
+    if (lastV != null && base == null) base = lastV;
+    return { label: s.date.slice(5), date: s.date, value: base ? lastV / base * 100 : 100 };
+  });
 }
 // 场外基金历史净值序列（东财 lsjz，返回按日期倒序）；转成「与日K同形」的 {date,close} 升序序列
 // 用整段 query 透传（与 /api/emmacro 同款、最稳），fundCode/pageIndex/pageSize 都由前端拼好
@@ -251,7 +324,7 @@ async function fetchSeries(h) {
 function retsOf(closes) { const r = []; for (let i = 1; i < closes.length; i++) if (closes[i - 1] > 0) r.push(closes[i] / closes[i - 1] - 1); return r; }
 function pearson(x, y) {
   const n = Math.min(x.length, y.length);
-  if (n < 20) return null;                         // 样本过少不给相关，回退先验
+  if (n < 10) return null;                         // 样本过少不给相关，回退先验
   let sx = 0, sy = 0; for (let i = 0; i < n; i++) { sx += x[i]; sy += y[i]; }
   const mx = sx / n, my = sy / n;
   let cov = 0, vx = 0, vy = 0;
@@ -264,28 +337,54 @@ function histMaxDrawdownPct(closes) { let peak = 0, mdd = 0; for (const c of clo
 
 // 拉全部持仓历史序列（股票日K + 基金净值）→ 真实相关矩阵 + 每标的统计；缓存到 STATE.corrCache
 // holdings：{code,name,weight,role,category}，role='stock'(弹性仓) 或 'fund'(压舱基金)
+// 限并发执行（保序）：一次最多 limit 个，避免同时打 16 个请求被行情源限流
+async function mapLimit(arr, limit, fn) {
+  const ret = new Array(arr.length);
+  let i = 0;
+  const worker = async () => { while (i < arr.length) { const idx = i++; ret[idx] = await fn(arr[idx], idx); } };
+  await Promise.all(Array.from({ length: Math.min(limit, arr.length) }, worker));
+  return ret;
+}
+const corrSleep = ms => new Promise(r => setTimeout(r, ms));
+
 async function buildRealCorr(holdings) {
   const targets = holdings.filter(p => seriesSourceOf(p));
   if (!targets.length) throw new Error('没有可取历史的标的（需 A股/美股代码或场外基金代码）');
-  const fetched = await Promise.all(targets.map(async p => {
-    try { const k = await fetchSeries(p); return { p, map: new Map(k.map(x => [x.date, x.close])), closes: k.map(x => x.close), dates: k.map(x => x.date) }; }
-    catch (e) { return { p, err: e.message }; }
-  }));
-  const ok = fetched.filter(f => f.map && f.map.size >= 30);
-  const failed = fetched.filter(f => !f.map).map(f => ({ name: f.p.name, code: f.p.code, err: f.err }));
-  if (!ok.length) throw new Error('全部历史序列获取失败：' + (failed[0] ? failed[0].err : '未知'));
-  const codes = ok.map(f => f.p.code), index = {}; codes.forEach((c, i) => index[c] = i);
-  const n = ok.length;
+  // 限并发 3 + 失败重试 1 次：东财/腾讯对同 IP 高并发敏感，一次性并发拉会被限流导致基金/美股拿不回来
+  const fetchOne = async (p) => {
+    let lastErr;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try { const k = await fetchSeries(p); return { p, map: new Map(k.map(x => [x.date, x.close])), closes: k.map(x => x.close), dates: k.map(x => x.date) }; }
+      catch (e) { lastErr = e; await corrSleep(350); }
+    }
+    return { p, err: lastErr ? lastErr.message : '未知' };
+  };
+  const fetched = await mapLimit(targets, 3, fetchOne);
+  // 全部标的都纳入矩阵：有效历史序列(≥30点)用实测相关；取不到序列(美股/基金接口失败或样本不足)
+  // 的仍显示，用「因子先验」相关代替——保证美股/基金一定出现在热力图，绝不消失。
+  fetched.forEach(f => { f.hasReal = !!(f.map && f.map.size >= 15); });   // 门槛 30→15：短序列(如新基金/美股返回条数少)也用实测
+  const failed = fetched.filter(f => !f.hasReal).map(f => ({ name: f.p.name, code: f.p.code, err: f.err || '样本不足(<30日)' }));
+  const codes = fetched.map(f => f.p.code), index = {}; codes.forEach((c, i) => index[c] = i);
+  const n = fetched.length;
   const matrix = Array.from({ length: n }, () => Array(n).fill(1));
   for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
-    const a = ok[i], b = ok[j];
-    const common = a.dates.filter(d => b.map.has(d));       // 交集日期对齐（A股/美股/基金披露日各不同）
-    if (common.length < 25) { matrix[i][j] = matrix[j][i] = null; continue; }
-    const rho = pearson(retsOf(common.map(d => a.map.get(d))), retsOf(common.map(d => b.map.get(d))));
-    matrix[i][j] = matrix[j][i] = (rho == null ? null : rho);
+    const a = fetched[i], b = fetched[j];
+    let rho;
+    if (a.hasReal && b.hasReal) {
+      const common = a.dates.filter(d => b.map.has(d));     // 交集日期对齐（A股/美股/基金披露日各不同）
+      rho = common.length < 12 ? null : pearson(retsOf(common.map(d => a.map.get(d))), retsOf(common.map(d => b.map.get(d))));
+    }
+    if (rho == null) rho = factorCorr(a.p.factor || '其它', b.p.factor || '其它');   // 至少给因子先验
+    matrix[i][j] = matrix[j][i] = rho;
   }
-  const stats = ok.map(f => ({ code: f.p.code, name: f.p.name, role: f.p.role || 'stock', days: f.closes.length, vol: annVolPct(retsOf(f.closes)), mdd: histMaxDrawdownPct(f.closes) }));
-  return { date: todayStr(), codes, index, names: ok.map(f => f.p.name), roles: ok.map(f => f.p.role || 'stock'), matrix, stats, failed };
+  const stats = fetched.map(f => ({
+    code: f.p.code, name: f.p.name, role: f.p.role || 'stock',
+    days: f.hasReal ? f.closes.length : 0,
+    vol: f.hasReal ? annVolPct(retsOf(f.closes)) : null,
+    mdd: f.hasReal ? histMaxDrawdownPct(f.closes) : null,
+    prior: !f.hasReal,
+  }));
+  return { date: todayStr(), codes, index, names: fetched.map(f => f.p.name), roles: fetched.map(f => f.p.role || 'stock'), matrix, stats, failed };
 }
 // 参与相关性分析的全部标的：
 //  · 弹性仓个股（STATE.positions，含 A股/港股通/美股）
@@ -293,7 +392,7 @@ async function buildRealCorr(holdings) {
 //  · 压舱基金（STATE.assets 中 category='基金'）
 // weight 统一为「占总资产%」，便于比较核心(基金)/卫星(个股)在组合里的真实份量。
 function corrHoldings() {
-  const positions = (STATE.positions || []).filter(p => p.code).map(p => ({ code: p.code, name: p.name, weight: num(p.weight), role: 'stock' }));
+  const positions = (STATE.positions || []).filter(p => p.code).map(p => ({ code: p.code, name: p.name, weight: num(p.weight), role: 'stock', factor: p.factor || guessFactor(p.name) }));
   const seen = new Set(positions.map(p => p.code));
   const fx = currentFx(), total = portfolioTotal();
   const wPct = a => total > 0 ? +(assetCny(a, fx) / total * 100).toFixed(4) : 0;
@@ -302,8 +401,8 @@ function corrHoldings() {
     const code = String(a.code || '').trim();
     if (!code || seen.has(code)) return;
     // 美股（含字母代码）作为个股弹性；场外基金作为压舱基金
-    if (a.category === '美股股票' && isUsCode(code)) { extra.push({ code, name: a.name, category: '美股股票', role: 'stock', weight: wPct(a) }); seen.add(code); }
-    else if (a.category === '基金' && /^\d{6}$/.test(code) && !isCashLikeAsset(a)) { extra.push({ code, name: a.name, category: '基金', role: 'fund', weight: wPct(a) }); seen.add(code); }
+    if (a.category === '美股股票' && isUsCode(code)) { extra.push({ code, name: a.name, category: '美股股票', role: 'stock', weight: wPct(a), factor: guessFactor(a.name) }); seen.add(code); }
+    else if (a.category === '基金' && /^\d{6}$/.test(code) && !isCashLikeAsset(a)) { extra.push({ code, name: a.name, category: '基金', role: 'fund', weight: wPct(a), factor: guessFactor(a.name) }); seen.add(code); }
   });
   return positions.concat(extra);
 }
@@ -521,7 +620,7 @@ function applySellToPool(posId, amtCny) {
     ratio = vCny > 0 ? Math.min(1, amtCny / vCny) : 0;
     const amtOrig = a.currency === 'USD' ? amtCny / fx : amtCny;
     a.amount = Math.max(0, Math.round((num(a.amount) - amtOrig) * 100) / 100);
-    if (num(a.shares) > 0) a.shares = Math.max(0, Math.round(a.shares * (1 - ratio) * 100) / 100);
+    if (num(a.shares) > 0) { captureSod(a); a.shares = Math.max(0, Math.round(a.shares * (1 - ratio) * 100) / 100); }
     if (a.pnl != null) a.pnl = Math.round(a.pnl * (1 - ratio) * 100) / 100;   // 卖出部分的浮盈亏按比例结转
     a.cny = Math.round(assetCny(a, fx));
   }
@@ -537,7 +636,154 @@ function applySellToPool(posId, amtCny) {
               : (p && p.code && isUsCode(p.code) ? 'USD' : 'CNY');
   const pool = settleToPool(ccy === 'USD' ? amtCny / fx : amtCny, ccy, '卖出' + (p ? p.name : '股票') + '回笼');
   saveState();
-  return { pool, ratio, ccy };
+  return { pool, ratio, ccy, unbooked: !a };   // unbooked：无对应资产，入池金额此前未入账，总资产会增加
+}
+
+// 当日开盘持股：① 当日编辑时快照的 sodShares；② 否则取「今天之前最近一份快照」里同标的股数
+// （= 今日开盘持仓，能对已发生的改动追溯生效）；③ 再否则用当前股数。
+// 已有历史快照、但任何一份里都没有该标的 → 今天才建仓，开盘持股为 0：
+// 当天收益按「现价−成本」口径（见 dayPnlCny），不会错按全天涨幅记。
+function sodSharesOf(a) {
+  const today = todayStr();
+  if (a.sodDate === today && a.sodShares != null) return num(a.sodShares);
+  const snaps = (STATE.snapshots || []).filter(s => s && s.date && s.date < today).sort((x, y) => (x.date < y.date ? 1 : -1));
+  for (const s of snaps) {
+    const sa = (s.assets || []).find(x => (a.code && x.code === a.code) || (a.id && x.id === a.id));
+    if (sa) return num(sa.shares);          // 最近一份快照里有它 → 以快照股数为准（含 0）
+  }
+  if (snaps.length) return 0;               // 有快照史但查无此标的 → 今日新建仓
+  return num(a.shares);
+}
+// 今日之前是否已持有该标的（按历史快照判断）。无快照数据时视为「一直持有」(true)，保持旧口径。
+function heldBeforeToday(a) {
+  const today = todayStr();
+  const snaps = (STATE.snapshots || []).filter(s => s && s.date && s.date < today);
+  if (!snaps.length) return true;
+  return snaps.some(s => (s.assets || []).some(x => (a.code && x.code === a.code) || (a.id && x.id === a.id)));
+}
+// 当日盈亏金额（人民币，带正负）——按「当日开盘持股」算，而非当前持股。
+// 今天增/减持后，当日盈亏只算你当日开盘时就持有的那部分，和实际一致。
+function todayTradesOf(a) {
+  return (a && a.tradesDate === todayStr() && Array.isArray(a.todayTrades)) ? a.todayTrades : [];
+}
+function dayPnlCny(a, fx) {
+  fx = fx || currentFx();
+  const dp = num(a.dayPct), px = num(a.lastPx);
+  if (!isFinite(dp) || dp === 0 || !(px > 0)) return 0;
+  if (a.pxDate && a.pxDate !== todayStr()) return 0;   // 价格不是今天刷的：旧涨跌不能算当日盈亏
+  const prev = px / (1 + dp / 100);                       // 昨收
+  const cf = a.currency === 'USD' ? fx : 1;
+  const trades = todayTradesOf(a);
+  let totalSell = 0, totalBuy = 0;
+  trades.forEach(t => { if (t.type === 'sell') totalSell += num(t.shares); else if (t.type === 'buy') totalBuy += num(t.shares); });
+  const hasPos = num(a.shares) > 0 || (a.sodDate === todayStr() && a.sodShares != null) || trades.length;
+  if (hasPos) {
+    // 开盘持股：有当日交易记录时用「现持股 + 当日卖出 − 当日买入」反推——
+    // 与实际成交自洽，不受 captureSod 快照/手动纠错/隔日污染影响；
+    // 无交易记录时才回退到快照/当前持股。
+    const sod = trades.length ? Math.max(0, num(a.shares) + totalSell - totalBuy) : sodSharesOf(a);
+    // 精确分解：开盘持股 = 全天持有 + 当日卖出；再加当日买入(买入价→收盘)
+    const heldThrough = Math.max(0, sod - totalSell);      // 从开盘持有到收盘
+    let pnl = heldThrough * (px - prev);
+    trades.forEach(t => {
+      if (t.type === 'sell') pnl += num(t.shares) * (num(t.price) - prev);   // 昨收→卖出价
+      else if (t.type === 'buy') pnl += num(t.shares) * (px - num(t.price)); // 买入价→收盘
+    });
+    if (sod === 0 && !trades.length) {
+      // 开盘持股为 0（当日新建仓：sodShares 记录，或历史快照查无此标的）、无当日交易明细——
+      // 整仓都是今天买的，全部浮盈亏都发生在今天：今日盈亏 = 总浮盈亏（现价−成本），而非 0、也非全天涨幅。没有成本才回退 0。
+      return a.pnl != null ? num(a.pnl) : 0;
+    }
+    return pnl * cf;
+  }
+  // 无持股数（手填金额资产）：今日新建仓（历史快照里没有）且填了成本 → 当日盈亏 = 全部浮盈亏；
+  // 否则回退按当前市值估算全天涨幅
+  if (!heldBeforeToday(a) && a.pnl != null) return num(a.pnl);
+  return assetCny(a, fx) * dp / (100 + dp);
+}
+// 个人当日收益率% —— 当日盈亏 ÷ 当日成本基础（开盘持仓×昨收 ＋ 当日买入×买入价）。
+// 中途建仓/加仓的日子，标的全天涨幅(dayPct)≠你的实际收益率，本函数算的是后者；
+// 手填金额资产等算不出成本基础的，回退标的天涨幅。返回 null 表示「今日」列不可用。
+function dayPnlPct(a, fx) {
+  fx = fx || currentFx();
+  const dp = num(a.dayPct), px = num(a.lastPx);
+  if (!isFinite(dp) || dp === 0 || !(px > 0)) return null;
+  if (a.pxDate && a.pxDate !== todayStr()) return null;
+  const prev = px / (1 + dp / 100);
+  const cf = a.currency === 'USD' ? fx : 1;
+  const trades = todayTradesOf(a);
+  let totalSell = 0, totalBuy = 0;
+  trades.forEach(t => { if (t.type === 'sell') totalSell += num(t.shares); else if (t.type === 'buy') totalBuy += num(t.shares); });
+  const hasPos = num(a.shares) > 0 || (a.sodDate === todayStr() && a.sodShares != null) || trades.length;
+  if (!hasPos) {
+    // 手填金额资产：今日新建仓（历史快照里没有）且填了成本 → 按成本口径，不吃全天涨幅
+    if (!heldBeforeToday(a) && a.pnl != null) {
+      const cost0 = num(a.amount) * cf - num(a.pnl);
+      return cost0 > 0 ? num(a.pnl) / cost0 * 100 : dp;
+    }
+    return dp;                                // 否则无份额口径，用标的天涨幅
+  }
+  const sod = trades.length ? Math.max(0, num(a.shares) + totalSell - totalBuy) : sodSharesOf(a);
+  if (sod === 0 && !trades.length) {
+    // 开盘持股为 0（当日新建仓）：收益率 = 总浮盈亏 ÷ 成本（成本 = 市值 − 浮盈亏）
+    if (a.pnl == null) return dp;
+    const costCny = num(a.amount) * cf - num(a.pnl);
+    return costCny > 0 ? num(a.pnl) / costCny * 100 : dp;
+  }
+  const heldThrough = Math.max(0, sod - totalSell);
+  let base = heldThrough * prev;                          // 开盘持仓的昨收市值（原币）
+  trades.forEach(t => { if (t.type === 'buy') base += num(t.shares) * num(t.price); });
+  if (!(base > 0)) return dp;
+  return dayPnlCny(a, fx) / (base * cf) * 100;
+}
+// 每天第一次改动某资产股数「之前」，快照当日开盘持股数；同日多次改动只记第一次。
+function captureSod(a) {
+  if (a && a.sodDate !== todayStr()) { a.sodShares = num(a.shares); a.sodDate = todayStr(); }
+}
+// 记录一笔当日交易（买/卖，带成交价）：更新股数、按成交价结算现金池、维护浮盈亏与当日交易明细。
+// 每笔记录 prevShares/prevPnl 以便「撤销」。返回是否成功。
+function recordDayTrade(a, type, shares, price) {
+  const sh = num(shares), pr = num(price);
+  if (!a || !(sh > 0) || !(pr > 0)) return false;
+  const fx = currentFx(), cf = a.currency === 'USD' ? fx : 1;
+  const px = num(a.lastPx) > 0 ? num(a.lastPx) : pr;
+  captureSod(a);                                            // 先记开盘持股
+  if (a.tradesDate !== todayStr()) { a.todayTrades = []; a.tradesDate = todayStr(); }
+  const oldShares = num(a.shares), oldPnl = a.pnl;
+  if (type === 'buy') {
+    a.shares = oldShares + sh;
+    if (a.pnl != null) a.pnl = Math.round((num(a.pnl) + sh * (px - pr) * cf) * 100) / 100;
+    settleToPool(-(sh * pr), a.currency === 'USD' ? 'USD' : 'CNY', '买入' + a.name);
+  } else {
+    a.shares = Math.max(0, oldShares - sh);
+    const ratio = oldShares > 0 ? a.shares / oldShares : 0;
+    if (a.pnl != null) a.pnl = Math.round(num(a.pnl) * ratio * 100) / 100;
+    settleToPool(sh * pr, a.currency === 'USD' ? 'USD' : 'CNY', '卖出' + a.name);
+  }
+  a.amount = Math.round(num(a.shares) * px * 100) / 100;
+  a.cny = Math.round(assetCny(a, fx));
+  a.todayTrades.push({ type, shares: sh, price: pr, prevShares: oldShares, prevPnl: oldPnl });
+  const p = (STATE.positions || []).find(x => x.code === a.code);
+  if (p) p.shares = num(a.shares);                          // 同步持仓股数
+  return true;
+}
+// 撤销某资产的第 idx 笔当日交易：还原股数/浮盈亏，并反向结算现金池。
+function undoDayTrade(a, idx) {
+  const trades = todayTradesOf(a);
+  const t = trades[idx];
+  // 只允许撤销最后一笔：每笔只记录自身前态，撤销中间笔会把后续交易的股数/现金池链打乱
+  if (!t || idx !== trades.length - 1) return;
+  const fx = currentFx();
+  a.shares = num(t.prevShares);
+  if (t.prevPnl !== undefined) a.pnl = t.prevPnl;
+  settleToPool(t.type === 'buy' ? (t.shares * t.price) : -(t.shares * t.price),
+    a.currency === 'USD' ? 'USD' : 'CNY', '撤销' + a.name);   // 反向
+  const px = num(a.lastPx) > 0 ? num(a.lastPx) : num(t.price);
+  a.amount = Math.round(num(a.shares) * px * 100) / 100;
+  a.cny = Math.round(assetCny(a, fx));
+  a.todayTrades.splice(idx, 1);
+  const p = (STATE.positions || []).find(x => x.code === a.code);
+  if (p) p.shares = num(a.shares);
 }
 
 // 年化利率：理财/存款 —— 美元 3%，人民币按实际（从名称/备注的“x%”解析，默认按类别兜底）
@@ -668,6 +914,8 @@ function applyStateDefaults(s) {
   s.snapshots = s.snapshots || [];
   s.forecasts = s.forecasts || [];
   s.corrCache = s.corrCache || null;
+  s.cashflows = s.cashflows || [];              // 出入金登记 [{id,date,amount,note}]，正=入金 负=出金（人民币）
+  s.targetAlloc = s.targetAlloc || null;        // 再平衡目标配置 {buckets:{...}, threshold}，null=未设置
   s.macro = Object.assign({ market: {}, ind: {}, updatedAt: null }, s.macro || {});
   s.macro.market = s.macro.market || {}; s.macro.ind = s.macro.ind || {};
   return s;
@@ -754,6 +1002,26 @@ function recordDailySnapshot() {
   else STATE.snapshots.push(snap);
   STATE.snapshots.sort((a, b) => a.date.localeCompare(b.date));
   saveState();
+}
+
+// 某天的出入金合计（人民币，正=入金 负=出金）
+function cashflowOn(dateStr) {
+  return (STATE.cashflows || []).filter(c => c.date === dateStr).reduce((s, c) => s + num(c.amount), 0);
+}
+// 时间加权收益率(TWR)：相邻快照逐日收益率连乘，剔除出入金——
+// r_i = (T_i − CF_i − T_{i-1}) / T_{i-1}（当日流水按开盘前到账近似）。
+// 解决「净值变化 ≠ 真实收益率」：加仓后多赚的钱不是收益。仅总资产口径。
+function twrOverall(snaps) {
+  let acc = 1, days = 0, flows = 0;
+  for (let i = 1; i < snaps.length; i++) {
+    const prev = num(snaps[i - 1].total), cur = num(snaps[i].total);
+    if (!(prev > 0)) continue;
+    const cf = cashflowOn(snaps[i].date);
+    flows += cf;
+    acc *= 1 + (cur - cf - prev) / prev;
+    days++;
+  }
+  return { twr: (acc - 1) * 100, days, flows };
 }
 
 /* -------------------------------------------------------------------------
@@ -1320,10 +1588,10 @@ function renderRealCorrCard(app, positions) {
     const head = '<th></th>' + shortN.map((nm, i) => `<th class="num" style="font-size:11px">${dot(i)}${escapeHtml(nm)}</th>`).join('');
     const body = c.matrix.map((row, i) => `<tr><td style="font-size:11px;white-space:nowrap">${dot(i)}${escapeHtml(shortN[i])}</td>` +
       row.map((v, j) => `<td class="num" style="background:${i===j?'var(--surface-soft)':heat(v)};color:${i===j?'var(--muted)':'#fff'};font-size:11px">${i===j?'1.00':(v==null?'—':v.toFixed(2))}</td>`).join('') + '</tr>').join('');
-    const statRows = c.stats.map(st => `<tr><td>${st.role==='fund'?'<span style="color:var(--accent)">◆</span>':'<span style="color:var(--muted)">●</span>'}${escapeHtml(st.name)}</td>
-      <td class="num" style="font-size:11px;color:var(--muted)">${st.role==='fund'?'基金':'个股/美股'}</td><td class="num">${st.days}</td>
+    const statRows = c.stats.map(st => `<tr><td>${st.role==='fund'?'<span style="color:var(--accent)">◆</span>':'<span style="color:var(--muted)">●</span>'}${escapeHtml(st.name)}${st.prior?'<span class="inline-note"> · 因子先验</span>':''}</td>
+      <td class="num" style="font-size:11px;color:var(--muted)">${st.role==='fund'?'基金':'个股/美股'}</td><td class="num">${st.days||'—'}</td>
       <td class="num">${st.vol!=null?fmtPct(st.vol,0):'—'}</td>
-      <td class="num" style="color:var(--red-ink)">${fmtPct(st.mdd,0)}</td></tr>`).join('');
+      <td class="num" style="color:var(--red-ink)">${st.mdd!=null?fmtPct(st.mdd,0):'—'}</td></tr>`).join('');
     // 失败诊断：带出每只的错误原因，方便定位是接口没通还是代码不支持
     const failNote = (c.failed && c.failed.length) ? `<div class="alert amber" style="margin-top:10px"><span class="icon">${icon('warn')}</span><div><strong>${c.failed.length} 只未取到历史序列</strong>（这些仍用因子先验，不影响其它）：<br>${c.failed.map(f=>`· ${escapeHtml(f.name)}（${escapeHtml(f.code||'无代码')}）：${escapeHtml(f.err||'未知')}`).join('<br>')}</div></div>` : '';
     // 智能解读（自动、确定性）
@@ -1428,7 +1696,10 @@ function buildLineChart(points, opts) {
   const padL = 8, padR = 12, padT = 16, padB = 26;
   const iw = w - padL - padR, ih = h - padT - padB;
   if (!points.length) return el('<div class="empty">暂无数据</div>');
+  // opts.extra：叠加的对比序列（如基准指数），与主序列等长、共享 X 轴
+  const extras = (opts.extra || []).filter(e => e && Array.isArray(e.points) && e.points.length === points.length);
   const vals = points.map(p => p.value);
+  extras.forEach(e => e.points.forEach(p => { if (isFinite(p.value)) vals.push(p.value); }));
   let min = Math.min(...vals), max = Math.max(...vals);
   if (min === max) { min = min * 0.98; max = max * 1.02 || 1; }
   const pad = (max - min) * 0.12; min -= pad; max += pad;
@@ -1436,6 +1707,10 @@ function buildLineChart(points, opts) {
   const X = i => padL + (n === 1 ? iw / 2 : iw * i / (n - 1));
   const Y = v => padT + ih * (1 - (v - min) / (max - min));
   const line = points.map((p, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)},${Y(p.value).toFixed(1)}`).join(' ');
+  const extraLines = extras.map(e => {
+    const d = e.points.map((p, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)},${Y(p.value).toFixed(1)}`).join(' ');
+    return `<path d="${d}" fill="none" stroke="${e.color || 'var(--muted)'}" stroke-width="1.8"${e.dash ? ` stroke-dasharray="${e.dash}"` : ''} stroke-linejoin="round"/>`;
+  }).join('');
   const area = `${line} L${X(n - 1).toFixed(1)},${(padT + ih).toFixed(1)} L${X(0).toFixed(1)},${(padT + ih).toFixed(1)} Z`;
   // 网格线（4 条）
   let grid = '';
@@ -1463,9 +1738,47 @@ function buildLineChart(points, opts) {
     ${grid}
     <path d="${area}" fill="url(#lc-fill)"/>
     <path d="${line}" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+    ${extraLines}
     ${dots}${xlab}
   </svg>`);
-  return svg;
+  if (typeof opts.tooltip !== 'function') return svg;
+  // 悬停交互：鼠标移动 → 吸附最近数据点，显示引导线 + 高亮点 + 提示框（内容由调用方格式化）
+  const NS = 'http://www.w3.org/2000/svg';
+  const guide = document.createElementNS(NS, 'line');
+  guide.setAttribute('class', 'chart-guide');
+  guide.setAttribute('y1', padT); guide.setAttribute('y2', padT + ih);
+  guide.style.display = 'none';
+  const marker = document.createElementNS(NS, 'circle');
+  marker.setAttribute('class', 'chart-dot-hover');
+  marker.setAttribute('r', 4.5);
+  marker.style.display = 'none';
+  svg.appendChild(guide); svg.appendChild(marker);
+  const wrap = el('<div style="position:relative"></div>');
+  wrap.appendChild(svg);
+  const tip = el('<div class="chart-tip"></div>');
+  wrap.appendChild(tip);
+  svg.style.cursor = 'crosshair';
+  svg.addEventListener('mousemove', e => {
+    const r = svg.getBoundingClientRect();
+    if (!(r.width > 0)) return;
+    const vx = (e.clientX - r.left) / r.width * w;          // 像素 → viewBox 坐标
+    let i = n === 1 ? 0 : Math.round((vx - padL) / iw * (n - 1));
+    i = Math.max(0, Math.min(n - 1, i));
+    guide.setAttribute('x1', X(i)); guide.setAttribute('x2', X(i));
+    guide.style.display = '';
+    marker.setAttribute('cx', X(i)); marker.setAttribute('cy', Y(points[i].value));
+    marker.style.display = '';
+    tip.innerHTML = opts.tooltip(i, points);
+    tip.style.display = 'block';
+    const pxX = X(i) / w * r.width;
+    const left = Math.max(0, Math.min(pxX - tip.offsetWidth / 2, r.width - tip.offsetWidth));
+    tip.style.left = left + 'px';
+    tip.style.top = Math.max(0, Y(points[i].value) / h * r.height - tip.offsetHeight - 10) + 'px';
+  });
+  svg.addEventListener('mouseleave', () => {
+    guide.style.display = 'none'; marker.style.display = 'none'; tip.style.display = 'none';
+  });
+  return wrap;
 }
 
 /* -------------------------------------------------------------------------
@@ -1535,20 +1848,35 @@ function parseSina(text, opts) {
   return { name, price, changePct: isFinite(changePct) ? changePct : null, prevClose: prevClose > 0 ? prevClose : null };
 }
 
+// 东财实时报价（经 /api/emquote 代理）：secid 形如 105.AAPL（105纳斯达克/106纽交所/107美交所）、
+// 1.600000（沪）/0.000001（深）。f43 现价、f60 昨收（都要 ÷10^f59）、f58 名称。无数据返回 null。
+async function emQuote(secid) {
+  try {
+    const res = await fetch('/api/emquote?secid=' + encodeURIComponent(secid) + '&fields=f43,f58,f59,f60', { cache: 'no-store' });
+    if (!res.ok) return null;
+    const d = (await res.json()).data;
+    if (!d || !isFinite(d.f43)) return null;
+    const scale = Math.pow(10, d.f59 || 0);
+    const price = d.f43 / scale, prevClose = d.f60 / scale;
+    if (!(price > 0)) return null;
+    return { name: d.f58 || '', price, changePct: prevClose > 0 ? (price - prevClose) / prevClose * 100 : null, prevClose: prevClose > 0 ? prevClose : null };
+  } catch (e) { return null; }
+}
+
 async function fetchQuote(rawCode) {
   const code = String(rawCode || '').trim();
 
-  // 美股（含字母代码，如 TCOM / AAPL）：腾讯 us 前缀；新浪 gb_ 前缀兜底
+  // 美股（含字母代码，如 TCOM / AAPL）：腾讯 us 前缀主源；新浪已封服务器 IP，备用改东财（三个市场逐个试）
   if (isUsCode(code)) {
     const sym = code.toUpperCase().replace(/\s+/g, '');
     try {
       return parseTencent(await getQuoteText('/api/quote?code=' + encodeURIComponent('us' + sym)), { us: true });
     } catch (e1) {
-      try {
-        return parseSina(await getQuoteText('/api/quote_sina?code=' + encodeURIComponent('gb_' + sym.toLowerCase())), { us: true });
-      } catch (e2) {
-        throw new Error('美股行情获取失败（代码可能有误或已休市），可手动填名称与现价');
+      for (const mkt of [105, 106, 107]) {
+        const q2 = await emQuote(mkt + '.' + sym);
+        if (q2) return q2;
       }
+      throw new Error('美股行情获取失败（代码可能有误或已休市），可手动填名称与现价');
     }
   }
 
@@ -1556,15 +1884,13 @@ async function fetchQuote(rawCode) {
   if (!/^\d{5,6}$/.test(code)) throw new Error('请输入 5–6 位数字代码（A股/ETF），或美股字母代码（如 TCOM）');
   const full = detectMarket(code) + code;
   const q = encodeURIComponent(full);
-  // 先腾讯，失败再退回新浪
+  // 先腾讯，失败再退回东财（新浪已封服务器 IP，不再作备用）
   try {
     return parseTencent(await getQuoteText('/api/quote?code=' + q));
   } catch (e1) {
-    try {
-      return parseSina(await getQuoteText('/api/quote_sina?code=' + q));
-    } catch (e2) {
-      throw new Error('腾讯/新浪均失败（代码可能有误或已休市）');
-    }
+    const q2 = await emQuote((detectMarket(code) === 'sh' ? '1.' : '0.') + code);
+    if (q2) return q2;
+    throw new Error('腾讯/东财均失败（代码可能有误或已休市）');
   }
 }
 
@@ -1706,7 +2032,7 @@ function syncPositionsFromAssets() {
     }
     if (num(a.lastPx) > 0) p.price = a.lastPx;
     if (a.dayPct != null) p.dayPct = a.dayPct;
-    if (num(a.shares) > 0) p.shares = a.shares;
+    if (a.shares != null) p.shares = num(a.shares);      // 含归零：资产股数清空后持仓也要同步
   });
 }
 
@@ -1767,6 +2093,69 @@ VIEWS.positions = function (app) {
     <input type="hidden" id="np-pnl"/>
   `));
   app.appendChild(form);
+
+  // —— 当日交易录入（精确当日盈亏）——
+  {
+    const tradeCard = el('<div class="card" style="margin-top:16px"><h3>' + icon('coins') + ' 当日交易 · 精确当日盈亏</h3></div>');
+    const tradables = (STATE.assets || []).filter(a => a.code && ['A股股票', '美股股票', '基金'].includes(a.category));
+    if (!tradables.length) {
+      tradeCard.appendChild(el('<p class="hint">在「投资组合」里有股票/ETF/基金后，这里可录入当日买入/卖出（带成交价）：按成交价精确算当日盈亏，并自动更新股数与现金池，比"直接改数量"更准。</p>'));
+    } else {
+      tradeCard.appendChild(el(`
+        <p class="hint">当日盈亏 = 开盘持股×(现价−昨收) ＋ 当日买入×(现价−买入价) ＋ 当日卖出×(卖出价−昨收)；记录后自动更新股数、现金池与浮盈亏。当天调仓请在这里录，别直接改数量。</p>
+        <div class="grid grid-3">
+          <div class="field"><label>标的</label><select id="dt-asset">${tradables.map(a => `<option value="${a.id}">${escapeHtml(a.name)}（${escapeHtml(a.code)}·${Math.round(num(a.shares)).toLocaleString()}股）</option>`).join('')}</select></div>
+          <div class="field"><label>方向</label><select id="dt-type"><option value="buy">买入</option><option value="sell">卖出</option></select></div>
+          <div class="field"><label>股数</label><input id="dt-shares" type="number" step="100" placeholder="如 1400"/></div>
+        </div>
+        <div class="grid grid-3">
+          <div class="field"><label>成交价（原币）</label><input id="dt-price" type="number" step="0.001" placeholder="实际成交价"/></div>
+          <div class="field" style="display:flex;align-items:flex-end"><button class="btn" id="dt-record" style="width:100%">${icon('plus')} 记录当日交易</button></div>
+          <div></div>
+        </div>
+        <div id="dt-list" style="margin-top:6px"></div>
+      `));
+    }
+    app.appendChild(tradeCard);
+    const dtAsset = tradeCard.querySelector('#dt-asset');
+    if (dtAsset) {
+      const prefill = () => { const a = tradables.find(x => x.id === dtAsset.value); if (a && num(a.lastPx) > 0) tradeCard.querySelector('#dt-price').value = num(a.lastPx); };
+      prefill(); dtAsset.onchange = prefill;
+      const box = tradeCard.querySelector('#dt-list');
+      const rows = [];
+      (STATE.assets || []).forEach(a => {
+        const trs = todayTradesOf(a);
+        trs.forEach((t, i) => {
+          // 仅最后一笔可撤销：撤销中间笔会把后续交易的股数链打乱（undoDayTrade 也只认最后一笔）
+          const undoCell = i === trs.length - 1
+            ? `<button class="btn danger small" data-undo="${a.id}:${i}">撤销</button>`
+            : '<span class="inline-note">—</span>';
+          rows.push(`<tr><td>${escapeHtml(a.name)}</td><td>${t.type === 'buy' ? '<span style="color:var(--red-ink)">买入</span>' : '<span style="color:var(--green-ink)">卖出</span>'}</td>
+            <td class="num">${Math.round(num(t.shares)).toLocaleString()}</td><td class="num">${num(t.price)}</td>
+            <td class="num">${undoCell}</td></tr>`);
+        });
+      });
+      box.innerHTML = rows.length
+        ? `<div class="mini-label" style="margin-top:8px">今日交易记录</div><div class="table-scroll"><table><thead><tr><th>标的</th><th>方向</th><th class="num">股数</th><th class="num">成交价</th><th></th></tr></thead><tbody>${rows.join('')}</tbody></table></div>`
+        : '<p class="inline-note">今天还没有交易记录。</p>';
+      box.querySelectorAll('[data-undo]').forEach(btn => btn.onclick = () => {
+        const [id, i] = btn.dataset.undo.split(':');
+        const a = (STATE.assets || []).find(x => x.id === id);
+        if (a && confirm('撤销这笔当日交易？将还原股数、现金池与浮盈亏。')) { undoDayTrade(a, +i); saveState(); render(); }
+      });
+      tradeCard.querySelector('#dt-record').onclick = () => {
+        const a = tradables.find(x => x.id === dtAsset.value);
+        const type = tradeCard.querySelector('#dt-type').value;
+        const shares = num(tradeCard.querySelector('#dt-shares').value);
+        const price = num(tradeCard.querySelector('#dt-price').value);
+        if (!a) { alert('请选择标的'); return; }
+        if (!(shares > 0)) { alert('请填写股数'); return; }
+        if (!(price > 0)) { alert('请填写成交价'); return; }
+        if (type === 'sell' && shares > num(a.shares) && !confirm(`卖出 ${shares} 股超过当前持股 ${Math.round(num(a.shares))} 股，仍继续？`)) return;
+        if (recordDayTrade(a, type, shares, price)) { saveState(); render(); }
+      };
+    }
+  }
 
   const $ = sel => form.querySelector(sel);
 
@@ -1870,6 +2259,7 @@ VIEWS.positions = function (app) {
       const a = (STATE.assets || []).find(x => x.code === pos.code);
       const px = price > 0 ? price : (a ? num(a.lastPx) : 0);
       if (a && shares > 0 && px > 0) {
+        captureSod(a);                          // 改股数前记录当日开盘持股，供「当日盈亏」正确计算
         a.shares = shares;
         a.amount = Math.round(shares * px * 100) / 100;
         a.lastPx = px;
@@ -1888,6 +2278,7 @@ VIEWS.positions = function (app) {
           lastPx: px,
           amount: Math.round(shares * px * 100) / 100,
           pnl: cost > 0 ? Math.round(shares * (px - cost) * (isUs ? fx : 1) * 100) / 100 : 0,
+          sodShares: 0, sodDate: todayStr(),      // 当日新建仓：当日开盘持股为 0 → 当日盈亏计 0
           note: '由「持仓」录入自动创建，如为基金/其它可在此改类别',
         };
         na.cny = Math.round(assetCny(na, fx));
@@ -1963,15 +2354,23 @@ VIEWS.positions = function (app) {
 
     scroll.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
       const p = STATE.positions.find(x => x.id === b.dataset.del);
-      // 有股数的持仓：删除可视为「全部卖出」并把所得计入现金池（有联动资产的不重复结算，资产仍在投资组合里）
-      if (p) {
-        const hasAsset = p.code && (STATE.assets || []).some(x => x.code === p.code);
-        const prev = hasAsset ? null : previewSharesSettlement(num(p.shares), 0, num(p.price), p.code);
-        if (prev && confirm(`删除「${p.name}」视为全部卖出：${p.shares} 股 ≈ ${fmtOrig(-prev.deltaOrig, prev.ccy)}，盈余计入「${poolName(prev.ccy)}」？\n「确定」=卖出并入账，「取消」=仅删除记录、不动现金池。`)) {
-          settleToPool(-prev.deltaOrig, prev.ccy, '卖出' + p.name + '（删除持仓）');
-        }
+      if (!p) { STATE.positions = STATE.positions.filter(x => x.id !== b.dataset.del); saveState(); render(); return; }
+      // 两表联动：同一只股票（同 code）在「全部持仓/资产」里也有时，一起删——
+      // 否则删了持仓、资产还躺着，再当日交易买入就会叠加翻倍。
+      const linkedAsset = p.code ? (STATE.assets || []).find(x => x.code === p.code) : null;
+      if (linkedAsset) {
+        if (!confirm(`「${p.name}」在「当前持仓」和「全部持仓/资产」里都有。\n「确定」= 两处一起删除（不动现金池，用于清理/纠错）；「取消」= 不删。`)) return;
+        STATE.positions = STATE.positions.filter(x => x.id !== p.id);
+        STATE.assets = (STATE.assets || []).filter(x => x.id !== linkedAsset.id);
+        saveState(); render();
+        return;
       }
-      STATE.positions = STATE.positions.filter(x => x.id !== b.dataset.del);
+      // 无联动资产：删除可视为「全部卖出」并把所得计入现金池
+      const prev = previewSharesSettlement(num(p.shares), 0, num(p.price), p.code);
+      if (prev && confirm(`删除「${p.name}」视为全部卖出：${p.shares} 股 ≈ ${fmtOrig(-prev.deltaOrig, prev.ccy)}，盈余计入「${poolName(prev.ccy)}」？\n「确定」=卖出并入账，「取消」=仅删除记录、不动现金池。`)) {
+        settleToPool(-prev.deltaOrig, prev.ccy, '卖出' + p.name + '（删除持仓）');
+      }
+      STATE.positions = STATE.positions.filter(x => x.id !== p.id);
       saveState(); render();
     });
     scroll.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => {
@@ -2975,7 +3374,8 @@ VIEWS.rules = function (app) {
       const posCopy = positions.map(p => ({ factor: p.factor, weight: num(p.weight), id: p.id }));
       if (selId) {
         const t = posCopy.find(p => p.id === selId);
-        if (t) t.weight += add; else posCopy.push({ factor, weight: cur + add });
+        // 用下拉选定的因子归因（用户手动改了下拉时，加仓权重也归到该因子，校验口径才一致）
+        if (t) { t.factor = factor; t.weight += add; } else posCopy.push({ factor, weight: cur + add });
       } else {
         posCopy.push({ factor, weight: cur + add });
       }
@@ -3162,7 +3562,7 @@ VIEWS.planner = function (app) {
     const rows = prices.map((price, i) => {
       const amt = total * weights[i] / wsum;
       const shares = sharesFromCny(amt, price, pyCode);  // 金额(¥)先折币种再÷单价；A股取整到手
-      costSum += tradeCost(pyCode, shares * price, 'buy');
+      costSum += tradeCost(pyCode, shares * price * (isUsCode(pyCode) ? currentFx() : 1), 'buy');   // 美股股数×美元价 → 先折人民币再估费
       return `<tr>
         <td>第 ${i+1} 批</td>
         <td class="num">${price.toFixed(2)}</td>
@@ -3379,7 +3779,8 @@ VIEWS.planner = function (app) {
         if (!confirm(`确认记账：卖出「${p.name}」${fmtMoney(amt)}？\n资产/股数自动减少，所得进入股票现金池。`)) return;
         const r = applySellToPool(p.id, amt);
         recordDailySnapshot();            // 资产结构变了 → 覆盖今日快照
-        alert(`已记账：${fmtMoney(amt)} 计入「${poolName(r.ccy)}」（当前余额 ${fmtOrig(r.pool, r.ccy)}）。`);
+        alert(`已记账：${fmtMoney(amt)} 计入「${poolName(r.ccy)}」（当前余额 ${fmtOrig(r.pool, r.ccy)}）。`
+          + (r.unbooked ? '\n注意：该标的未在「投资组合」登记资产，卖出款入池会使总资产增加（市值此前未入账），建议补录该资产。' : ''));
         render();
       };
     };
@@ -3603,11 +4004,17 @@ VIEWS.settings = function (app) {
     reader.onload = () => {
       try {
         const imported = JSON.parse(reader.result);
-        STATE.settings = Object.assign({}, DEFAULT_SETTINGS, imported.settings || {});
-        STATE.positions = imported.positions || [];
-        STATE.assets = imported.assets || [];
-        STATE.portfolio = Object.assign({ totalAssets: Math.round(SEED_TOTAL) }, imported.portfolio || {});
-        STATE.snapshots = imported.snapshots || STATE.snapshots || [];
+        // 全量恢复（与导出对称）：forecasts/corrCache/macro 一并还原，缺失字段走默认值
+        STATE = applyStateDefaults({
+          settings: imported.settings,
+          positions: imported.positions,
+          assets: imported.assets,
+          portfolio: imported.portfolio,
+          snapshots: imported.snapshots,
+          forecasts: imported.forecasts,
+          corrCache: imported.corrCache,
+          macro: imported.macro,
+        });
         saveState(); alert('导入成功'); render();
       } catch (err) { alert('导入失败：文件格式不正确'); }
     };
@@ -3764,6 +4171,7 @@ VIEWS.trends = function (app) {
     : num((s.byCat || {})[dim.slice(4)]);
   const dimShort = (dim) => (dims.find(d => d.key === dim) || dims[0]).short;
   let curDim = 'total', curGran = 'day';
+  let bench = { key: '', label: '', series: null };   // 基准对比（沪深300/标普500 日K，加载后缓存在会话内）
 
   const overviewBox = el('<div class="stat-grid" style="margin-bottom:16px"></div>');
   app.appendChild(overviewBox);
@@ -3773,6 +4181,11 @@ VIEWS.trends = function (app) {
     <div class="card-head-row">
       <h3 style="margin:0">${icon('chart')} <span id="chart-title">总资产</span>走势</h3>
       <div class="row" style="gap:8px;flex:0 0 auto;align-items:center;flex-wrap:wrap">
+        <select id="bench-sel" style="width:auto;min-width:110px">
+          <option value="">不对比基准</option>
+          <option value="hs300">对比 沪深300</option>
+          <option value="spx">对比 标普500</option>
+        </select>
         <select id="dim-sel" style="width:auto;min-width:120px">${dims.map(d => `<option value="${d.key}">${escapeHtml(d.label)}</option>`).join('')}</select>
         <div class="seg" id="gran-seg">
           <button class="seg-btn active" data-g="day">日</button>
@@ -3783,9 +4196,51 @@ VIEWS.trends = function (app) {
       </div>
     </div>
     <div id="trend-chart" style="margin-top:14px"></div>
-    <p class="inline-note" style="margin-top:10px">切换「维度」可分别看总资产或某个大类/类别（如权益、基金、黄金）随时间的走势。</p>
+    <div id="bench-legend" class="inline-note" style="margin-top:8px"></div>
+    <p class="inline-note" style="margin-top:10px">切换「维度」可分别看总资产或某个大类/类别（如权益、基金、黄金）随时间的走势。<strong>鼠标移到折线上</strong>可查看任一日期的数值，及较昨日 / 较上月 / 较期初累计的变化。基准对比在「日」粒度 +「总资产」维度下生效：组合按 TWR 指数化（剔除出入金），与基准同起点归一。</p>
   </div>`);
   app.appendChild(chartCard);
+
+  // 出入金登记：修正「净值变化 ≠ 真实收益率」——转入转出会让趋势/归因失真，登记后 TWR 自动剔除
+  const cfCard = el(`<div class="card" style="margin-top:16px">
+    <h3>${icon('wallet')} 出入金登记</h3>
+    <p class="hint">转入/转出资金会让「净值变化」失真（多出来的钱可能只是你新加的仓，不是赚的）。在这里登记后，上方「收益率(TWR)」会自动剔除这些流水，反映真实投资表现。<strong>正数 = 入金，负数 = 出金</strong>（人民币）。</p>
+    <div class="grid grid-3">
+      <div class="field"><label>日期</label><input id="cf-date" type="date" value="${todayStr()}"/></div>
+      <div class="field"><label>金额（+入金 / −出金）</label><input id="cf-amount" type="number" step="100" placeholder="如 50000 或 -20000"/></div>
+      <div class="field"><label>备注（可选）</label><input id="cf-note" placeholder="如 工资加仓"/></div>
+    </div>
+    <div class="row"><button class="btn" id="cf-add" style="flex:0 0 auto">${icon('plus')} 登记</button></div>
+    <div class="table-scroll" style="margin-top:12px"><table id="cf-table"></table></div>
+  </div>`);
+  app.appendChild(cfCard);
+  function drawCfTable() {
+    const list = (STATE.cashflows || []).slice().sort((a, b) => b.date.localeCompare(a.date));
+    const t = cfCard.querySelector('#cf-table');
+    t.innerHTML = list.length
+      ? `<thead><tr><th>日期</th><th class="num">金额</th><th>备注</th><th class="num"></th></tr></thead><tbody>${list.map(c => `<tr>
+          <td>${escapeHtml(c.date)}</td>
+          <td class="num" style="color:${num(c.amount)>=0?'var(--green-ink)':'var(--red-ink)'}">${num(c.amount)>=0?'+':''}${fmtMoney(c.amount)}</td>
+          <td>${escapeHtml(c.note || '')}</td>
+          <td class="num"><button class="btn danger small" data-cfdel="${c.id}">${icon('trash')}</button></td>
+        </tr>`).join('')}</tbody>`
+      : '<tbody><tr><td class="inline-note" style="padding:10px">暂无登记。发生过转入/转出就记一笔，TWR 才是你的真实收益率。</td></tr></tbody>';
+    t.querySelectorAll('[data-cfdel]').forEach(b => b.onclick = async () => {
+      if (!confirm('删除这条出入金记录？（只影响收益率口径，不动资产）')) return;
+      STATE.cashflows = (STATE.cashflows || []).filter(c => c.id !== b.dataset.cfdel);
+      saveState(); await pushCloudNow(); render();
+    });
+  }
+  cfCard.querySelector('#cf-add').onclick = async () => {
+    const date = cfCard.querySelector('#cf-date').value;
+    const amount = num(cfCard.querySelector('#cf-amount').value);
+    const note = cfCard.querySelector('#cf-note').value.trim();
+    if (!date) { alert('请选择日期'); return; }
+    if (!(isFinite(amount) && amount !== 0)) { alert('请填写非零金额（正=入金，负=出金）'); return; }
+    (STATE.cashflows = STATE.cashflows || []).push({ id: uid(), date, amount, note });
+    saveState(); await pushCloudNow(); render();
+  };
+  drawCfTable();
 
   // 阶段变化表
   const tableCard = el(`<div class="card" style="margin-top:16px">
@@ -3862,10 +4317,47 @@ VIEWS.trends = function (app) {
   }
 
   function drawChart(gran, dim) {
-    const pts = aggregate(gran, dim);
+    const legend = chartCard.querySelector('#bench-legend');
     const box = chartCard.querySelector('#trend-chart');
     box.innerHTML = '';
-    box.appendChild(buildLineChart(pts.map(p => ({ label: p.label, value: p.value }))));
+    // 基准对比模式：日粒度 + 总资产 + 基准已加载 → 组合(TWR 指数化) vs 基准，同起点=100
+    if (bench.series && gran === 'day' && dim === 'total') {
+      const mine = twrIndexSeries(snaps).map(p => ({ label: p.date.slice(5), date: p.date, value: p.value }));
+      const ref = alignBenchmark(snaps, bench.series);
+      const mRet = mine[mine.length - 1].value - 100, bRet = ref[ref.length - 1].value - 100;
+      const ex = mRet - bRet;
+      legend.innerHTML = `<span style="color:var(--accent)">━</span> 组合(TWR) ${mRet >= 0 ? '+' : ''}${fmtPct(mRet, 2)}　` +
+        `<span style="color:var(--muted)">━</span> ${escapeHtml(bench.label)} ${bRet >= 0 ? '+' : ''}${fmtPct(bRet, 2)}　` +
+        `超额 <strong style="color:${ex >= 0 ? 'var(--green-ink)' : 'var(--red-ink)'}">${ex >= 0 ? '+' : ''}${fmtPct(ex, 2)}</strong>（起点=100）`;
+      box.appendChild(buildLineChart(mine, { extra: [{ name: bench.label, color: 'var(--muted)', points: ref }], tooltip: (i) => trendTip(i, mine, gran) }));
+      return;
+    }
+    legend.textContent = bench.series ? '基准对比仅在「日」粒度 +「总资产」维度下显示。' : '';
+    const pts = aggregate(gran, dim);
+    box.appendChild(buildLineChart(pts, { tooltip: (i) => trendTip(i, pts, gran) }));
+  }
+
+  // 悬停提示：当日数值 ＋ 较昨日（日粒度）/较上一期 ＋ 较上月（日粒度，30 天前最近点）＋ 较期初累计
+  function trendTip(i, pts, gran) {
+    const p = pts[i];
+    const head = `<div style="font-weight:600">${escapeHtml(p.date || p.label)}</div>`
+      + `<div style="margin-bottom:3px">${fmtMoney(p.value)}</div>`;
+    const rows = [];
+    const cmp = (label, ref) => {
+      if (!(ref > 0)) return;
+      const d = p.value - ref, pc = d / ref * 100;
+      const col = d >= 0 ? 'var(--green-ink)' : 'var(--red-ink)';
+      rows.push(`<div style="color:${col}">${label} ${d >= 0 ? '+' : ''}${fmtMoney(d)}（${d >= 0 ? '+' : ''}${fmtPct(pc, 2)}）</div>`);
+    };
+    if (i > 0) cmp(gran === 'day' ? '较昨日' : '较上一期', pts[i - 1].value);
+    if (gran === 'day' && p.date && i > 0) {
+      const cutoff = new Date(new Date(p.date + 'T00:00:00').getTime() - 30 * 864e5).toISOString().slice(0, 10);
+      for (let j = i - 1; j >= 0; j--) {
+        if ((pts[j].date || '') <= cutoff) { cmp('较上月', pts[j].value); break; }
+      }
+    }
+    if (i > 0) cmp('较期初累计', pts[0].value);
+    return head + (rows.join('') || '<div style="color:var(--muted)">首个数据点</div>');
   }
 
   function drawTable(gran, dim) {
@@ -3905,11 +4397,38 @@ VIEWS.trends = function (app) {
         <div class="value" style="font-size:22px;color:${c>=0?'var(--green-ink)':'var(--red-ink)'}">${c>=0?'+':''}${fmtMoney(c)}</div>
         <div class="sub" style="color:${c>=0?'var(--green-ink)':'var(--red-ink)'}">${c>=0?'+':''}${fmtPct(cp,2)}</div></div>
       <div class="stat"><div class="label">${icon('list')} 快照数</div>
-        <div class="value" style="font-size:22px">${snaps.length}</div><div class="sub">天</div></div>`;
+        <div class="value" style="font-size:22px">${snaps.length}</div><div class="sub">天</div></div>
+      ${(() => {
+        const t = curDim === 'total' && snaps.length > 1 ? twrOverall(snaps) : null;
+        if (!t) return '';
+        const tCol = t.twr >= 0 ? 'var(--green-ink)' : 'var(--red-ink)';
+        const sub = Math.abs(t.flows) > 0
+          ? `已剔除出入金 ${t.flows >= 0 ? '+' : ''}${fmtMoney(t.flows)}`
+          : '未登记出入金（有转入转出请在下方补录）';
+        return `<div class="stat"><div class="label">${icon('trend')} 收益率(TWR)</div>
+          <div class="value" style="font-size:22px;color:${tCol}">${t.twr >= 0 ? '+' : ''}${fmtPct(t.twr, 2)}</div>
+          <div class="sub">${sub}</div></div>`;
+      })()}`;
     drawChart(curGran, curDim); drawTable(curGran, curDim);
   }
 
   redraw();
+  chartCard.querySelector('#bench-sel').onchange = async (e) => {
+    const key = e.target.value;
+    const legend = chartCard.querySelector('#bench-legend');
+    if (!key) { bench = { key: '', label: '', series: null }; redraw(); return; }
+    legend.textContent = '基准加载中…';
+    try {
+      const series = await fetchBenchmarkSeries(key);
+      bench = { key, label: key === 'hs300' ? '沪深300' : '标普500', series };
+    } catch (err) {
+      bench = { key: '', label: '', series: null };
+      e.target.value = '';
+      legend.textContent = '基准加载失败：' + err.message;
+      return;
+    }
+    redraw();
+  };
   chartCard.querySelector('#dim-sel').onchange = (e) => { curDim = e.target.value; redraw(); };
   chartCard.querySelectorAll('.seg-btn').forEach(b => {
     b.onclick = () => {
@@ -4003,6 +4522,435 @@ function renderRebalanceCard(app) {
 
   app.appendChild(card);
 }
+/* =========================================================================
+   视图：收益归因 —— 收益从哪来：大类分解 + 个股按因子分解（基于快照明细）
+   ========================================================================= */
+VIEWS.attribution = function (app) {
+  const snaps = (STATE.snapshots || []).slice().sort((a, b) => a.date.localeCompare(b.date));
+  app.appendChild(el(`
+    <div class="view-head">
+      <h2>收益归因</h2>
+      <p>拆开看：这段区间的收益里，各大类（权益/固收/黄金/现金）各贡献多少，个股再按因子拆。不知道钱从哪赚的，就可能从同一条路亏回去。</p>
+    </div>`));
+
+  const detailed = snaps.filter(s => s.assets && s.assets.length);
+  if (detailed.length < 2) {
+    app.appendChild(el(`<div class="card"><div class="empty"><div class="big">${icon('chart')}</div>
+      <p>归因需要至少 2 份<strong>含资产明细</strong>的快照（当前 ${detailed.length} 份）。每天打开应用会自动记录，攒几天后再来。</p></div></div>`));
+    return;
+  }
+
+  const periods = [
+    { key: '7', label: '近 7 天' }, { key: '30', label: '近 30 天' },
+    { key: 'month', label: '本月' }, { key: 'all', label: '全部' },
+  ];
+  const headCard = el(`<div class="card"><div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
+      <strong>区间</strong><div class="seg" id="attr-seg">${periods.map((p, i) => `<button class="seg-btn${i === 3 ? ' active' : ''}" data-p="${p.key}">${p.label}</button>`).join('')}</div>
+    </div>
+    <div id="attr-body" style="margin-top:14px"></div></div>
+    <p class="inline-note">口径：逐日累加「前一日持股 × 当日价格变动」，已剔除出入金（在「资产趋势 → 出入金登记」补录后更准）。
+    利息、手动改金额、当日调仓的标的价格变动计入「残差」——残差大说明该区间的手动操作多，归因仅供参考。</p>`);
+  app.appendChild(headCard);
+
+  const factorOf = (code, name) => {
+    const p = (STATE.positions || []).find(x => x.code && x.code === code);
+    return (p && p.factor) || guessFactor(name) || '其它';
+  };
+
+  function compute(list) {
+    const byAsset = new Map();   // key → {name, cat, factor, contrib}
+    let residual = 0, explained = 0, flows = 0;
+    for (let i = 1; i < list.length; i++) {
+      const prev = list[i - 1], cur = list[i];
+      const fx = num(cur.fx) > 0 ? num(cur.fx) : currentFx();
+      flows += cashflowOn(cur.date);
+      const prevMap = new Map((prev.assets || []).map(a => [(a.code || a.id), a]));
+      let dayExplained = 0;
+      (cur.assets || []).forEach(a => {
+        const key = a.code || a.id;
+        const pa = prevMap.get(key);
+        if (!pa) return;                                  // 当日新增（买入/新建）→ 价格变动当日不计，进残差
+        const sameShares = num(pa.shares) > 0 && num(pa.shares) === num(a.shares);
+        if (!(sameShares && num(pa.lastPx) > 0 && num(a.lastPx) > 0)) return;   // 调仓/无价 → 残差
+        const c = num(pa.shares) * (num(a.lastPx) - num(pa.lastPx)) * (a.currency === 'USD' ? fx : 1);
+        dayExplained += c;
+        const rec = byAsset.get(key) || {
+          name: a.name, cat: bigClassOf(a.category), rawCat: a.category,
+          factor: factorOf(a.code, a.name), contrib: 0,
+        };
+        rec.contrib += c;
+        byAsset.set(key, rec);
+      });
+      const dayChange = num(cur.total) - num(prev.total) - cashflowOn(cur.date);
+      explained += dayExplained;
+      residual += dayChange - dayExplained;
+    }
+    return { byAsset, residual, explained, flows, first: list[0], last: list[list.length - 1] };
+  }
+
+  function bar(label, v, maxAbs, note) {
+    const pct = maxAbs > 0 ? Math.min(100, Math.abs(v) / maxAbs * 100) : 0;
+    const col = v >= 0 ? 'var(--green-ink)' : 'var(--red-ink)';
+    return `<div style="display:grid;grid-template-columns:110px 1fr 110px;gap:8px;align-items:center;margin:5px 0">
+      <div style="font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(label)}">${escapeHtml(label)}</div>
+      <div style="height:12px;background:rgba(120,120,128,0.12);border-radius:6px;overflow:hidden">
+        <div style="height:100%;width:${pct.toFixed(1)}%;background:${col};border-radius:6px"></div></div>
+      <div class="num" style="font-size:12.5px;color:${col}">${v >= 0 ? '+' : ''}${fmtMoney(v)}${note || ''}</div>
+    </div>`;
+  }
+
+  function renderPeriod(key) {
+    let list = detailed;
+    if (key !== 'all') {
+      const cutoff = key === 'month'
+        ? todayStr().slice(0, 7) + '-01'
+        : new Date(Date.now() - parseInt(key, 10) * 864e5).toISOString().slice(0, 10);
+      list = detailed.filter(s => s.date >= cutoff);
+      if (list.length < 2) list = detailed.slice(-2);     // 区间内不足两天 → 用最近两天兜底
+    }
+    const { byAsset, residual, explained, flows, first, last } = compute(list);
+    const totalChange = num(last.total) - num(first.total) - flows;
+    const chgCol = totalChange >= 0 ? 'var(--green-ink)' : 'var(--red-ink)';
+
+    // 汇总：大类 / 个股因子（仅 A股/美股股票）
+    const byBig = new Map(), byFactor = new Map();
+    byAsset.forEach(r => {
+      byBig.set(r.cat, (byBig.get(r.cat) || 0) + r.contrib);
+      if (r.rawCat === 'A股股票' || r.rawCat === '美股股票') byFactor.set(r.factor, (byFactor.get(r.factor) || 0) + r.contrib);
+    });
+    const bigRows = [...byBig.entries()].sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+    if (Math.abs(residual) > 0.5) bigRows.push(['残差（利息/手动调整/调仓）', residual]);
+    const facRows = [...byFactor.entries()].sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+    const maxAbs = Math.max(1, ...bigRows.map(r => Math.abs(r[1])));
+    const maxFac = Math.max(1, ...facRows.map(r => Math.abs(r[1])));
+    // 个股明细（贡献绝对值前 8）
+    const topAssets = [...byAsset.values()].sort((a, b) => Math.abs(b.contrib) - Math.abs(a.contrib)).slice(0, 8);
+
+    headCard.querySelector('#attr-body').innerHTML = `
+      <div class="stat-grid" style="margin-bottom:14px">
+        <div class="stat"><div class="label">${icon('calendar')} 区间</div>
+          <div class="value" style="font-size:20px">${first.date.slice(5)} → ${last.date.slice(5)}</div>
+          <div class="sub">${list.length} 份明细快照</div></div>
+        <div class="stat"><div class="label">${icon('trend')} 区间收益（已剔出入金）</div>
+          <div class="value" style="font-size:20px;color:${chgCol}">${totalChange >= 0 ? '+' : ''}${fmtMoney(totalChange)}</div>
+          <div class="sub">出入金 ${flows >= 0 ? '+' : ''}${fmtMoney(flows)}</div></div>
+        <div class="stat"><div class="label">${icon('chart')} 价格变动可解释</div>
+          <div class="value" style="font-size:20px">${fmtMoney(explained)}</div>
+          <div class="sub">残差 ${fmtMoney(residual)}</div></div>
+      </div>
+      <h4 style="margin:14px 0 6px">按大类</h4>
+      ${bigRows.map(([k, v]) => bar(k, v, maxAbs)).join('') || '<p class="inline-note">无数据</p>'}
+      <h4 style="margin:18px 0 6px">个股按因子</h4>
+      ${facRows.length ? facRows.map(([k, v]) => bar(k, v, maxFac)).join('') : '<p class="inline-note">区间内个股无价格贡献（或全部调入/调出）。</p>'}
+      <h4 style="margin:18px 0 6px">贡献最大的标的（前 8）</h4>
+      <div class="table-scroll"><table>
+        <thead><tr><th>标的</th><th>大类</th><th class="num">贡献（¥）</th></tr></thead>
+        <tbody>${topAssets.map(r => `<tr><td>${escapeHtml(r.name)}</td><td><span class="tag-chip">${escapeHtml(r.cat)}</span></td>
+          <td class="num" style="color:${r.contrib >= 0 ? 'var(--green-ink)' : 'var(--red-ink)'}">${r.contrib >= 0 ? '+' : ''}${fmtMoney(r.contrib)}</td></tr>`).join('')}</tbody>
+      </table></div>`;
+  }
+
+  headCard.querySelectorAll('#attr-seg .seg-btn').forEach(b => b.onclick = () => {
+    headCard.querySelectorAll('#attr-seg .seg-btn').forEach(x => x.classList.toggle('active', x === b));
+    renderPeriod(b.dataset.p);
+  });
+  renderPeriod('all');
+};
+
+/* =========================================================================
+   视图：压力测试 —— 极端情景下组合会亏多少（相对最大回撤承受线）
+   ========================================================================= */
+// 科技成长因子组（预设情景用）
+const STRESS_TECH = ['AI算力', 'AI电力', 'AI应用', '科技互联网', '传媒游戏', '半导体', '机器人', '新能源车', '光伏风电'];
+// 当前组合的风险桶：每资产归入 cn(个股A股)/us(个股美股)/fund(基金)/gold(黄金)/safe(固收理财现金)
+function stressBuckets() {
+  const fx = currentFx();
+  const rows = [];
+  (STATE.assets || []).forEach(a => {
+    const v = assetCny(a, fx);
+    if (!(v > 0)) return;
+    let bucket = 'safe', factor = null;
+    if (a.category === 'A股股票' || a.category === '美股股票') {
+      const p = (STATE.positions || []).find(x => x.code && x.code === a.code);
+      factor = (p && p.factor) || guessFactor(a.name) || '其它';
+      bucket = a.category === '美股股票' ? 'us' : 'cn';
+    } else if (a.category === '基金') bucket = 'fund';
+    else if (bigClassOf(a.category) === '黄金') bucket = 'gold';
+    rows.push({ name: a.name, code: a.code, cat: a.category, bucket, factor, usd: a.currency === 'USD', v });
+  });
+  return rows;
+}
+// 一条冲击规则命中哪些资产；scope: factor:X / factorGroup:tech / cn / cnOther / us / fund / gold / usd-fx
+function shockOf(row, rules) {
+  let s = 0;
+  rules.forEach(r => {
+    const idx = r.scope.indexOf(':');
+    const kind = idx >= 0 ? r.scope.slice(0, idx) : r.scope;
+    const arg = idx >= 0 ? r.scope.slice(idx + 1) : '';
+    if (kind === 'factor' && row.factor === arg) s += r.shock;
+    else if (kind === 'factorGroup' && arg === 'tech' && row.factor && STRESS_TECH.indexOf(row.factor) >= 0) s += r.shock;
+    else if (kind === 'cn' && row.bucket === 'cn') s += r.shock;
+    else if (kind === 'cnOther' && row.bucket === 'cn' && !(row.factor && STRESS_TECH.indexOf(row.factor) >= 0)) s += r.shock;
+    else if (kind === 'us' && row.bucket === 'us') s += r.shock;
+    else if (kind === 'fund' && row.bucket === 'fund') s += r.shock;
+    else if (kind === 'gold' && row.bucket === 'gold') s += r.shock;
+    else if (kind === 'usd-fx' && row.usd) s += r.shock;   // 汇率冲击：美元资产的人民币折算损失
+  });
+  return s;
+}
+const STRESS_PRESETS = [
+  { name: '中国科技成长 −30%', rules: [{ scope: 'factorGroup:tech', shock: -30 }, { scope: 'cnOther', shock: -10 }, { scope: 'fund', shock: -12 }] },
+  { name: 'A股系统性 −15%', rules: [{ scope: 'cn', shock: -15 }, { scope: 'fund', shock: -12 }] },
+  { name: '美股 −20%', rules: [{ scope: 'us', shock: -20 }] },
+  { name: '黄金 −15%', rules: [{ scope: 'gold', shock: -15 }] },
+  { name: '美元贬值 5%', rules: [{ scope: 'usd-fx', shock: -5 }] },
+  { name: '全面危机：权益−35% 黄金+5%', rules: [{ scope: 'cn', shock: -35 }, { scope: 'us', shock: -35 }, { scope: 'fund', shock: -30 }, { scope: 'gold', shock: 5 }] },
+];
+// 自定义情景可选的冲击对象
+const STRESS_SCOPES = [
+  ['cn', '全部 A股个股'], ['us', '全部 美股个股'], ['fund', '全部 基金'], ['gold', '黄金'], ['usd-fx', '美元资产（汇率）'],
+].concat(FACTORS.map(f => ['factor:' + f, '因子 · ' + f]));
+
+VIEWS.stress = function (app) {
+  const s = STATE.settings || {};
+  const maxDD = num(s.maxDrawdown, 15);
+  const rows = stressBuckets();
+  const total = rows.reduce((sum, r) => sum + r.v, 0);
+  app.appendChild(el(`
+    <div class="view-head">
+      <h2>压力测试</h2>
+      <p>把极端行情直接施加到你<strong>当前的实际持仓</strong>上：每个情景亏多少、是否跌破你设的「组合最大回撤阈值 ${maxDD}%」（设置里可调）。冲击按桶施加（个股按因子、基金/黄金按类、美元资产受汇率冲击），是保守估计——没算对冲与相关性抵消。</p>
+    </div>`));
+  if (!rows.length) {
+    app.appendChild(el('<div class="card"><div class="empty"><p>暂无持仓数据。</p></div></div>'));
+    return;
+  }
+
+  let customRules = [];
+  const card = el(`<div class="card">
+    <h3>${icon('warn')} 情景</h3>
+    <div class="row" style="gap:8px;flex-wrap:wrap" id="preset-row">
+      ${STRESS_PRESETS.map((p, i) => `<button class="btn secondary small" data-preset="${i}">${escapeHtml(p.name)}</button>`).join('')}
+    </div>
+    <div class="section-divider"></div>
+    <div class="mini-label">自定义情景（选对象 + 冲击幅度，可叠加多条）</div>
+    <div class="row" style="gap:8px;align-items:flex-end;flex-wrap:wrap">
+      <div class="field" style="min-width:180px"><label>冲击对象</label><select id="st-scope">${STRESS_SCOPES.map(([v, l]) => `<option value="${v}">${escapeHtml(l)}</option>`).join('')}</select></div>
+      <div class="field" style="width:130px"><label>冲击 %</label><input id="st-shock" type="number" step="1" value="-20"/></div>
+      <button class="btn small" id="st-add" style="flex:0 0 auto">${icon('plus')} 加入情景</button>
+    </div>
+    <div id="custom-rules" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px"></div>
+  </div>`);
+  app.appendChild(card);
+
+  const resultCard = el(`<div class="card" style="margin-top:16px">
+    <h3>${icon('chart')} 结果</h3>
+    <div id="stress-out"></div>
+  </div>`);
+  app.appendChild(resultCard);
+
+  function evalRules(rules) {
+    let delta = 0;
+    const per = rows.map(r => {
+      const sh = shockOf(r, rules);
+      const d = r.v * sh / 100;
+      delta += d;
+      return { r, sh, d };
+    });
+    const pct = total > 0 ? delta / total * 100 : 0;
+    return { delta, pct, per: per.filter(x => x.d !== 0).sort((a, b) => a.d - b.d) };
+  }
+  function verdict(pct) {
+    return Math.abs(pct) <= maxDD
+      ? '<span class="pill green">承受线内</span>'
+      : '<span class="pill red">跌破阈值</span>';
+  }
+  function rulesLabel(rules) {
+    return rules.map(r => {
+      const sc = STRESS_SCOPES.find(x => x[0] === r.scope);
+      return (sc ? sc[1] : r.scope) + ' ' + r.shock + '%';
+    }).join(' ＋ ');
+  }
+  function drawRules() {
+    const box = card.querySelector('#custom-rules');
+    box.innerHTML = customRules.length
+      ? customRules.map((r, i) => `<span class="tag-chip">${escapeHtml(rulesLabel([r]))}
+          <a href="javascript:;" data-rrm="${i}" style="margin-left:4px;color:var(--red-ink)">✕</a></span>`).join('')
+      : '<span class="inline-note">（未添加时显示预设情景结果）</span>';
+    box.querySelectorAll('[data-rrm]').forEach(a => a.onclick = () => { customRules.splice(+a.dataset.rrm, 1); drawRules(); drawOut(); });
+  }
+  function drawOut(focusRules) {
+    const out = resultCard.querySelector('#stress-out');
+    // 预设总览表
+    const rowsHtml = STRESS_PRESETS.map(p => {
+      const r = evalRules(p.rules);
+      const col = r.delta >= 0 ? 'var(--green-ink)' : 'var(--red-ink)';
+      return `<tr><td>${escapeHtml(p.name)}</td>
+        <td class="num" style="color:${col}">${r.delta >= 0 ? '+' : ''}${fmtMoney(r.delta)}</td>
+        <td class="num" style="color:${col}">${r.delta >= 0 ? '+' : ''}${fmtPct(r.pct, 2)}</td>
+        <td class="num">${verdict(r.pct)}</td></tr>`;
+    }).join('');
+    let html = `<div class="table-scroll"><table>
+      <thead><tr><th>预设情景</th><th class="num">组合影响</th><th class="num">幅度</th><th class="num">判定（阈值 ${maxDD}%）</th></tr></thead>
+      <tbody>${rowsHtml}</tbody></table></div>`;
+    // 自定义情景明细
+    if (focusRules && focusRules.length) {
+      const r = evalRules(focusRules);
+      const col = r.delta >= 0 ? 'var(--green-ink)' : 'var(--red-ink)';
+      const maxAbs = Math.max(1, ...r.per.map(x => Math.abs(x.d)));
+      html += `<div class="section-divider"></div>
+        <h4 style="margin:6px 0">自定义情景：${escapeHtml(rulesLabel(focusRules))}</h4>
+        <p>组合影响 <strong style="color:${col}">${r.delta >= 0 ? '+' : ''}${fmtMoney(r.delta)}（${r.delta >= 0 ? '+' : ''}${fmtPct(r.pct, 2)}）</strong> ${verdict(r.pct)}</p>
+        ${r.per.map(x => `
+          <div style="display:grid;grid-template-columns:150px 1fr 110px;gap:8px;align-items:center;margin:5px 0">
+            <div style="font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(x.r.name)}">${escapeHtml(x.r.name)}</div>
+            <div style="height:12px;background:rgba(120,120,128,0.12);border-radius:6px;overflow:hidden">
+              <div style="height:100%;width:${(Math.abs(x.d) / maxAbs * 100).toFixed(1)}%;background:${x.d >= 0 ? 'var(--green-ink)' : 'var(--red-ink)'};border-radius:6px"></div></div>
+            <div class="num" style="font-size:12.5px;color:${x.d >= 0 ? 'var(--green-ink)' : 'var(--red-ink)'}">${x.sh >= 0 ? '+' : ''}${x.sh}% → ${x.d >= 0 ? '+' : ''}${fmtMoney(x.d)}</div>
+          </div>`).join('') || '<p class="inline-note">该情景不命中任何持仓。</p>'}`;
+    }
+    out.innerHTML = html;
+  }
+  card.querySelectorAll('[data-preset]').forEach(b => b.onclick = () => {
+    customRules = STRESS_PRESETS[+b.dataset.preset].rules.slice();
+    drawRules(); drawOut(customRules);
+  });
+  card.querySelector('#st-add').onclick = () => {
+    const scope = card.querySelector('#st-scope').value;
+    const shock = num(card.querySelector('#st-shock').value);
+    if (!(isFinite(shock) && shock !== 0)) { alert('请填写非零冲击幅度（%）'); return; }
+    customRules.push({ scope, shock });
+    drawRules(); drawOut(customRules);
+  };
+  drawRules(); drawOut();
+};
+
+/* =========================================================================
+   视图：再平衡 —— 目标配置 vs 实际，偏离超阈值时给出具体调仓清单
+   ========================================================================= */
+VIEWS.rebalance = function (app) {
+  const fx = currentFx();
+  const assets = (STATE.assets || []).filter(a => assetCny(a, fx) > 0);
+  const total = assets.reduce((s, a) => s + assetCny(a, fx), 0);
+  app.appendChild(el(`
+    <div class="view-head">
+      <h2>再平衡</h2>
+      <p>体检告诉你"偏了"，这里回答"怎么调回来"：设定各大类的<strong>目标占比</strong>，实际偏离超过阈值就生成具体执行清单（卖哪只、卖多少；补哪类、补多少）。再平衡的本质是<strong>被动的高卖低买</strong>——把涨多的减下来、跌多的补回去，让风险结构回到你设定的样子。</p>
+    </div>`));
+  if (!assets.length) {
+    app.appendChild(el('<div class="card"><div class="empty"><p>暂无持仓数据。</p></div></div>'));
+    return;
+  }
+
+  // 实际配置（按大类）
+  const actual = {};
+  assets.forEach(a => { const k = bigClassOf(a.category); actual[k] = (actual[k] || 0) + assetCny(a, fx); });
+  const buckets = Object.keys(actual).sort((a, b) => actual[b] - actual[a]);
+  // 目标配置（首次进入：以当前实际为目标）
+  if (!STATE.targetAlloc) {
+    const t = {};
+    buckets.forEach(k => t[k] = +(actual[k] / total * 100).toFixed(1));
+    STATE.targetAlloc = { buckets: t, threshold: 5 };
+  }
+  const ta = STATE.targetAlloc;
+  buckets.forEach(k => { if (ta.buckets[k] == null) ta.buckets[k] = 0; });
+
+  const editCard = el(`<div class="card">
+    <h3>${icon('pencil')} 目标配置</h3>
+    <p class="hint">各大类目标占比（%），合计须等于 100。偏离阈值：实际与目标相差超过该百分点时触发调仓建议。</p>
+    <div class="grid grid-3" id="ta-inputs">
+      ${buckets.map(k => `<div class="field"><label>${escapeHtml(k)}（实际 ${(actual[k] / total * 100).toFixed(1)}%）</label>
+        <input data-tabucket="${escapeHtml(k)}" type="number" step="0.5" value="${ta.buckets[k]}"/></div>`).join('')}
+      <div class="field"><label>偏离阈值（百分点）</label><input id="ta-threshold" type="number" step="1" value="${ta.threshold || 5}"/></div>
+    </div>
+    <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
+      <button class="btn" id="ta-save" style="flex:0 0 auto">${icon('check')} 保存目标</button>
+      <button class="btn secondary" id="ta-current" style="flex:0 0 auto">以当前实际为目标</button>
+      <span class="inline-note" id="ta-sum"></span>
+    </div>
+  </div>`);
+  app.appendChild(editCard);
+  const outCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('list')} 偏离与执行清单</h3><div id="rb-out"></div></div>`);
+  app.appendChild(outCard);
+
+  function drawSum() {
+    const sum = buckets.reduce((s, k) => s + num(editCard.querySelector(`[data-tabucket="${k}"]`)?.value), 0);
+    const elSum = editCard.querySelector('#ta-sum');
+    elSum.textContent = '合计 ' + sum.toFixed(1) + '%';
+    elSum.style.color = Math.abs(sum - 100) < 0.01 ? 'var(--green-ink)' : 'var(--red-ink)';
+  }
+  editCard.querySelectorAll('[data-tabucket]').forEach(i => i.addEventListener('input', drawSum));
+  drawSum();
+
+  editCard.querySelector('#ta-current').onclick = () => {
+    buckets.forEach(k => { editCard.querySelector(`[data-tabucket="${k}"]`).value = +(actual[k] / total * 100).toFixed(1); });
+    drawSum();
+  };
+  editCard.querySelector('#ta-save').onclick = async () => {
+    const t = {};
+    let sum = 0;
+    buckets.forEach(k => { t[k] = num(editCard.querySelector(`[data-tabucket="${k}"]`).value); sum += t[k]; });
+    if (Math.abs(sum - 100) > 0.01) { alert('目标占比合计须等于 100%（当前 ' + sum.toFixed(1) + '%）'); return; }
+    STATE.targetAlloc = { buckets: t, threshold: num(editCard.querySelector('#ta-threshold').value) || 5 };
+    saveState(); await pushCloudNow(); render();
+  };
+
+  // 偏离表 + 执行清单
+  {
+    const th = num(ta.threshold, 5);
+    const rows = buckets.map(k => {
+      const tgt = num(ta.buckets[k]);
+      const actPct = actual[k] / total * 100;
+      const drift = actPct - tgt;                        // 百分点：正=超配
+      const driftCny = drift / 100 * total;              // 正=需卖出金额
+      const status = Math.abs(drift) <= th ? 'ok' : (drift > 0 ? 'over' : 'under');
+      return { k, tgt, actPct, act: actual[k], drift, driftCny, status };
+    });
+    const statusPill = st => st === 'ok' ? '<span class="pill green">均衡</span>'
+      : st === 'over' ? '<span class="pill red">超配</span>' : '<span class="pill gray">低配</span>';
+    let html = `<div class="table-scroll"><table>
+      <thead><tr><th>大类</th><th class="num">目标%</th><th class="num">实际%</th><th class="num">实际金额</th><th class="num">偏离</th><th class="num">状态</th></tr></thead>
+      <tbody>${rows.map(r => `<tr><td>${escapeHtml(r.k)}</td>
+        <td class="num">${r.tgt.toFixed(1)}%</td><td class="num">${r.actPct.toFixed(1)}%</td>
+        <td class="num">${fmtMoney(r.act)}</td>
+        <td class="num" style="color:${Math.abs(r.drift) <= th ? 'var(--muted)' : (r.drift > 0 ? 'var(--red-ink)' : 'var(--amber)')}">${r.drift >= 0 ? '+' : ''}${r.drift.toFixed(1)}pp</td>
+        <td class="num">${statusPill(r.status)}</td></tr>`).join('')}</tbody></table></div>`;
+
+    const over = rows.filter(r => r.status === 'over');
+    const under = rows.filter(r => r.status === 'under');
+    if (!over.length && !under.length) {
+      html += `<p class="hint" style="margin-top:12px">${icon('check')} 各大类偏离都在阈值（±${th}pp）内，<strong>无需调仓</strong>。再平衡不是频繁操作——偏离超线再动，每年/每季度看一次即可。</p>`;
+    } else {
+      html += '<div class="section-divider"></div><h4 style="margin:6px 0">执行清单（先卖后买，金额≈值）</h4><ol style="margin:8px 0 0 18px;line-height:1.9">';
+      // 卖出建议：超配大类内按资产占比分摊，股票换算股数（A股 100 股整手，美股按股向下取整）
+      over.forEach(r => {
+        const inBucket = assets.filter(a => bigClassOf(a.category) === r.k).sort((a, b) => assetCny(b, fx) - assetCny(a, fx));
+        let remain = r.driftCny;
+        inBucket.forEach(a => {
+          if (remain <= 0) return;
+          const v = assetCny(a, fx);
+          let amt = Math.min(remain, v * (r.driftCny / r.act));      // 按桶内占比分摊
+          amt = Math.min(amt, v);
+          let txt = `卖出 <strong>${escapeHtml(a.name)}</strong> 约 <strong>${fmtMoney(amt)}</strong>`;
+          const px = num(a.lastPx);
+          if (px > 0 && num(a.shares) > 0) {
+            const lot = a.currency === 'USD' ? 1 : 100;
+            const sh = Math.floor(amt / (px * (a.currency === 'USD' ? fx : 1)) / lot) * lot;
+            if (sh > 0) txt += `（≈ ${sh.toLocaleString()} 股）`;
+          }
+          html += `<li>${txt} <span class="inline-note">[${escapeHtml(r.k)} 超配 ${r.drift.toFixed(1)}pp]</span></li>`;
+          remain -= amt;
+        });
+      });
+      // 买入建议：低配大类给桶级金额
+      under.forEach(r => {
+        html += `<li>补入 <strong>${escapeHtml(r.k)}</strong> 类 约 <strong>${fmtMoney(-r.driftCny)}</strong> <span class="inline-note">[低配 ${(-r.drift).toFixed(1)}pp；具体标的由你定，建议优先补该桶内现有品种]</span></li>`;
+      });
+      html += `</ol><p class="inline-note" style="margin-top:10px">执行前建议先到「⑤ 加减仓计划」过一遍退出/铁律检查（逻辑已破的票优先减）；A股按 100 股整手取整，实际以可成交数量为准。调完回来点「以当前实际为目标」或等偏离自然收敛。</p>`;
+    }
+    outCard.querySelector('#rb-out').innerHTML = html;
+  }
+};
 
 VIEWS.portfolio = function (app) {
   const assets = STATE.assets || [];
@@ -4108,9 +5056,15 @@ VIEWS.portfolio = function (app) {
       <h3 style="margin:0">${icon('coins')} 全部持仓（${assets.length}）</h3>
       ${fetchableCount ? `<button class="btn secondary small" id="pf-refresh" style="flex:0 0 auto">${icon('refresh')} 一键刷新估值</button>` : ''}
     </div>
-    <p class="hint">组合会随时间变化——可随时在下方「管理资产」增删改。按大类排序：股票 → 基金 → 理财 → 黄金 → 现金。
+    <p class="hint">组合会随时间变化——可随时在下方「管理资产」增删改。<strong>按住行可拖拽排序</strong>（顺序自动保存）；未拖拽时默认按大类排序：股票 → 基金 → 理财 → 黄金 → 现金。
       ${fetchableCount ? `<br>其中 <strong>${fetchableCount}</strong> 只基金/股票可自动更新（打开页面自动刷新，最近 <span id="pf-lastref">${lastRefStr}</span>）。理财为银行自有产品无公开接口，请手动维护。` : ''}</p></div>`);
-  const sorted = assets.slice().sort((a, b) => classRank(a.category) - classRank(b.category) || cnyOf(b) - cnyOf(a));
+  const orderMap = new Map((STATE.assetOrder || []).map((id, i) => [id, i]));
+  const sorted = assets.slice().sort((a, b) => {
+    const ia = orderMap.has(a.id) ? orderMap.get(a.id) : Infinity;
+    const ib = orderMap.has(b.id) ? orderMap.get(b.id) : Infinity;
+    if (ia !== ib) return ia - ib;                 // 用户拖拽过的自定义顺序优先
+    return classRank(a.category) - classRank(b.category) || cnyOf(b) - cnyOf(a);
+  });
   const hrows = sorted.map(a => {
     const v = cnyOf(a);
     const inc = assetIncome(a, fx);
@@ -4121,16 +5075,24 @@ VIEWS.portfolio = function (app) {
       incCell = `<span style="color:${inc.value>=0?'var(--green-ink)':'var(--red-ink)'}">${inc.value>=0?'+':''}${fmtMoney(inc.value)}</span>`;
     } else { incCell = '—'; }
     let dayCell = '—';
-    if (a.dayPct != null && isFinite(a.dayPct)) {
-      const up = a.dayPct >= 0;
-      // 当日涨跌金额（人民币）= 现市值 − 昨市值 = v × dayPct/(100+dayPct)
-      const dayAmt = v * a.dayPct / (100 + a.dayPct);
-      dayCell = `<span class="pill ${up?'green':'red'}">${up?'+':''}${fmtPct(a.dayPct,2)}</span>`
+    const pxStale = a.pxDate && a.pxDate !== todayStr();   // 价格不是今天刷的：旧涨跌不冒充「今日」
+    if (a.dayPct != null && isFinite(a.dayPct) && !pxStale) {
+      // 个人当日收益率：中途建仓/加仓的日子按你的成本基础算，区别于标的全天涨幅
+      const effPct = dayPnlPct(a, fx);
+      const showPct = effPct != null ? effPct : a.dayPct;
+      const up = showPct >= 0;
+      // 当日涨跌金额（人民币）——按「当日开盘持股」算，改过股数(增/减持)也与实际一致
+      const dayAmt = dayPnlCny(a, fx);
+      const diffTip = effPct != null && Math.abs(effPct - a.dayPct) > 0.05
+        ? ` title="你的当日收益率（按持仓成本基础）；标的全天涨幅 ${a.dayPct >= 0 ? '+' : ''}${fmtPct(a.dayPct, 2)}"` : '';
+      dayCell = `<span class="pill ${up?'green':'red'}"${diffTip}>${up?'+':''}${fmtPct(showPct,2)}</span>`
         + `<br><span class="inline-note" style="color:${up?'var(--green-ink)':'var(--red-ink)'}">${dayAmt>=0?'+':'−'}${fmtMoney(Math.abs(dayAmt))}</span>`;
+    } else if (a.dayPct != null && isFinite(a.dayPct) && pxStale) {
+      dayCell = `<span class="inline-note">上次(${escapeHtml(String(a.pxDate).slice(5))}) ${a.dayPct>=0?'+':''}${fmtPct(a.dayPct,2)}<br>今日待刷新</span>`;
     } else if (assetFetchable(a) && !(num(a.lastPx) > 0)) {
       dayCell = '<span class="inline-note">待刷新</span>';   // 仅「从未取过价」时提示，取过价则显示 —
     }
-    return `<tr>
+    return `<tr draggable="true" data-aid="${a.id}" class="asset-row">
       <td>${escapeHtml(a.name)}${a.code?`<br><span class="inline-note">${escapeHtml(a.code)}</span>`:''}</td>
       <td><span class="tag-chip">${escapeHtml(a.category)}</span></td>
       <td>${a.currency}</td>
@@ -4146,6 +5108,30 @@ VIEWS.portfolio = function (app) {
     <thead><tr><th>名称</th><th>类别</th><th>币种</th><th class="num">折合人民币</th><th class="num">占比</th><th class="num">今日</th><th class="num">收益/利息</th><th></th></tr></thead>
     <tbody>${hrows}</tbody></table></div>`);
   holdCard.appendChild(holdScroll);
+  // 行拖拽排序：拖动「全部持仓」行自定义顺序，存入 STATE.assetOrder 并同步云端
+  {
+    const tbody = holdScroll.querySelector('tbody');
+    let dragId = null;
+    tbody.querySelectorAll('tr.asset-row').forEach(tr => {
+      tr.addEventListener('dragstart', () => { dragId = tr.dataset.aid; tr.classList.add('dragging'); });
+      tr.addEventListener('dragend', () => tr.classList.remove('dragging'));
+      tr.addEventListener('dragover', e => { e.preventDefault(); tr.classList.add('drag-over'); });
+      tr.addEventListener('dragleave', () => tr.classList.remove('drag-over'));
+      tr.addEventListener('drop', e => {
+        e.preventDefault();
+        tr.classList.remove('drag-over');
+        const targetId = tr.dataset.aid;
+        if (!dragId || dragId === targetId) return;
+        const order = sorted.map(x => x.id);
+        const from = order.indexOf(dragId), to = order.indexOf(targetId);
+        if (from < 0 || to < 0) return;
+        order.splice(to, 0, order.splice(from, 1)[0]);
+        STATE.assetOrder = order;
+        saveState();                             // saveState 自动回传云端
+        render();
+      });
+    });
+  }
   holdCard.appendChild(el(`<p class="inline-note">「今日」为基金估算涨跌 / 股票当日涨跌；收益列：理财/存款显示<strong>年化利息</strong>（美元按 3%、人民币按实际利率，美元金额按当日中间价 ${fx.toFixed(4)} 折人民币），股票/基金/黄金显示<strong>浮盈亏</strong>。</p>`));
   app.appendChild(holdCard);
   const refBtn = holdCard.querySelector('#pf-refresh');
@@ -4203,13 +5189,35 @@ VIEWS.portfolio = function (app) {
     if (pnlStr !== '') asset.pnl = num(pnlStr);
     if (editId) {
       const i = STATE.assets.findIndex(x => x.id === editId);
-      if (i >= 0) STATE.assets[i] = asset;
+      // 合并保存（不整体替换）：表单只覆盖它能编辑的字段，保留 shares / lastPx /
+      // dayPct / pxDate / sodShares / sodDate / todayTrades 等运行期字段。
+      // 否则改「金额」或「浮盈亏」时会把持股数、当日盈亏、当日交易记录一并清空——
+      // 下次刷新又用 金额÷现价 反推出非整数股数，当日盈亏就和真实持股对不上了。
+      if (i >= 0) {
+        Object.assign(STATE.assets[i], asset);
+        // 可刷新资产（基金/股票/黄金）直接改金额＝按现价补/减仓：同步校准份额，
+        // 否则下次刷新会用「旧份额×最新价」把刚改的金额弹回、浮盈亏按差额跳变
+        const oa = STATE.assets[i];
+        if (assetFetchable(oa) && num(oa.lastPx) > 0 && num(oa.amount) > 0) {
+          const implied = num(oa.shares) * num(oa.lastPx);
+          if (!(implied > 0) || Math.abs(num(oa.amount) - implied) / implied > 0.001) {
+            oa.shares = num(oa.amount) / num(oa.lastPx);
+          }
+        }
+      }
     } else { STATE.assets.push(asset); }
     saveState(); render();
   };
   holdScroll.querySelectorAll('[data-adel]').forEach(b => b.onclick = () => {
-    if (!confirm('删除这笔资产？')) return;
+    const a = STATE.assets.find(x => x.id === b.dataset.adel);
+    // 两表联动：同一只股票（同 code）在「当前持仓」里也有时，一起删，避免残留、重复计数。
+    const linkedPos = a && a.code ? (STATE.positions || []).find(x => x.code === a.code) : null;
+    const msg = linkedPos
+      ? `「${a.name}」在「全部持仓/资产」和「当前持仓」里都有。\n「确定」= 两处一起删除；「取消」= 不删。`
+      : '删除这笔资产？';
+    if (!confirm(msg)) return;
     STATE.assets = STATE.assets.filter(x => x.id !== b.dataset.adel);
+    if (linkedPos) STATE.positions = (STATE.positions || []).filter(x => x.id !== linkedPos.id);
     saveState(); render();
   });
   holdScroll.querySelectorAll('[data-aedit]').forEach(b => b.onclick = () => {
@@ -4358,18 +5366,18 @@ async function fetchIndexQuote(item) {
 }
 
 /* -------------------------------------------------------------------------
-   宏观自动拉取（试验）：免 key、境内可达的数据源。市场行情/DXY/VIX/美债走新浪(复用
-   /api/quote_sina)；中国 CPI/PMI/LPR 走东财数据中心(/api/emmacro)。部分符号需真机验证，
-   拉不到就保留手填、绝不覆盖为空。US CPI/失业/联邦利率暂无可靠免 key 源，保持手填。
+   宏观自动拉取（试验）：免 key、境内可达的数据源。VIX/美股指数走腾讯(/api/quote)；
+   美元指数走东财(/api/emquote)；中国 CPI/PMI/LPR 走东财数据中心(/api/emmacro)；
+   美国 CPI/失业/联邦利率/核心PCE/PMI 走金十(/api/jin10)。拉不到就保留手填、绝不覆盖为空。
+   美债10Y 暂无可靠免 key 源（腾讯 usTNX/hf_TNX 均下架、新浪封 IP），保持手填。
    ------------------------------------------------------------------------- */
-// 每个指标配多个候选源，逐个尝试直到取到有效值（新浪被封→自动切腾讯/东财/金十）。
-// 源类型：sina(新浪 list=,逗号) / thf(腾讯 hf_外盘或us美股) / em(东财中国宏观) / emus(东财美国) / jin10(金十)
+// 每个指标配多个候选源，逐个尝试直到取到有效值（新浪已封服务器 IP，不再作候选源）。
+// 源类型：thf(腾讯 hf_外盘或us美股) / emq(东财实时报价) / em(东财中国宏观) / emus(东财美国) / jin10(金十)
 // range=[min,max] 合理区间：取到但超区间→判为无效(避免"假成功"，如美元指数取到 3554)，
 // 并在诊断里附上原始返回，便于校准取值位置。
 const MACRO_AUTO = [
-  { key: 'dxy',    label: '美元指数',   range: [70, 130], sources: [ { kind: 'thf', sym: 'hf_ZSD', field: 0 }, { kind: 'thf', sym: 'hf_USDX', field: 0 }, { kind: 'sina', sym: 'DINIW', field: 1 } ] },
-  { key: 'vix',    label: 'VIX',        range: [5, 95],   sources: [ { kind: 'thf', sym: 'usVIX', field: 3 }, { kind: 'sina', sym: 'gb_$vix', field: 1 } ] },
-  { key: 'ust10',  label: '美债10Y',    range: [0, 12],   sources: [ { kind: 'thf', sym: 'usTNX', field: 3 }, { kind: 'thf', sym: 'hf_TNX' }, { kind: 'sina', sym: 'gb_$tnx', field: 1, div: 10 } ] },
+  { key: 'dxy',    label: '美元指数',   range: [70, 130], sources: [ { kind: 'emq', secid: '100.UDI' } ] },
+  { key: 'vix',    label: 'VIX',        range: [5, 95],   sources: [ { kind: 'thf', sym: 'usVIX', field: 3 } ] },
   { key: 'cnCPI',  label: '中国CPI',    range: [-6, 20],  sources: [ { kind: 'em', report: 'RPT_ECONOMY_CPI', sort: 'REPORT_DATE', pick: ['NATIONAL_SAME'] } ] },
   { key: 'cnPMI',  label: '中国PMI',    range: [20, 80],  sources: [ { kind: 'em', report: 'RPT_ECONOMY_PMI', sort: 'REPORT_DATE', pick: ['MAKE_INDEX'] } ] },
   { key: 'cnLPR1', label: 'LPR 1年',    range: [0, 15],   sources: [ { kind: 'em', report: 'RPTA_WEB_RATE', sort: 'TRADE_DATE', pick: ['LPR1Y', 'LPR_1Y', 'LPR1', 'LPR_1'] } ] },
@@ -4402,6 +5410,12 @@ async function fetchMacroSource(src) {
       const p = mm ? mm[1].split(delim) : [];
       let v = parseFloat(p[src.field]); if (src.div && isFinite(v)) v = v / src.div;
       return { value: isFinite(v) ? v : null, raw: 'tx/' + src.sym + ' HTTP' + r.status + ' ' + macroClip(r.text) };
+    }
+    if (src.kind === 'emq') {
+      // 东财实时报价（/api/emquote）：f43 现价需 ÷10^f59，如美元指数 100.UDI
+      const r = await fetchRaw('/api/emquote?secid=' + encodeURIComponent(src.secid) + '&fields=f43,f59');
+      let v = null; try { const d = JSON.parse(r.text).data; if (d && isFinite(d.f43)) v = d.f43 / Math.pow(10, d.f59 || 0); } catch (e) {}
+      return { value: v, raw: 'emq/' + src.secid + ' HTTP' + r.status + ' ' + macroClip(r.text) };
     }
     if (src.kind === 'em') {
       const r = await fetchRaw('/api/emmacro?reportName=' + src.report + '&columns=ALL&pageSize=1&sortColumns=' + src.sort + '&sortTypes=-1&source=WEB&client=WEB');
@@ -4617,17 +5631,49 @@ VIEWS.help = function (app) {
   app.appendChild(el(`<div class="card"><div class="alert blue"><span class="icon">${icon('info')}</span><div>
     <strong>核心理念</strong>：投资比拼的是概率认知、仓位管理与人性约束。本工具不预测涨跌、不荐股，只做量化计算与纪律校验——把“人性约束”固化成代码，在情绪化时刻把你拉回理性。所有模型都依赖你的诚实输入。</div></div></div>`));
 
-  G('globe', '数据 · 实时行情 · 云端存储', [
-    ['自动更新涨跌', '<p>打开页面会自动刷新一次(15 分钟节流),也可在「投资组合」点<strong>一键刷新估值</strong>。覆盖:公募<strong>基金</strong>(天天基金实时估值)、<strong>A股/ETF/美股</strong>(腾讯/新浪行情)、<strong>黄金</strong>(国际现货金折人民币/克)。持仓表「今日」列显示当日涨跌。理财为银行自有产品无公开接口,保持手动维护 + 年化利息估算。</p>'],
-    ['持仓联动', '<p>刷新后,各分析模块(凯利/分散/回撤/止损/铁律)都会用<strong>最新占比与浮盈亏</strong>联动计算,无需手动同步。份额模型:首次用「金额÷现价」反推份额,之后市值=份额×最新价,单次异常波动>40% 自动跳过以防坏行情污染。</p>'],
-    ['云端存储与恢复', '<p>全部数据存到<strong>你自己的服务器</strong>(访问密码保护),换设备/清缓存自动恢复,本机浏览器仅作离线缓存。每天(含服务器定时 22:00/23:00/23:30)记录一份快照,「资产趋势」看走势;数据记错可在<strong>设置→数据管理→恢复到某一天</strong>一键回退。</p>'],
+  G('list', '使用顺序 · 每天 / 每周 / 每月怎么用', [
+    ['每天（约 5 分钟）', '<p>① 打开页面（自动刷新估值 + 自动记快照）→ ②「投资组合」扫一眼今日涨跌与浮盈亏 → ③ 有买卖就到「持仓 → 当日交易」<strong>按成交价录入</strong>（别直接改股数，否则当日盈亏失真）→ ④ 有转入/转出资金，到「资产趋势 → 出入金登记」记一笔。就这四步，数据地基就稳了。</p>'],
+    ['每周（约 15 分钟）', '<p>①「股票体检」看弹性仓占比、因子集中度、深套复核 → ② 想加仓先过「② 铁律校验」，想减仓先过「⑤ 加减仓计划」的退出决策树 → ③「收益归因 · 近 7 天」看这钱是从哪赚的。</p>'],
+    ['每月 / 每季（约 30 分钟）', '<p>①「资产趋势」开基准对比：TWR 有没有跑赢沪深300/标普500 → ②「压力测试」过一遍极端情景，跌破阈值就降风险 → ③「再平衡」看大类偏离，超阈值按清单调 → ④「复盘校准」登记几笔判断，验证自己的胜率 → ⑤「市场指标」补更新手填项，校准宏观假设。</p>'],
+    ['价值闭环', '<p><strong>记录</strong>（快照/出入金/当日交易）→ <strong>诊断</strong>（体检/归因/压力测试）→ <strong>决策</strong>（铁律/退出/再平衡）→ <strong>验证</strong>（TWR vs 基准、复盘校准）。四步循环缺一不可：只诊断不执行 = 纸上谈兵，只执行不验证 = 盲目自信。</p>'],
+  ]);
+
+  G('globe', '数据基石 · 行情 / 快照 / 出入金', [
+    ['自动更新涨跌', '<p>打开页面会自动刷新一次(15 分钟节流),也可在「投资组合」点<strong>一键刷新估值</strong>。覆盖:公募<strong>基金</strong>(天天基金实时估值)、<strong>A股/ETF/美股</strong>(腾讯行情,东财备份)、<strong>黄金</strong>(国际现货金折人民币/克)。理财为银行自有产品无公开接口,保持手动维护 + 年化利息估算。</p>'],
+    ['持仓联动与「今日」口径', '<p>刷新后,各分析模块(凯利/体检/回撤/止损/铁律)都会用<strong>最新占比与浮盈亏</strong>联动计算。持仓表「今日」列显示的是<strong>你的个人当日收益率</strong>(当日盈亏 ÷ 当日成本基础)——中途建仓/加仓的日子按买入价算,而非标的全天涨幅;金额同理按开盘持股+当日成交价精确分解。</p>'],
+    ['快照与云端', '<p>全部数据存到<strong>你自己的服务器</strong>(访问密码保护),换设备/清缓存自动恢复。每天(含服务器定时 22:00/23:00/23:30)记录一份快照,是趋势、归因、基准对比的数据源;数据记错可在<strong>设置→数据管理→恢复到某一天</strong>一键回退。</p>'],
+    ['出入金登记（收益率真实性的关键）', '<p>转入/转出资金会让「净值变化」严重失真——加了 10 万工资,净值 +10% 也不是你赚的。在「资产趋势 → 出入金登记」记一笔(正=入金 负=出金),TWR 收益率、收益归因、基准对比全部自动剔除这些流水。<strong>不登记,所有收益率口径都只是"账户余额变化"。</strong></p>'],
   ]);
 
   G('wallet', '投资组合 · 总览与 AI 诊断', [
-    ['怎么用', '<p>已导入你 7/19 的资产汇总表。查看大类配置、按类别明细、币种敞口与全部持仓；点「生成 AI 组合诊断」由 DeepSeek 给出健康度评分与下一步建议。</p>'],
+    ['怎么用', '<p>查看大类配置、按类别明细、币种敞口与全部持仓（<strong>按住行可拖拽排序</strong>，顺序自动保存到云端）；点「生成 AI 组合诊断」由 DeepSeek 给出健康度评分与下一步建议。</p>'],
     ['计算逻辑', '<p>把每笔资产按汇率折算人民币后，归并为大类（权益/固收理财/现金/黄金），并按类别、币种分别汇总占比；美元敞口 = 所有 USD 计价资产折人民币之和。AI 诊断把这些占比 + 股票子组合的有效持仓数/因子集中度打包发给模型。</p>'],
     ['理论', '<p>基于<strong>资产配置理论</strong>：长期收益的绝大部分由大类配置（而非选股择时）决定；跨大类、跨币种分散能在不显著牺牲收益的前提下降低组合波动。</p>'],
     ['遵循的收益', '<p>一个均衡、不过度集中于单一大类或单一 beta 的组合，能在系统性回调中少受伤、在长期获得更稳的复利，避免“牛市财富逆向转移”。</p>'],
+  ]);
+
+  G('chart', '资产趋势 · 净值曲线 / TWR / 基准对比', [
+    ['怎么用', '<p>每天自动记录的快照形成净值曲线。<strong>鼠标悬停</strong>看任一日期的数值及较昨日/较上月/较期初变化；可切换总资产/大类/类别维度；顶部选「对比 沪深300 / 标普500」，组合按 TWR 指数化与基准同起点（=100）对比，并给出超额收益；下方是「出入金登记」。</p>'],
+    ['计算逻辑', '<p><strong>TWR（时间加权收益率）</strong>：r<sub>日</sub> = (当日资产 − 当日出入金 − 昨日资产) ÷ 昨日资产，逐日连乘。它剔除加钱/取钱的影响，回答「我的投资操作本身赚没赚」；净值简单变化只回答「账户里钱多了没」。基准对比时双方都归一到 100 起算，公平可比。</p>'],
+    ['理论', '<p><strong>诚实的计量是一切的起点</strong>：基金业衡量基金经理用的就是 TWR（剔除申赎影响）。<strong>不跑赢基准的主动管理是在付费上班</strong>——基准对比就是这把尺子，连续跑输就该把更多仓位交给宽基指数。</p>'],
+  ]);
+
+  G('pie', '收益归因 · 钱是从哪赚的', [
+    ['怎么用', '<p>选区间（近 7 天/30 天/本月/全部），看收益按<strong>大类 → 因子 → 标的</strong>三层的贡献分解。「残差」= 利息、手动改金额、当日调仓的变动——残差大说明该区间手动操作多，归因仅供方向参考。</p>'],
+    ['计算逻辑', '<p>逐日累加「前一日持股 × 当日价格变动」得每标的贡献，再按大类/因子汇总，全程剔除出入金。需要至少 2 份含明细的快照（每天打开应用自动攒）。</p>'],
+    ['怎么用出价值', '<p>如果你以为自己在赚「选股」的钱，归因却发现大部分贡献来自某一个因子（比如 AI），那你实际在做的是<strong>因子押注</strong>——就该用压力测试去管理它，而不是骗自己说分散了。它与体检互相印证：<strong>体检看「现在多集中」，归因看「历史靠什么赚」</strong>。</p>'],
+  ]);
+
+  G('warn', '压力测试 · 极端行情亏多少', [
+    ['怎么用', '<p>点预设情景（科技成长 −30%、A股系统性 −15%、美股 −20%、黄金 −15%、美元贬值 5%、全面危机），或自定义「对象 + 幅度」叠加多条，直接施加在<strong>当前实际持仓</strong>上，看组合影响金额、幅度，及是否跌破你设的最大回撤阈值（默认 15%，设置可调）。</p>'],
+    ['计算逻辑', '<p>冲击按桶施加：个股按因子（科技因子组可整组冲击）、基金/黄金按类别、美元资产额外受汇率冲击；同标的多条命中则叠加（美股 −20% ＋ 美元 −5% ≈ −25%）。不做相关性抵消，是偏保守的估计。</p>'],
+    ['理论', '<p><strong>尾部风险管理</strong>：均值-方差告诉你"平时的波动"，压力测试告诉你"出事的时候"——2008、2015、2020 都证明真实尾部远比正态分布厚。对「集中」有金额上的体感（"这一下就是 −30 万"），比任何百分比都更能管住手。</p>'],
+  ]);
+
+  G('scissors', '再平衡 · 从"偏了"到"调回来"', [
+    ['怎么用', '<p>设定各大类目标占比（合计须 100%）与偏离阈值（默认 5 个百分点）。偏离超线 → 自动生成执行清单：超配类按桶内占比分摊<strong>卖出</strong>（股票换算股数，A股按 100 股整手取整），低配类给出<strong>补入金额</strong>。执行前建议先过「⑤ 加减仓计划」的退出/铁律检查——逻辑已破的票优先减。</p>'],
+    ['计算逻辑', '<p>偏离 = 实际% − 目标%；卖出金额 = 偏离 × 总资产，桶内按资产占比分摊；买入按桶给金额，具体标的由你定（优先补该桶内现有品种）。</p>'],
+    ['理论', '<p><strong>再平衡红利</strong>：本质是制度化的高卖低买——把涨多的减下来、跌多的补回去，让风险结构不随行情漂移。纪律化再平衡长期可增厚收益并显著降低回撤。但它不是频繁操作：<strong>偏离超线或每季度看一次即可</strong>，过度再平衡只会贡献手续费。</p>'],
   ]);
 
   G('gauge', '股票体检 · 弹性引擎（已合并「组合分散」）', [
@@ -4673,6 +5719,16 @@ VIEWS.help = function (app) {
     ['股票现金池(持股变动自动结算)', '<p>在「持仓」页<strong>改持股数即自动结算</strong>:Δ股数×现价,差额为正(净卖出)=资金盈余,自动<strong>计入现金池</strong>;差额为负(净买入)=动用现金,自动<strong>从池中扣减</strong>。按市场分币种:<strong>A股动人民币「股票现金池」,美股动美元「美股现金池」</strong>(都在投资组合 → 现金分类)。两池余额在持仓页底部实时可见;余额为负代表动用了池外资金。⑤减仓决策里的「一键记账」走同一套结算引擎。总资产始终守恒(股票↓＝现金↑),现金蓄水池铁律按真实现金计算。</p>'],
     ['理论', '<p><strong>“今天还会买吗”测试</strong>是破解深套死扛的关键:它把问题从"我亏了多少舍不舍得割"(向后看、被成本绑架)翻成"它未来还值不值得占这笔钱"。<strong>成本是沉没成本,市场不知道也不在乎你买在多少。</strong>研究亦表明投资者卖出决策质量普遍差,故用规则化退出。</p>'],
     ['遵循的收益', '<p>深套逻辑破了能果断认赔(=买回选择权),逻辑没破又能避免恐慌割在低点;加仓摊薄成本、减仓卖在相对高点,一进一出都有纪律。</p>'],
+  ]);
+
+  G('globe', '市场指标 · 宏观变量看板', [
+    ['怎么用', '<p>集中跟踪影响组合的宏观变量：利率 / 通胀 / 汇率 / 恐慌指数。大部分<strong>自动拉取</strong>（美元指数、VIX、中国 CPI/PMI/LPR、美国 CPI/失业率/核心PCE/PMI、美联储利率）；拉不到的（FOMC 倾向、社融、美债/中债收益率）每项旁边有来源链接，<strong>每月手动更新一次</strong>即可。</p>'],
+    ['怎么用出价值', '<p>别把看板当新闻看。每项都写了「对你组合的影响」——比如美元资产占你组合约 1/4，美元指数走弱 5%，人民币计价账面就少吃约 5%。看指标时问一句：<strong>我哪个持仓对它最敏感？</strong>答不上来的指标，对你就是噪音。</p>'],
+  ]);
+
+  G('check', '复盘校准 · 判断力体检', [
+    ['怎么用', '<p>把你的预测（"AI 板块 Q3 走强"）和当时的置信度记下来，到期对照实际打分。长期记录能回答：我的判断胜率多少？我哪类判断系统性不靠谱？</p>'],
+    ['理论', '<p><strong>校准（Calibration）</strong>：专业预测者与普通人的区别不在于更准，而在于<strong>知道自己有多准</strong>。连续记录会暴露系统性过度自信——它管的是"你"这个组合里最大的风险源。</p>'],
   ]);
 
   app.appendChild(el(`<div class="card"><div class="alert amber"><span class="icon">${icon('warn')}</span><div>

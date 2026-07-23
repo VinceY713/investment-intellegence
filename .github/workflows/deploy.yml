@@ -111,7 +111,7 @@ jobs:
                     proxy_set_header User-Agent "Mozilla/5.0";
                     proxy_ssl_server_name on;
                     proxy_ssl_name qt.gtimg.cn;
-                    resolver 119.29.29.29 223.5.5.5 valid=300s;
+                    resolver 119.29.29.29 223.5.5.5 valid=300s ipv6=off;
                     resolver_timeout 5s;
                     add_header Cache-Control "no-store";
                 }
@@ -123,7 +123,7 @@ jobs:
                     proxy_set_header User-Agent "Mozilla/5.0";
                     proxy_ssl_server_name on;
                     proxy_ssl_name hq.sinajs.cn;
-                    resolver 119.29.29.29 223.5.5.5 valid=300s;
+                    resolver 119.29.29.29 223.5.5.5 valid=300s ipv6=off;
                     resolver_timeout 5s;
                     add_header Cache-Control "no-store";
                 }
@@ -136,7 +136,7 @@ jobs:
                     proxy_set_header User-Agent "Mozilla/5.0";
                     proxy_ssl_server_name on;
                     proxy_ssl_name fundgz.1234567.com.cn;
-                    resolver 119.29.29.29 223.5.5.5 valid=300s;
+                    resolver 119.29.29.29 223.5.5.5 valid=300s ipv6=off;
                     resolver_timeout 5s;
                     add_header Cache-Control "no-store";
                 }
@@ -154,7 +154,7 @@ jobs:
                     proxy_ssl_server_name on;
                     proxy_ssl_name api.fund.eastmoney.com;
                     proxy_ssl_protocols TLSv1.2 TLSv1.3;
-                    resolver 119.29.29.29 223.5.5.5 valid=300s;
+                    resolver 119.29.29.29 223.5.5.5 valid=300s ipv6=off;
                     resolver_timeout 5s;
                     add_header Cache-Control "no-store";
                 }
@@ -172,7 +172,7 @@ jobs:
                     proxy_ssl_server_name on;
                     proxy_ssl_name api.fund.eastmoney.com;
                     proxy_ssl_protocols TLSv1.2 TLSv1.3;
-                    resolver 119.29.29.29 223.5.5.5 valid=300s;
+                    resolver 119.29.29.29 223.5.5.5 valid=300s ipv6=off;
                     resolver_timeout 5s;
                     proxy_connect_timeout 10s;
                     proxy_read_timeout 15s;
@@ -192,27 +192,48 @@ jobs:
                     proxy_ssl_server_name on;
                     proxy_ssl_name web.ifzq.gtimg.cn;
                     proxy_ssl_protocols TLSv1.2 TLSv1.3;
-                    resolver 119.29.29.29 223.5.5.5 valid=300s;
+                    resolver 119.29.29.29 223.5.5.5 valid=300s ipv6=off;
                     resolver_timeout 5s;
                     proxy_connect_timeout 10s;
                     proxy_read_timeout 15s;
                     add_header Cache-Control "no-store";
                 }
 
-                # 美股日K历史代理：/api/uskline?param=usTCOM,day,,,160,qfq → 腾讯美股前复权日K（usfqkline）
-                # 美股与 A股不同路径（usfqkline≠fqkline），否则拿不到美股K线；用于把美股纳入真实相关性
+                # 美股日K历史代理：/api/uskline?secid=105.AAPL&fields1=...&klt=101&fqt=1&beg=...&end=... → 东财 push2his
+                # （原腾讯 usfqkline 2026-07 起只回 1~2 行已失效；东财 HTTP/1.1 可代理、数据完整）
+                # secid 市场前缀：105 纳斯达克 / 106 纽交所 / 107 美交所(Arca ETF)；整段 query 透传，前端拼好全部参数
                 location = /api/uskline {
-                    proxy_pass https://web.ifzq.gtimg.cn/appstock/app/usfqkline/get?param=$arg_param;
+                    proxy_pass https://push2his.eastmoney.com/api/qt/stock/kline/get$is_args$args;
                     proxy_http_version 1.1;
                     proxy_set_header Connection "";
-                    proxy_set_header Host web.ifzq.gtimg.cn;
-                    proxy_set_header Referer https://gu.qq.com/;
+                    proxy_set_header Host push2his.eastmoney.com;
+                    proxy_set_header Referer https://quote.eastmoney.com/;
                     proxy_set_header User-Agent "Mozilla/5.0";
                     proxy_set_header Accept "*/*";
                     proxy_ssl_server_name on;
-                    proxy_ssl_name web.ifzq.gtimg.cn;
+                    proxy_ssl_name push2his.eastmoney.com;
                     proxy_ssl_protocols TLSv1.2 TLSv1.3;
-                    resolver 119.29.29.29 223.5.5.5 valid=300s;
+                    resolver 119.29.29.29 223.5.5.5 valid=300s ipv6=off;
+                    resolver_timeout 5s;
+                    proxy_connect_timeout 10s;
+                    proxy_read_timeout 15s;
+                    add_header Cache-Control "no-store";
+                }
+
+                # 东财实时报价代理：/api/emquote?secid=100.UDI&fields=f43,f58,f59,f60 → push2 单标的报价
+                # 用于：股票行情备用源（新浪封 IP 后的替代）、美元指数等宏观指标自动拉取
+                location = /api/emquote {
+                    proxy_pass https://push2.eastmoney.com/api/qt/stock/get$is_args$args;
+                    proxy_http_version 1.1;
+                    proxy_set_header Connection "";
+                    proxy_set_header Host push2.eastmoney.com;
+                    proxy_set_header Referer https://quote.eastmoney.com/;
+                    proxy_set_header User-Agent "Mozilla/5.0";
+                    proxy_set_header Accept "*/*";
+                    proxy_ssl_server_name on;
+                    proxy_ssl_name push2.eastmoney.com;
+                    proxy_ssl_protocols TLSv1.2 TLSv1.3;
+                    resolver 119.29.29.29 223.5.5.5 valid=300s ipv6=off;
                     resolver_timeout 5s;
                     proxy_connect_timeout 10s;
                     proxy_read_timeout 15s;
@@ -232,7 +253,7 @@ jobs:
                     proxy_ssl_server_name on;
                     proxy_ssl_name datacenter-web.eastmoney.com;
                     proxy_ssl_protocols TLSv1.2 TLSv1.3;
-                    resolver 119.29.29.29 223.5.5.5 valid=300s;
+                    resolver 119.29.29.29 223.5.5.5 valid=300s ipv6=off;
                     resolver_timeout 5s;
                     proxy_connect_timeout 10s;
                     proxy_read_timeout 15s;
@@ -256,7 +277,7 @@ jobs:
                     proxy_ssl_server_name on;
                     proxy_ssl_name datacenter-api.jin10.com;
                     proxy_ssl_protocols TLSv1.2 TLSv1.3;
-                    resolver 119.29.29.29 223.5.5.5 valid=300s;
+                    resolver 119.29.29.29 223.5.5.5 valid=300s ipv6=off;
                     resolver_timeout 5s;
                     proxy_connect_timeout 10s;
                     proxy_read_timeout 15s;
@@ -271,7 +292,7 @@ jobs:
                     proxy_set_header User-Agent "Mozilla/5.0";
                     proxy_ssl_server_name on;
                     proxy_ssl_name qt.gtimg.cn;
-                    resolver 119.29.29.29 223.5.5.5 valid=300s;
+                    resolver 119.29.29.29 223.5.5.5 valid=300s ipv6=off;
                     resolver_timeout 5s;
                     add_header Cache-Control "no-store";
                 }
@@ -284,7 +305,7 @@ jobs:
                     proxy_set_header User-Agent "Mozilla/5.0";
                     proxy_ssl_server_name on;
                     proxy_ssl_name www.chinamoney.com.cn;
-                    resolver 119.29.29.29 223.5.5.5 valid=300s;
+                    resolver 119.29.29.29 223.5.5.5 valid=300s ipv6=off;
                     resolver_timeout 5s;
                     proxy_connect_timeout 10s;
                     proxy_read_timeout 15s;
@@ -325,7 +346,7 @@ jobs:
                     include /etc/nginx/ai_key.conf;
                     proxy_ssl_server_name on;
                     proxy_ssl_name api.deepseek.com;
-                    resolver 119.29.29.29 223.5.5.5 valid=300s;
+                    resolver 119.29.29.29 223.5.5.5 valid=300s ipv6=off;
                     resolver_timeout 5s;
                     proxy_connect_timeout 15s;
                     proxy_read_timeout 120s;
