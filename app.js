@@ -2529,6 +2529,75 @@ function holdingRiskType(cand) {
 // 配置型资产的建议策略权重区间（%），凯利不适用它们
 const ROLE_BAND = { core: [8, 30], theme: [3, 12] };
 
+/* -------------------------------------------------------------------------
+   战略再平衡：按「期限 × 最大回撤」预设匹配科学目标盘
+   科学口径：给每层设"压力情景回撤假设"（危机时风险资产同向下跌，故按加权线性求和 =
+   组合压力回撤上界）；各预设的目标权重都满足"压力回撤 ≤ 该档预算"。用户三层策略
+   （股票博弹性/基金压舱/理财兜底）被拆成 8 个可对照的层，美元敞口单列。
+   ------------------------------------------------------------------------- */
+// 层顺序与显示名（兜底→机动现金→海外固收→压舱→宽基→单股→美股→黄金）
+const LAYER_ORDER = ['safe', 'cash', 'oseas', 'ballast', 'broad', 'single', 'us', 'gold'];
+const LAYER_NAME = {
+  safe: '兜底·在岸保本', cash: '机动现金', oseas: '海外固收(美元)', ballast: '压舱·低波基金',
+  broad: '弹性·宽基', single: '弹性·单股', us: '美股', gold: '黄金',
+};
+// 压力情景（危机）下各层的假设回撤%——用于"这套配置最多能亏多少"的估算，透明可调
+const LAYER_DD = { safe: 0, cash: 0, oseas: 8, ballast: 15, broad: 32, single: 45, us: 35, gold: 5 };
+const USD_LAYERS = { oseas: 1, us: 1 };   // 计入美元敞口的层（美元现金另按币种实算）
+// 预设：每档目标权重求和=100，压力回撤≤该档 maxDD；期限只影响兜底/现金厚度（流动性），回撤预算决定风险档
+const REBAL_PRESETS = [
+  { id: '3y15', years: 3, maxDD: 15, label: '3年·回撤≤15%', tone: '保守', t: { safe: 18, cash: 18, oseas: 12, ballast: 15, broad: 8, single: 12, us: 7, gold: 10 } },
+  { id: '3y20', years: 3, maxDD: 20, label: '3年·回撤≤20%', tone: '稳健', t: { safe: 15, cash: 12, oseas: 12, ballast: 15, broad: 10, single: 18, us: 8, gold: 10 } },
+  { id: '5y20', years: 5, maxDD: 20, label: '5年·回撤≤20%', tone: '均衡', t: { safe: 10, cash: 11, oseas: 12, ballast: 15, broad: 12, single: 18, us: 10, gold: 12 } },
+  { id: '5y25', years: 5, maxDD: 25, label: '5年·回撤≤25%', tone: '进取', t: { safe: 8, cash: 8, oseas: 12, ballast: 13, broad: 13, single: 24, us: 12, gold: 10 } },
+];
+// 资产 → 战略层
+function layerOf(a) {
+  const cat = a.category, name = a.name || '', usd = a.currency === 'USD';
+  if (cat === '黄金') return 'gold';
+  if (cat === '美股股票') return 'us';
+  if (cat === '理财(QDII)') return 'oseas';
+  if (cat === '定期存款') return usd ? 'oseas' : 'safe';   // 美元定存有汇率→海外固收；人民币定存→兜底
+  if (cat === '人民币现金') return 'cash';
+  if (cat === '香港账户现金') return 'cash';               // 美元现金：机动（币种敞口另算）
+  if (cat === '基金') {
+    if (/标普|纳斯达克|纳指|美国|海外|全球|S&P|QDII/i.test(name)) return 'us';   // 美元海外基金
+    if (/红利|低波|高股息|价值|债|货币/i.test(name)) return 'ballast';
+    return 'broad';                                        // 宽基/指数
+  }
+  if (cat === 'A股股票') return 'single';                  // 个股 + 行业主题ETF = 卫星弹性
+  return 'cash';
+}
+// 锁定资产（不能自由调仓，只能用活钱/新钱平衡）：定存 + 未到期赎回期的QDII
+function isLockedAsset(a) {
+  if (a.category === '定期存款') return true;
+  if (a.category === '理财(QDII)') return !/每日|可赎|可申赎|活期|T\+0/.test(a.note || '');
+  return false;
+}
+// 压力回撤估算%：各层占比(0..1) × 层回撤假设，线性求和（危机相关性→1 的保守上界）
+function estStressDD(fracByLayer) {
+  let dd = 0; for (const k in LAYER_DD) dd += (fracByLayer[k] || 0) * LAYER_DD[k];
+  return dd;
+}
+// 当前持仓的层级权重(%)、锁定金额、美元敞口
+function currentLayerState() {
+  const fx = currentFx();
+  const assets = STATE.assets || [];
+  const total = assets.reduce((s, a) => s + assetCny(a, fx), 0);
+  const byLayer = {}, lockedByLayer = {};
+  let usdCny = 0;
+  assets.forEach(a => {
+    const v = assetCny(a, fx), L = layerOf(a);
+    byLayer[L] = (byLayer[L] || 0) + v;
+    if (isLockedAsset(a)) lockedByLayer[L] = (lockedByLayer[L] || 0) + v;
+    if (a.currency === 'USD') usdCny += v;
+  });
+  const pct = {}, frac = {};
+  LAYER_ORDER.forEach(k => { pct[k] = total > 0 ? (byLayer[k] || 0) / total * 100 : 0; frac[k] = total > 0 ? (byLayer[k] || 0) / total : 0; });
+  return { total, pct, frac, cny: byLayer, locked: lockedByLayer, usdPct: total > 0 ? usdCny / total * 100 : 0 };
+}
+function getRebalPreset(id) { return REBAL_PRESETS.find(p => p.id === id) || REBAL_PRESETS[0]; }
+
 // 下注/配置质量评分（0–100）：综合期望值、赔率、胜率，惩罚过度自信
 // 下注/配置质量评分（0–100）：连续、单调、在 EV=0 处不断裂，且用有界压缩避免高分段饱和。
 // 说明：原实现在 EV=0 处从 ~38 跳到 ~60（12–28 分断崖），且 ev×8 让好票几乎都顶到 95、
@@ -3866,6 +3935,75 @@ VIEWS.trends = function (app) {
   };
 };
 
+// 战略再平衡卡：选「期限×回撤」预设 → 科学目标盘 vs 当前偏离 + 压力回撤对照 + 锁定/美元提示
+function renderRebalanceCard(app) {
+  const s = STATE.settings;
+  const st = currentLayerState();
+  const total = st.total;
+  const activeId = s.rebalPreset || '3y15';
+  const preset = getRebalPreset(activeId);
+
+  const card = el(`<div class="card" style="margin-top:16px"><h3>${icon('target')} 战略再平衡（按 期限×回撤 匹配科学目标盘）</h3>
+    <p class="hint">选一档你能接受的「投资期限 × 最大回撤」，系统按<strong>压力情景回撤预算</strong>反推目标配置，并算出<strong>当前离目标差多少钱</strong>。你的三层策略（股票博弹性 / 基金压舱 / 理财兜底）在这里被拆成 8 层对照，美元敞口单列。</p></div>`);
+
+  // 预设选择
+  const segRow = el('<div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:4px"></div>');
+  REBAL_PRESETS.forEach(p => {
+    const on = p.id === activeId;
+    const btn = el(`<button class="btn ${on ? '' : 'secondary'}" style="flex:0 0 auto">${escapeHtml(p.label)}<br><span style="font-size:11px;opacity:.8">${p.tone}</span></button>`);
+    btn.onclick = () => { s.rebalPreset = p.id; s.maxDrawdown = p.maxDD; saveState(); render(); };
+    segRow.appendChild(btn);
+  });
+  card.appendChild(segRow);
+  card.appendChild(el(`<p class="inline-note">选中后会同步把「③回撤控制」的可承受回撤设为 <strong>${preset.maxDD}%</strong>，各模块口径一致。期限主要决定兜底/现金厚度（流动性），回撤预算决定风险档。</p>`));
+
+  // 压力回撤对照：当前 vs 目标 vs 预算
+  const curDD = estStressDD(st.frac);
+  const tgtFrac = {}; LAYER_ORDER.forEach(k => tgtFrac[k] = (preset.t[k] || 0) / 100);
+  const tgtDD = estStressDD(tgtFrac);
+  const over = curDD > preset.maxDD;
+  card.appendChild(el(`<div class="stat-grid" style="margin:12px 0">
+    <div class="stat"><div class="label">当前组合·压力回撤估算</div><div class="value" style="font-size:22px;color:${over ? 'var(--red-ink)' : 'var(--green-ink)'}">${curDD.toFixed(1)}%</div><div class="sub">${over ? '超出预算 ' + (curDD - preset.maxDD).toFixed(1) + '%，需减风险' : '在预算内'}</div></div>
+    <div class="stat"><div class="label">你的回撤预算</div><div class="value" style="font-size:22px">${preset.maxDD}%</div><div class="sub">${escapeHtml(preset.label)}</div></div>
+    <div class="stat"><div class="label">目标盘·压力回撤估算</div><div class="value" style="font-size:22px;color:var(--green-ink)">${tgtDD.toFixed(1)}%</div><div class="sub">已按预算校准</div></div>
+    <div class="stat"><div class="label">美元敞口</div><div class="value" style="font-size:22px;color:${st.usdPct > (preset.t.oseas + preset.t.us + 6) ? 'var(--amber-ink)' : 'inherit'}">${st.usdPct.toFixed(0)}%</div><div class="sub">目标约 ${preset.t.oseas + preset.t.us}%（海外固收+美股）</div></div>
+  </div>`));
+  if (over) card.appendChild(el(`<div class="alert red"><span class="icon">${icon('danger')}</span><div><strong>当前配置的压力回撤 ${curDD.toFixed(1)}% 已超过你 ${preset.maxDD}% 的预算</strong>——按下表减权益、去集中、补兜底，把它压回预算内。</div></div>`));
+
+  // 目标 vs 当前 逐层对照表
+  const rows = LAYER_ORDER.map(k => {
+    const cur = st.pct[k] || 0, tgt = preset.t[k] || 0, dev = cur - tgt;
+    const diffMoney = total > 0 ? dev / 100 * total : 0;
+    const locked = st.locked[k] || 0;
+    const need = Math.abs(dev) >= 5;                       // 漂移带 ±5%
+    const action = dev > 0.5 ? `减 ${fmtMoney(Math.abs(diffMoney))}` : dev < -0.5 ? `补 ${fmtMoney(Math.abs(diffMoney))}` : '基本到位';
+    const actColor = dev > 0.5 ? 'var(--amber-ink)' : dev < -0.5 ? 'var(--green-ink)' : 'var(--muted)';
+    const badge = need ? `<span class="pill ${dev > 0 ? 'amber' : 'green'}">需调整</span>` : `<span class="pill green">✓</span>`;
+    const lockNote = locked > 0 ? `<br><span class="inline-note" style="color:var(--muted)">其中锁定 ${fmtMoney(locked)}</span>` : '';
+    return `<tr>
+      <td style="white-space:nowrap"><strong>${LAYER_NAME[k]}</strong>${lockNote}</td>
+      <td class="num">${tgt}%</td>
+      <td class="num">${cur.toFixed(1)}%</td>
+      <td class="num" style="color:${dev > 0 ? 'var(--amber-ink)' : dev < 0 ? 'var(--green-ink)' : 'var(--muted)'}">${dev >= 0 ? '+' : ''}${dev.toFixed(1)}%</td>
+      <td class="num" style="color:${actColor};white-space:nowrap">${action}</td>
+      <td class="num">${badge}</td>
+    </tr>`;
+  }).join('');
+  card.appendChild(el(`<div class="table-scroll"><table>
+    <thead><tr><th>层</th><th class="num">目标</th><th class="num">当前</th><th class="num">偏离</th><th class="num">该调金额</th><th class="num">漂移带±5%</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`));
+
+  // 锁定资产提示
+  const lockedTotal = Object.values(st.locked).reduce((a, b) => a + b, 0);
+  if (lockedTotal > 0) card.appendChild(el(`<div class="alert blue" style="margin-top:10px"><span class="icon">${icon('lock')}</span><div><strong>锁定资产约 ${fmtMoney(lockedTotal)}（${(lockedTotal / total * 100).toFixed(0)}%）</strong>：定存/未到期QDII 不能自由调仓。补兜底、减美元优先用<strong>活钱 + 新增资金 + 每日可赎的QDII</strong>，锁定部分到期再归位，别提前赎回吃罚息。</div></div>`));
+
+  // 科学口径脚注
+  card.appendChild(el(`<div class="alert amber" style="margin-top:10px"><span class="icon">${icon('info')}</span><div style="font-size:12px;line-height:1.7">
+    <strong>「压力回撤」怎么算的？</strong>给每层设危机情景回撤假设：兜底/现金 0%、海外固收 8%、压舱低波 15%、宽基 32%、单股 45%、美股 35%、黄金 5%（危机中风险资产同向下跌，故按占比加权<strong>线性求和</strong>作保守上界）。各预设的目标权重都已校准到"压力回撤 ≤ 该档预算"。假设偏保守（把黄金/债的对冲作用打折），实际回撤通常小于此值——宁可高估风险。</div></div>`));
+
+  app.appendChild(card);
+}
+
 VIEWS.portfolio = function (app) {
   const assets = STATE.assets || [];
   app.appendChild(el(`
@@ -3943,6 +4081,9 @@ VIEWS.portfolio = function (app) {
   const allocCard = el(`<div class="card"><h3>${icon('pie')} 大类配置</h3></div>`);
   allocCard.appendChild(buildPie(normalize(byBig), { total }));
   app.appendChild(allocCard);
+
+  // 战略再平衡（按 期限×回撤 预设匹配科学目标盘）
+  renderRebalanceCard(app);
 
   // 明细表：按类别（按大类排序：股票→基金→理财→黄金→现金）
   const catCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('list')} 按类别明细</h3></div>`);
