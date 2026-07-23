@@ -253,6 +253,53 @@ async function fetchUsKlinesEM(code, count = 160) {
   }
   throw new Error('美股日K获取失败（东财 105/106/107 均无该代码）');
 }
+// 基准指数日K序列：hs300 → 腾讯 fqkline(sh000300，经 /api/kline)；spx → 东财 push2his(secid=100.SPX，经 /api/uskline 透传)
+async function fetchBenchmarkSeries(key, count) {
+  count = count || 400;
+  if (key === 'hs300') {
+    const res = await fetch('/api/kline?param=' + encodeURIComponent('sh000300,day,,,' + count + ',qfq'), { cache: 'no-store' });
+    if (!res.ok) throw new Error('沪深300 K线接口 ' + res.status);
+    const j = await res.json();
+    const node = j && j.data && j.data['sh000300'];
+    const arr = node && (node.qfqday || node.day);
+    if (!Array.isArray(arr) || !arr.length) throw new Error('沪深300 无K线数据');
+    return arr.map(r => ({ date: r[0], close: parseFloat(r[2]) })).filter(x => isFinite(x.close) && x.close > 0);
+  }
+  if (key === 'spx') {
+    const endD = new Date(), begD = new Date(endD.getTime() - Math.ceil(count * 2.2) * 864e5);
+    const ymd = d => d.toISOString().slice(0, 10).replace(/-/g, '');
+    const res = await fetch('/api/uskline?secid=100.SPX&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f53&klt=101&fqt=1&beg=' + ymd(begD) + '&end=' + ymd(endD), { cache: 'no-store' });
+    if (!res.ok) throw new Error('标普500 K线接口 ' + res.status);
+    const j = await res.json();
+    const list = j && j.data && j.data.klines;
+    if (!Array.isArray(list) || !list.length) throw new Error('标普500 无K线数据');
+    return list.map(line => { const p = String(line).split(','); return { date: p[0], close: parseFloat(p[1]) }; })
+      .filter(x => x.date && isFinite(x.close) && x.close > 0);
+  }
+  throw new Error('未知基准 ' + key);
+}
+// 组合自身的 TWR 净值指数（首个快照 = 100）：剔除出入金，与基准对比才公平
+function twrIndexSeries(snaps) {
+  let acc = 100;
+  const out = [{ date: snaps[0].date, value: 100 }];
+  for (let i = 1; i < snaps.length; i++) {
+    const prev = num(snaps[i - 1].total), cur = num(snaps[i].total);
+    if (prev > 0) acc *= 1 + (cur - cashflowOn(snaps[i].date) - prev) / prev;
+    out.push({ date: snaps[i].date, value: acc });
+  }
+  return out;
+}
+// 基准序列按快照日期对齐（非交易日用此前最近收盘价填充），并以首个有数据的快照日 = 100 归一
+function alignBenchmark(snaps, series) {
+  const dates = series.map(x => x.date);                 // 已升序
+  const close = new Map(series.map(x => [x.date, x.close]));
+  let lastV = null, base = null;
+  return snaps.map(s => {
+    for (let i = dates.length - 1; i >= 0; i--) { if (dates[i] <= s.date) { lastV = close.get(dates[i]); break; } }
+    if (lastV != null && base == null) base = lastV;
+    return { label: s.date.slice(5), date: s.date, value: base ? lastV / base * 100 : 100 };
+  });
+}
 // 场外基金历史净值序列（东财 lsjz，返回按日期倒序）；转成「与日K同形」的 {date,close} 升序序列
 // 用整段 query 透传（与 /api/emmacro 同款、最稳），fundCode/pageIndex/pageSize 都由前端拼好
 async function fetchFundSeries(code, count = 200) {
@@ -848,6 +895,8 @@ function applyStateDefaults(s) {
   s.snapshots = s.snapshots || [];
   s.forecasts = s.forecasts || [];
   s.corrCache = s.corrCache || null;
+  s.cashflows = s.cashflows || [];              // 出入金登记 [{id,date,amount,note}]，正=入金 负=出金（人民币）
+  s.targetAlloc = s.targetAlloc || null;        // 再平衡目标配置 {buckets:{...}, threshold}，null=未设置
   s.macro = Object.assign({ market: {}, ind: {}, updatedAt: null }, s.macro || {});
   s.macro.market = s.macro.market || {}; s.macro.ind = s.macro.ind || {};
   return s;
@@ -934,6 +983,26 @@ function recordDailySnapshot() {
   else STATE.snapshots.push(snap);
   STATE.snapshots.sort((a, b) => a.date.localeCompare(b.date));
   saveState();
+}
+
+// 某天的出入金合计（人民币，正=入金 负=出金）
+function cashflowOn(dateStr) {
+  return (STATE.cashflows || []).filter(c => c.date === dateStr).reduce((s, c) => s + num(c.amount), 0);
+}
+// 时间加权收益率(TWR)：相邻快照逐日收益率连乘，剔除出入金——
+// r_i = (T_i − CF_i − T_{i-1}) / T_{i-1}（当日流水按开盘前到账近似）。
+// 解决「净值变化 ≠ 真实收益率」：加仓后多赚的钱不是收益。仅总资产口径。
+function twrOverall(snaps) {
+  let acc = 1, days = 0, flows = 0;
+  for (let i = 1; i < snaps.length; i++) {
+    const prev = num(snaps[i - 1].total), cur = num(snaps[i].total);
+    if (!(prev > 0)) continue;
+    const cf = cashflowOn(snaps[i].date);
+    flows += cf;
+    acc *= 1 + (cur - cf - prev) / prev;
+    days++;
+  }
+  return { twr: (acc - 1) * 100, days, flows };
 }
 
 /* -------------------------------------------------------------------------
@@ -1608,7 +1677,10 @@ function buildLineChart(points, opts) {
   const padL = 8, padR = 12, padT = 16, padB = 26;
   const iw = w - padL - padR, ih = h - padT - padB;
   if (!points.length) return el('<div class="empty">暂无数据</div>');
+  // opts.extra：叠加的对比序列（如基准指数），与主序列等长、共享 X 轴
+  const extras = (opts.extra || []).filter(e => e && Array.isArray(e.points) && e.points.length === points.length);
   const vals = points.map(p => p.value);
+  extras.forEach(e => e.points.forEach(p => { if (isFinite(p.value)) vals.push(p.value); }));
   let min = Math.min(...vals), max = Math.max(...vals);
   if (min === max) { min = min * 0.98; max = max * 1.02 || 1; }
   const pad = (max - min) * 0.12; min -= pad; max += pad;
@@ -1616,6 +1688,10 @@ function buildLineChart(points, opts) {
   const X = i => padL + (n === 1 ? iw / 2 : iw * i / (n - 1));
   const Y = v => padT + ih * (1 - (v - min) / (max - min));
   const line = points.map((p, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)},${Y(p.value).toFixed(1)}`).join(' ');
+  const extraLines = extras.map(e => {
+    const d = e.points.map((p, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)},${Y(p.value).toFixed(1)}`).join(' ');
+    return `<path d="${d}" fill="none" stroke="${e.color || 'var(--muted)'}" stroke-width="1.8"${e.dash ? ` stroke-dasharray="${e.dash}"` : ''} stroke-linejoin="round"/>`;
+  }).join('');
   const area = `${line} L${X(n - 1).toFixed(1)},${(padT + ih).toFixed(1)} L${X(0).toFixed(1)},${(padT + ih).toFixed(1)} Z`;
   // 网格线（4 条）
   let grid = '';
@@ -1643,6 +1719,7 @@ function buildLineChart(points, opts) {
     ${grid}
     <path d="${area}" fill="url(#lc-fill)"/>
     <path d="${line}" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+    ${extraLines}
     ${dots}${xlab}
   </svg>`);
   if (typeof opts.tooltip !== 'function') return svg;
@@ -4006,6 +4083,7 @@ VIEWS.trends = function (app) {
     : num((s.byCat || {})[dim.slice(4)]);
   const dimShort = (dim) => (dims.find(d => d.key === dim) || dims[0]).short;
   let curDim = 'total', curGran = 'day';
+  let bench = { key: '', label: '', series: null };   // 基准对比（沪深300/标普500 日K，加载后缓存在会话内）
 
   const overviewBox = el('<div class="stat-grid" style="margin-bottom:16px"></div>');
   app.appendChild(overviewBox);
@@ -4015,6 +4093,11 @@ VIEWS.trends = function (app) {
     <div class="card-head-row">
       <h3 style="margin:0">${icon('chart')} <span id="chart-title">总资产</span>走势</h3>
       <div class="row" style="gap:8px;flex:0 0 auto;align-items:center;flex-wrap:wrap">
+        <select id="bench-sel" style="width:auto;min-width:110px">
+          <option value="">不对比基准</option>
+          <option value="hs300">对比 沪深300</option>
+          <option value="spx">对比 标普500</option>
+        </select>
         <select id="dim-sel" style="width:auto;min-width:120px">${dims.map(d => `<option value="${d.key}">${escapeHtml(d.label)}</option>`).join('')}</select>
         <div class="seg" id="gran-seg">
           <button class="seg-btn active" data-g="day">日</button>
@@ -4025,9 +4108,51 @@ VIEWS.trends = function (app) {
       </div>
     </div>
     <div id="trend-chart" style="margin-top:14px"></div>
-    <p class="inline-note" style="margin-top:10px">切换「维度」可分别看总资产或某个大类/类别（如权益、基金、黄金）随时间的走势。<strong>鼠标移到折线上</strong>可查看任一日期的数值，及较昨日 / 较上月 / 较期初累计的变化。</p>
+    <div id="bench-legend" class="inline-note" style="margin-top:8px"></div>
+    <p class="inline-note" style="margin-top:10px">切换「维度」可分别看总资产或某个大类/类别（如权益、基金、黄金）随时间的走势。<strong>鼠标移到折线上</strong>可查看任一日期的数值，及较昨日 / 较上月 / 较期初累计的变化。基准对比在「日」粒度 +「总资产」维度下生效：组合按 TWR 指数化（剔除出入金），与基准同起点归一。</p>
   </div>`);
   app.appendChild(chartCard);
+
+  // 出入金登记：修正「净值变化 ≠ 真实收益率」——转入转出会让趋势/归因失真，登记后 TWR 自动剔除
+  const cfCard = el(`<div class="card" style="margin-top:16px">
+    <h3>${icon('wallet')} 出入金登记</h3>
+    <p class="hint">转入/转出资金会让「净值变化」失真（多出来的钱可能只是你新加的仓，不是赚的）。在这里登记后，上方「收益率(TWR)」会自动剔除这些流水，反映真实投资表现。<strong>正数 = 入金，负数 = 出金</strong>（人民币）。</p>
+    <div class="grid grid-3">
+      <div class="field"><label>日期</label><input id="cf-date" type="date" value="${todayStr()}"/></div>
+      <div class="field"><label>金额（+入金 / −出金）</label><input id="cf-amount" type="number" step="100" placeholder="如 50000 或 -20000"/></div>
+      <div class="field"><label>备注（可选）</label><input id="cf-note" placeholder="如 工资加仓"/></div>
+    </div>
+    <div class="row"><button class="btn" id="cf-add" style="flex:0 0 auto">${icon('plus')} 登记</button></div>
+    <div class="table-scroll" style="margin-top:12px"><table id="cf-table"></table></div>
+  </div>`);
+  app.appendChild(cfCard);
+  function drawCfTable() {
+    const list = (STATE.cashflows || []).slice().sort((a, b) => b.date.localeCompare(a.date));
+    const t = cfCard.querySelector('#cf-table');
+    t.innerHTML = list.length
+      ? `<thead><tr><th>日期</th><th class="num">金额</th><th>备注</th><th class="num"></th></tr></thead><tbody>${list.map(c => `<tr>
+          <td>${escapeHtml(c.date)}</td>
+          <td class="num" style="color:${num(c.amount)>=0?'var(--green-ink)':'var(--red-ink)'}">${num(c.amount)>=0?'+':''}${fmtMoney(c.amount)}</td>
+          <td>${escapeHtml(c.note || '')}</td>
+          <td class="num"><button class="btn danger small" data-cfdel="${c.id}">${icon('trash')}</button></td>
+        </tr>`).join('')}</tbody>`
+      : '<tbody><tr><td class="inline-note" style="padding:10px">暂无登记。发生过转入/转出就记一笔，TWR 才是你的真实收益率。</td></tr></tbody>';
+    t.querySelectorAll('[data-cfdel]').forEach(b => b.onclick = async () => {
+      if (!confirm('删除这条出入金记录？（只影响收益率口径，不动资产）')) return;
+      STATE.cashflows = (STATE.cashflows || []).filter(c => c.id !== b.dataset.cfdel);
+      saveState(); await pushCloudNow(); render();
+    });
+  }
+  cfCard.querySelector('#cf-add').onclick = async () => {
+    const date = cfCard.querySelector('#cf-date').value;
+    const amount = num(cfCard.querySelector('#cf-amount').value);
+    const note = cfCard.querySelector('#cf-note').value.trim();
+    if (!date) { alert('请选择日期'); return; }
+    if (!(isFinite(amount) && amount !== 0)) { alert('请填写非零金额（正=入金，负=出金）'); return; }
+    (STATE.cashflows = STATE.cashflows || []).push({ id: uid(), date, amount, note });
+    saveState(); await pushCloudNow(); render();
+  };
+  drawCfTable();
 
   // 阶段变化表
   const tableCard = el(`<div class="card" style="margin-top:16px">
@@ -4104,9 +4229,23 @@ VIEWS.trends = function (app) {
   }
 
   function drawChart(gran, dim) {
-    const pts = aggregate(gran, dim);
+    const legend = chartCard.querySelector('#bench-legend');
     const box = chartCard.querySelector('#trend-chart');
     box.innerHTML = '';
+    // 基准对比模式：日粒度 + 总资产 + 基准已加载 → 组合(TWR 指数化) vs 基准，同起点=100
+    if (bench.series && gran === 'day' && dim === 'total') {
+      const mine = twrIndexSeries(snaps).map(p => ({ label: p.date.slice(5), date: p.date, value: p.value }));
+      const ref = alignBenchmark(snaps, bench.series);
+      const mRet = mine[mine.length - 1].value - 100, bRet = ref[ref.length - 1].value - 100;
+      const ex = mRet - bRet;
+      legend.innerHTML = `<span style="color:var(--accent)">━</span> 组合(TWR) ${mRet >= 0 ? '+' : ''}${fmtPct(mRet, 2)}　` +
+        `<span style="color:var(--muted)">━</span> ${escapeHtml(bench.label)} ${bRet >= 0 ? '+' : ''}${fmtPct(bRet, 2)}　` +
+        `超额 <strong style="color:${ex >= 0 ? 'var(--green-ink)' : 'var(--red-ink)'}">${ex >= 0 ? '+' : ''}${fmtPct(ex, 2)}</strong>（起点=100）`;
+      box.appendChild(buildLineChart(mine, { extra: [{ name: bench.label, color: 'var(--muted)', points: ref }], tooltip: (i) => trendTip(i, mine, gran) }));
+      return;
+    }
+    legend.textContent = bench.series ? '基准对比仅在「日」粒度 +「总资产」维度下显示。' : '';
+    const pts = aggregate(gran, dim);
     box.appendChild(buildLineChart(pts, { tooltip: (i) => trendTip(i, pts, gran) }));
   }
 
@@ -4170,11 +4309,38 @@ VIEWS.trends = function (app) {
         <div class="value" style="font-size:22px;color:${c>=0?'var(--green-ink)':'var(--red-ink)'}">${c>=0?'+':''}${fmtMoney(c)}</div>
         <div class="sub" style="color:${c>=0?'var(--green-ink)':'var(--red-ink)'}">${c>=0?'+':''}${fmtPct(cp,2)}</div></div>
       <div class="stat"><div class="label">${icon('list')} 快照数</div>
-        <div class="value" style="font-size:22px">${snaps.length}</div><div class="sub">天</div></div>`;
+        <div class="value" style="font-size:22px">${snaps.length}</div><div class="sub">天</div></div>
+      ${(() => {
+        const t = curDim === 'total' && snaps.length > 1 ? twrOverall(snaps) : null;
+        if (!t) return '';
+        const tCol = t.twr >= 0 ? 'var(--green-ink)' : 'var(--red-ink)';
+        const sub = Math.abs(t.flows) > 0
+          ? `已剔除出入金 ${t.flows >= 0 ? '+' : ''}${fmtMoney(t.flows)}`
+          : '未登记出入金（有转入转出请在下方补录）';
+        return `<div class="stat"><div class="label">${icon('trend')} 收益率(TWR)</div>
+          <div class="value" style="font-size:22px;color:${tCol}">${t.twr >= 0 ? '+' : ''}${fmtPct(t.twr, 2)}</div>
+          <div class="sub">${sub}</div></div>`;
+      })()}`;
     drawChart(curGran, curDim); drawTable(curGran, curDim);
   }
 
   redraw();
+  chartCard.querySelector('#bench-sel').onchange = async (e) => {
+    const key = e.target.value;
+    const legend = chartCard.querySelector('#bench-legend');
+    if (!key) { bench = { key: '', label: '', series: null }; redraw(); return; }
+    legend.textContent = '基准加载中…';
+    try {
+      const series = await fetchBenchmarkSeries(key);
+      bench = { key, label: key === 'hs300' ? '沪深300' : '标普500', series };
+    } catch (err) {
+      bench = { key: '', label: '', series: null };
+      e.target.value = '';
+      legend.textContent = '基准加载失败：' + err.message;
+      return;
+    }
+    redraw();
+  };
   chartCard.querySelector('#dim-sel').onchange = (e) => { curDim = e.target.value; redraw(); };
   chartCard.querySelectorAll('.seg-btn').forEach(b => {
     b.onclick = () => {
@@ -4198,6 +4364,436 @@ VIEWS.trends = function (app) {
     const a = document.createElement('a'); a.href = url; a.download = 'asset-snapshots.json'; a.click();
     URL.revokeObjectURL(url);
   };
+};
+
+/* =========================================================================
+   视图：收益归因 —— 收益从哪来：大类分解 + 个股按因子分解（基于快照明细）
+   ========================================================================= */
+VIEWS.attribution = function (app) {
+  const snaps = (STATE.snapshots || []).slice().sort((a, b) => a.date.localeCompare(b.date));
+  app.appendChild(el(`
+    <div class="view-head">
+      <h2>收益归因</h2>
+      <p>拆开看：这段区间的收益里，各大类（权益/固收/黄金/现金）各贡献多少，个股再按因子拆。不知道钱从哪赚的，就可能从同一条路亏回去。</p>
+    </div>`));
+
+  const detailed = snaps.filter(s => s.assets && s.assets.length);
+  if (detailed.length < 2) {
+    app.appendChild(el(`<div class="card"><div class="empty"><div class="big">${icon('chart')}</div>
+      <p>归因需要至少 2 份<strong>含资产明细</strong>的快照（当前 ${detailed.length} 份）。每天打开应用会自动记录，攒几天后再来。</p></div></div>`));
+    return;
+  }
+
+  const periods = [
+    { key: '7', label: '近 7 天' }, { key: '30', label: '近 30 天' },
+    { key: 'month', label: '本月' }, { key: 'all', label: '全部' },
+  ];
+  const headCard = el(`<div class="card"><div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
+      <strong>区间</strong><div class="seg" id="attr-seg">${periods.map((p, i) => `<button class="seg-btn${i === 3 ? ' active' : ''}" data-p="${p.key}">${p.label}</button>`).join('')}</div>
+    </div>
+    <div id="attr-body" style="margin-top:14px"></div></div>
+    <p class="inline-note">口径：逐日累加「前一日持股 × 当日价格变动」，已剔除出入金（在「资产趋势 → 出入金登记」补录后更准）。
+    利息、手动改金额、当日调仓的标的价格变动计入「残差」——残差大说明该区间的手动操作多，归因仅供参考。</p>`);
+  app.appendChild(headCard);
+
+  const factorOf = (code, name) => {
+    const p = (STATE.positions || []).find(x => x.code && x.code === code);
+    return (p && p.factor) || guessFactor(name) || '其它';
+  };
+
+  function compute(list) {
+    const byAsset = new Map();   // key → {name, cat, factor, contrib}
+    let residual = 0, explained = 0, flows = 0;
+    for (let i = 1; i < list.length; i++) {
+      const prev = list[i - 1], cur = list[i];
+      const fx = num(cur.fx) > 0 ? num(cur.fx) : currentFx();
+      flows += cashflowOn(cur.date);
+      const prevMap = new Map((prev.assets || []).map(a => [(a.code || a.id), a]));
+      let dayExplained = 0;
+      (cur.assets || []).forEach(a => {
+        const key = a.code || a.id;
+        const pa = prevMap.get(key);
+        if (!pa) return;                                  // 当日新增（买入/新建）→ 价格变动当日不计，进残差
+        const sameShares = num(pa.shares) > 0 && num(pa.shares) === num(a.shares);
+        if (!(sameShares && num(pa.lastPx) > 0 && num(a.lastPx) > 0)) return;   // 调仓/无价 → 残差
+        const c = num(pa.shares) * (num(a.lastPx) - num(pa.lastPx)) * (a.currency === 'USD' ? fx : 1);
+        dayExplained += c;
+        const rec = byAsset.get(key) || {
+          name: a.name, cat: bigClassOf(a.category), rawCat: a.category,
+          factor: factorOf(a.code, a.name), contrib: 0,
+        };
+        rec.contrib += c;
+        byAsset.set(key, rec);
+      });
+      const dayChange = num(cur.total) - num(prev.total) - cashflowOn(cur.date);
+      explained += dayExplained;
+      residual += dayChange - dayExplained;
+    }
+    return { byAsset, residual, explained, flows, first: list[0], last: list[list.length - 1] };
+  }
+
+  function bar(label, v, maxAbs, note) {
+    const pct = maxAbs > 0 ? Math.min(100, Math.abs(v) / maxAbs * 100) : 0;
+    const col = v >= 0 ? 'var(--green-ink)' : 'var(--red-ink)';
+    return `<div style="display:grid;grid-template-columns:110px 1fr 110px;gap:8px;align-items:center;margin:5px 0">
+      <div style="font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(label)}">${escapeHtml(label)}</div>
+      <div style="height:12px;background:rgba(120,120,128,0.12);border-radius:6px;overflow:hidden">
+        <div style="height:100%;width:${pct.toFixed(1)}%;background:${col};border-radius:6px"></div></div>
+      <div class="num" style="font-size:12.5px;color:${col}">${v >= 0 ? '+' : ''}${fmtMoney(v)}${note || ''}</div>
+    </div>`;
+  }
+
+  function renderPeriod(key) {
+    let list = detailed;
+    if (key !== 'all') {
+      const cutoff = key === 'month'
+        ? todayStr().slice(0, 7) + '-01'
+        : new Date(Date.now() - parseInt(key, 10) * 864e5).toISOString().slice(0, 10);
+      list = detailed.filter(s => s.date >= cutoff);
+      if (list.length < 2) list = detailed.slice(-2);     // 区间内不足两天 → 用最近两天兜底
+    }
+    const { byAsset, residual, explained, flows, first, last } = compute(list);
+    const totalChange = num(last.total) - num(first.total) - flows;
+    const chgCol = totalChange >= 0 ? 'var(--green-ink)' : 'var(--red-ink)';
+
+    // 汇总：大类 / 个股因子（仅 A股/美股股票）
+    const byBig = new Map(), byFactor = new Map();
+    byAsset.forEach(r => {
+      byBig.set(r.cat, (byBig.get(r.cat) || 0) + r.contrib);
+      if (r.rawCat === 'A股股票' || r.rawCat === '美股股票') byFactor.set(r.factor, (byFactor.get(r.factor) || 0) + r.contrib);
+    });
+    const bigRows = [...byBig.entries()].sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+    if (Math.abs(residual) > 0.5) bigRows.push(['残差（利息/手动调整/调仓）', residual]);
+    const facRows = [...byFactor.entries()].sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+    const maxAbs = Math.max(1, ...bigRows.map(r => Math.abs(r[1])));
+    const maxFac = Math.max(1, ...facRows.map(r => Math.abs(r[1])));
+    // 个股明细（贡献绝对值前 8）
+    const topAssets = [...byAsset.values()].sort((a, b) => Math.abs(b.contrib) - Math.abs(a.contrib)).slice(0, 8);
+
+    headCard.querySelector('#attr-body').innerHTML = `
+      <div class="stat-grid" style="margin-bottom:14px">
+        <div class="stat"><div class="label">${icon('calendar')} 区间</div>
+          <div class="value" style="font-size:20px">${first.date.slice(5)} → ${last.date.slice(5)}</div>
+          <div class="sub">${list.length} 份明细快照</div></div>
+        <div class="stat"><div class="label">${icon('trend')} 区间收益（已剔出入金）</div>
+          <div class="value" style="font-size:20px;color:${chgCol}">${totalChange >= 0 ? '+' : ''}${fmtMoney(totalChange)}</div>
+          <div class="sub">出入金 ${flows >= 0 ? '+' : ''}${fmtMoney(flows)}</div></div>
+        <div class="stat"><div class="label">${icon('chart')} 价格变动可解释</div>
+          <div class="value" style="font-size:20px">${fmtMoney(explained)}</div>
+          <div class="sub">残差 ${fmtMoney(residual)}</div></div>
+      </div>
+      <h4 style="margin:14px 0 6px">按大类</h4>
+      ${bigRows.map(([k, v]) => bar(k, v, maxAbs)).join('') || '<p class="inline-note">无数据</p>'}
+      <h4 style="margin:18px 0 6px">个股按因子</h4>
+      ${facRows.length ? facRows.map(([k, v]) => bar(k, v, maxFac)).join('') : '<p class="inline-note">区间内个股无价格贡献（或全部调入/调出）。</p>'}
+      <h4 style="margin:18px 0 6px">贡献最大的标的（前 8）</h4>
+      <div class="table-scroll"><table>
+        <thead><tr><th>标的</th><th>大类</th><th class="num">贡献（¥）</th></tr></thead>
+        <tbody>${topAssets.map(r => `<tr><td>${escapeHtml(r.name)}</td><td><span class="tag-chip">${escapeHtml(r.cat)}</span></td>
+          <td class="num" style="color:${r.contrib >= 0 ? 'var(--green-ink)' : 'var(--red-ink)'}">${r.contrib >= 0 ? '+' : ''}${fmtMoney(r.contrib)}</td></tr>`).join('')}</tbody>
+      </table></div>`;
+  }
+
+  headCard.querySelectorAll('#attr-seg .seg-btn').forEach(b => b.onclick = () => {
+    headCard.querySelectorAll('#attr-seg .seg-btn').forEach(x => x.classList.toggle('active', x === b));
+    renderPeriod(b.dataset.p);
+  });
+  renderPeriod('all');
+};
+
+/* =========================================================================
+   视图：压力测试 —— 极端情景下组合会亏多少（相对最大回撤承受线）
+   ========================================================================= */
+// 科技成长因子组（预设情景用）
+const STRESS_TECH = ['AI算力', 'AI电力', 'AI应用', '科技互联网', '传媒游戏', '半导体', '机器人', '新能源车', '光伏风电'];
+// 当前组合的风险桶：每资产归入 cn(个股A股)/us(个股美股)/fund(基金)/gold(黄金)/safe(固收理财现金)
+function stressBuckets() {
+  const fx = currentFx();
+  const rows = [];
+  (STATE.assets || []).forEach(a => {
+    const v = assetCny(a, fx);
+    if (!(v > 0)) return;
+    let bucket = 'safe', factor = null;
+    if (a.category === 'A股股票' || a.category === '美股股票') {
+      const p = (STATE.positions || []).find(x => x.code && x.code === a.code);
+      factor = (p && p.factor) || guessFactor(a.name) || '其它';
+      bucket = a.category === '美股股票' ? 'us' : 'cn';
+    } else if (a.category === '基金') bucket = 'fund';
+    else if (bigClassOf(a.category) === '黄金') bucket = 'gold';
+    rows.push({ name: a.name, code: a.code, cat: a.category, bucket, factor, usd: a.currency === 'USD', v });
+  });
+  return rows;
+}
+// 一条冲击规则命中哪些资产；scope: factor:X / factorGroup:tech / cn / cnOther / us / fund / gold / usd-fx
+function shockOf(row, rules) {
+  let s = 0;
+  rules.forEach(r => {
+    const idx = r.scope.indexOf(':');
+    const kind = idx >= 0 ? r.scope.slice(0, idx) : r.scope;
+    const arg = idx >= 0 ? r.scope.slice(idx + 1) : '';
+    if (kind === 'factor' && row.factor === arg) s += r.shock;
+    else if (kind === 'factorGroup' && arg === 'tech' && row.factor && STRESS_TECH.indexOf(row.factor) >= 0) s += r.shock;
+    else if (kind === 'cn' && row.bucket === 'cn') s += r.shock;
+    else if (kind === 'cnOther' && row.bucket === 'cn' && !(row.factor && STRESS_TECH.indexOf(row.factor) >= 0)) s += r.shock;
+    else if (kind === 'us' && row.bucket === 'us') s += r.shock;
+    else if (kind === 'fund' && row.bucket === 'fund') s += r.shock;
+    else if (kind === 'gold' && row.bucket === 'gold') s += r.shock;
+    else if (kind === 'usd-fx' && row.usd) s += r.shock;   // 汇率冲击：美元资产的人民币折算损失
+  });
+  return s;
+}
+const STRESS_PRESETS = [
+  { name: '中国科技成长 −30%', rules: [{ scope: 'factorGroup:tech', shock: -30 }, { scope: 'cnOther', shock: -10 }, { scope: 'fund', shock: -12 }] },
+  { name: 'A股系统性 −15%', rules: [{ scope: 'cn', shock: -15 }, { scope: 'fund', shock: -12 }] },
+  { name: '美股 −20%', rules: [{ scope: 'us', shock: -20 }] },
+  { name: '黄金 −15%', rules: [{ scope: 'gold', shock: -15 }] },
+  { name: '美元贬值 5%', rules: [{ scope: 'usd-fx', shock: -5 }] },
+  { name: '全面危机：权益−35% 黄金+5%', rules: [{ scope: 'cn', shock: -35 }, { scope: 'us', shock: -35 }, { scope: 'fund', shock: -30 }, { scope: 'gold', shock: 5 }] },
+];
+// 自定义情景可选的冲击对象
+const STRESS_SCOPES = [
+  ['cn', '全部 A股个股'], ['us', '全部 美股个股'], ['fund', '全部 基金'], ['gold', '黄金'], ['usd-fx', '美元资产（汇率）'],
+].concat(FACTORS.map(f => ['factor:' + f, '因子 · ' + f]));
+
+VIEWS.stress = function (app) {
+  const s = STATE.settings || {};
+  const maxDD = num(s.maxDrawdown, 15);
+  const rows = stressBuckets();
+  const total = rows.reduce((sum, r) => sum + r.v, 0);
+  app.appendChild(el(`
+    <div class="view-head">
+      <h2>压力测试</h2>
+      <p>把极端行情直接施加到你<strong>当前的实际持仓</strong>上：每个情景亏多少、是否跌破你设的「组合最大回撤阈值 ${maxDD}%」（设置里可调）。冲击按桶施加（个股按因子、基金/黄金按类、美元资产受汇率冲击），是保守估计——没算对冲与相关性抵消。</p>
+    </div>`));
+  if (!rows.length) {
+    app.appendChild(el('<div class="card"><div class="empty"><p>暂无持仓数据。</p></div></div>'));
+    return;
+  }
+
+  let customRules = [];
+  const card = el(`<div class="card">
+    <h3>${icon('warn')} 情景</h3>
+    <div class="row" style="gap:8px;flex-wrap:wrap" id="preset-row">
+      ${STRESS_PRESETS.map((p, i) => `<button class="btn secondary small" data-preset="${i}">${escapeHtml(p.name)}</button>`).join('')}
+    </div>
+    <div class="section-divider"></div>
+    <div class="mini-label">自定义情景（选对象 + 冲击幅度，可叠加多条）</div>
+    <div class="row" style="gap:8px;align-items:flex-end;flex-wrap:wrap">
+      <div class="field" style="min-width:180px"><label>冲击对象</label><select id="st-scope">${STRESS_SCOPES.map(([v, l]) => `<option value="${v}">${escapeHtml(l)}</option>`).join('')}</select></div>
+      <div class="field" style="width:130px"><label>冲击 %</label><input id="st-shock" type="number" step="1" value="-20"/></div>
+      <button class="btn small" id="st-add" style="flex:0 0 auto">${icon('plus')} 加入情景</button>
+    </div>
+    <div id="custom-rules" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px"></div>
+  </div>`);
+  app.appendChild(card);
+
+  const resultCard = el(`<div class="card" style="margin-top:16px">
+    <h3>${icon('chart')} 结果</h3>
+    <div id="stress-out"></div>
+  </div>`);
+  app.appendChild(resultCard);
+
+  function evalRules(rules) {
+    let delta = 0;
+    const per = rows.map(r => {
+      const sh = shockOf(r, rules);
+      const d = r.v * sh / 100;
+      delta += d;
+      return { r, sh, d };
+    });
+    const pct = total > 0 ? delta / total * 100 : 0;
+    return { delta, pct, per: per.filter(x => x.d !== 0).sort((a, b) => a.d - b.d) };
+  }
+  function verdict(pct) {
+    return Math.abs(pct) <= maxDD
+      ? '<span class="pill green">承受线内</span>'
+      : '<span class="pill red">跌破阈值</span>';
+  }
+  function rulesLabel(rules) {
+    return rules.map(r => {
+      const sc = STRESS_SCOPES.find(x => x[0] === r.scope);
+      return (sc ? sc[1] : r.scope) + ' ' + r.shock + '%';
+    }).join(' ＋ ');
+  }
+  function drawRules() {
+    const box = card.querySelector('#custom-rules');
+    box.innerHTML = customRules.length
+      ? customRules.map((r, i) => `<span class="tag-chip">${escapeHtml(rulesLabel([r]))}
+          <a href="javascript:;" data-rrm="${i}" style="margin-left:4px;color:var(--red-ink)">✕</a></span>`).join('')
+      : '<span class="inline-note">（未添加时显示预设情景结果）</span>';
+    box.querySelectorAll('[data-rrm]').forEach(a => a.onclick = () => { customRules.splice(+a.dataset.rrm, 1); drawRules(); drawOut(); });
+  }
+  function drawOut(focusRules) {
+    const out = resultCard.querySelector('#stress-out');
+    // 预设总览表
+    const rowsHtml = STRESS_PRESETS.map(p => {
+      const r = evalRules(p.rules);
+      const col = r.delta >= 0 ? 'var(--green-ink)' : 'var(--red-ink)';
+      return `<tr><td>${escapeHtml(p.name)}</td>
+        <td class="num" style="color:${col}">${r.delta >= 0 ? '+' : ''}${fmtMoney(r.delta)}</td>
+        <td class="num" style="color:${col}">${r.delta >= 0 ? '+' : ''}${fmtPct(r.pct, 2)}</td>
+        <td class="num">${verdict(r.pct)}</td></tr>`;
+    }).join('');
+    let html = `<div class="table-scroll"><table>
+      <thead><tr><th>预设情景</th><th class="num">组合影响</th><th class="num">幅度</th><th class="num">判定（阈值 ${maxDD}%）</th></tr></thead>
+      <tbody>${rowsHtml}</tbody></table></div>`;
+    // 自定义情景明细
+    if (focusRules && focusRules.length) {
+      const r = evalRules(focusRules);
+      const col = r.delta >= 0 ? 'var(--green-ink)' : 'var(--red-ink)';
+      const maxAbs = Math.max(1, ...r.per.map(x => Math.abs(x.d)));
+      html += `<div class="section-divider"></div>
+        <h4 style="margin:6px 0">自定义情景：${escapeHtml(rulesLabel(focusRules))}</h4>
+        <p>组合影响 <strong style="color:${col}">${r.delta >= 0 ? '+' : ''}${fmtMoney(r.delta)}（${r.delta >= 0 ? '+' : ''}${fmtPct(r.pct, 2)}）</strong> ${verdict(r.pct)}</p>
+        ${r.per.map(x => `
+          <div style="display:grid;grid-template-columns:150px 1fr 110px;gap:8px;align-items:center;margin:5px 0">
+            <div style="font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(x.r.name)}">${escapeHtml(x.r.name)}</div>
+            <div style="height:12px;background:rgba(120,120,128,0.12);border-radius:6px;overflow:hidden">
+              <div style="height:100%;width:${(Math.abs(x.d) / maxAbs * 100).toFixed(1)}%;background:${x.d >= 0 ? 'var(--green-ink)' : 'var(--red-ink)'};border-radius:6px"></div></div>
+            <div class="num" style="font-size:12.5px;color:${x.d >= 0 ? 'var(--green-ink)' : 'var(--red-ink)'}">${x.sh >= 0 ? '+' : ''}${x.sh}% → ${x.d >= 0 ? '+' : ''}${fmtMoney(x.d)}</div>
+          </div>`).join('') || '<p class="inline-note">该情景不命中任何持仓。</p>'}`;
+    }
+    out.innerHTML = html;
+  }
+  card.querySelectorAll('[data-preset]').forEach(b => b.onclick = () => {
+    customRules = STRESS_PRESETS[+b.dataset.preset].rules.slice();
+    drawRules(); drawOut(customRules);
+  });
+  card.querySelector('#st-add').onclick = () => {
+    const scope = card.querySelector('#st-scope').value;
+    const shock = num(card.querySelector('#st-shock').value);
+    if (!(isFinite(shock) && shock !== 0)) { alert('请填写非零冲击幅度（%）'); return; }
+    customRules.push({ scope, shock });
+    drawRules(); drawOut(customRules);
+  };
+  drawRules(); drawOut();
+};
+
+/* =========================================================================
+   视图：再平衡 —— 目标配置 vs 实际，偏离超阈值时给出具体调仓清单
+   ========================================================================= */
+VIEWS.rebalance = function (app) {
+  const fx = currentFx();
+  const assets = (STATE.assets || []).filter(a => assetCny(a, fx) > 0);
+  const total = assets.reduce((s, a) => s + assetCny(a, fx), 0);
+  app.appendChild(el(`
+    <div class="view-head">
+      <h2>再平衡</h2>
+      <p>体检告诉你"偏了"，这里回答"怎么调回来"：设定各大类的<strong>目标占比</strong>，实际偏离超过阈值就生成具体执行清单（卖哪只、卖多少；补哪类、补多少）。再平衡的本质是<strong>被动的高卖低买</strong>——把涨多的减下来、跌多的补回去，让风险结构回到你设定的样子。</p>
+    </div>`));
+  if (!assets.length) {
+    app.appendChild(el('<div class="card"><div class="empty"><p>暂无持仓数据。</p></div></div>'));
+    return;
+  }
+
+  // 实际配置（按大类）
+  const actual = {};
+  assets.forEach(a => { const k = bigClassOf(a.category); actual[k] = (actual[k] || 0) + assetCny(a, fx); });
+  const buckets = Object.keys(actual).sort((a, b) => actual[b] - actual[a]);
+  // 目标配置（首次进入：以当前实际为目标）
+  if (!STATE.targetAlloc) {
+    const t = {};
+    buckets.forEach(k => t[k] = +(actual[k] / total * 100).toFixed(1));
+    STATE.targetAlloc = { buckets: t, threshold: 5 };
+  }
+  const ta = STATE.targetAlloc;
+  buckets.forEach(k => { if (ta.buckets[k] == null) ta.buckets[k] = 0; });
+
+  const editCard = el(`<div class="card">
+    <h3>${icon('pencil')} 目标配置</h3>
+    <p class="hint">各大类目标占比（%），合计须等于 100。偏离阈值：实际与目标相差超过该百分点时触发调仓建议。</p>
+    <div class="grid grid-3" id="ta-inputs">
+      ${buckets.map(k => `<div class="field"><label>${escapeHtml(k)}（实际 ${(actual[k] / total * 100).toFixed(1)}%）</label>
+        <input data-tabucket="${escapeHtml(k)}" type="number" step="0.5" value="${ta.buckets[k]}"/></div>`).join('')}
+      <div class="field"><label>偏离阈值（百分点）</label><input id="ta-threshold" type="number" step="1" value="${ta.threshold || 5}"/></div>
+    </div>
+    <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
+      <button class="btn" id="ta-save" style="flex:0 0 auto">${icon('check')} 保存目标</button>
+      <button class="btn secondary" id="ta-current" style="flex:0 0 auto">以当前实际为目标</button>
+      <span class="inline-note" id="ta-sum"></span>
+    </div>
+  </div>`);
+  app.appendChild(editCard);
+  const outCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('list')} 偏离与执行清单</h3><div id="rb-out"></div></div>`);
+  app.appendChild(outCard);
+
+  function drawSum() {
+    const sum = buckets.reduce((s, k) => s + num(editCard.querySelector(`[data-tabucket="${k}"]`)?.value), 0);
+    const elSum = editCard.querySelector('#ta-sum');
+    elSum.textContent = '合计 ' + sum.toFixed(1) + '%';
+    elSum.style.color = Math.abs(sum - 100) < 0.01 ? 'var(--green-ink)' : 'var(--red-ink)';
+  }
+  editCard.querySelectorAll('[data-tabucket]').forEach(i => i.addEventListener('input', drawSum));
+  drawSum();
+
+  editCard.querySelector('#ta-current').onclick = () => {
+    buckets.forEach(k => { editCard.querySelector(`[data-tabucket="${k}"]`).value = +(actual[k] / total * 100).toFixed(1); });
+    drawSum();
+  };
+  editCard.querySelector('#ta-save').onclick = async () => {
+    const t = {};
+    let sum = 0;
+    buckets.forEach(k => { t[k] = num(editCard.querySelector(`[data-tabucket="${k}"]`).value); sum += t[k]; });
+    if (Math.abs(sum - 100) > 0.01) { alert('目标占比合计须等于 100%（当前 ' + sum.toFixed(1) + '%）'); return; }
+    STATE.targetAlloc = { buckets: t, threshold: num(editCard.querySelector('#ta-threshold').value) || 5 };
+    saveState(); await pushCloudNow(); render();
+  };
+
+  // 偏离表 + 执行清单
+  {
+    const th = num(ta.threshold, 5);
+    const rows = buckets.map(k => {
+      const tgt = num(ta.buckets[k]);
+      const actPct = actual[k] / total * 100;
+      const drift = actPct - tgt;                        // 百分点：正=超配
+      const driftCny = drift / 100 * total;              // 正=需卖出金额
+      const status = Math.abs(drift) <= th ? 'ok' : (drift > 0 ? 'over' : 'under');
+      return { k, tgt, actPct, act: actual[k], drift, driftCny, status };
+    });
+    const statusPill = st => st === 'ok' ? '<span class="pill green">均衡</span>'
+      : st === 'over' ? '<span class="pill red">超配</span>' : '<span class="pill gray">低配</span>';
+    let html = `<div class="table-scroll"><table>
+      <thead><tr><th>大类</th><th class="num">目标%</th><th class="num">实际%</th><th class="num">实际金额</th><th class="num">偏离</th><th class="num">状态</th></tr></thead>
+      <tbody>${rows.map(r => `<tr><td>${escapeHtml(r.k)}</td>
+        <td class="num">${r.tgt.toFixed(1)}%</td><td class="num">${r.actPct.toFixed(1)}%</td>
+        <td class="num">${fmtMoney(r.act)}</td>
+        <td class="num" style="color:${Math.abs(r.drift) <= th ? 'var(--muted)' : (r.drift > 0 ? 'var(--red-ink)' : 'var(--amber)')}">${r.drift >= 0 ? '+' : ''}${r.drift.toFixed(1)}pp</td>
+        <td class="num">${statusPill(r.status)}</td></tr>`).join('')}</tbody></table></div>`;
+
+    const over = rows.filter(r => r.status === 'over');
+    const under = rows.filter(r => r.status === 'under');
+    if (!over.length && !under.length) {
+      html += `<p class="hint" style="margin-top:12px">${icon('check')} 各大类偏离都在阈值（±${th}pp）内，<strong>无需调仓</strong>。再平衡不是频繁操作——偏离超线再动，每年/每季度看一次即可。</p>`;
+    } else {
+      html += '<div class="section-divider"></div><h4 style="margin:6px 0">执行清单（先卖后买，金额≈值）</h4><ol style="margin:8px 0 0 18px;line-height:1.9">';
+      // 卖出建议：超配大类内按资产占比分摊，股票换算股数（A股 100 股整手，美股按股向下取整）
+      over.forEach(r => {
+        const inBucket = assets.filter(a => bigClassOf(a.category) === r.k).sort((a, b) => assetCny(b, fx) - assetCny(a, fx));
+        let remain = r.driftCny;
+        inBucket.forEach(a => {
+          if (remain <= 0) return;
+          const v = assetCny(a, fx);
+          let amt = Math.min(remain, v * (r.driftCny / r.act));      // 按桶内占比分摊
+          amt = Math.min(amt, v);
+          let txt = `卖出 <strong>${escapeHtml(a.name)}</strong> 约 <strong>${fmtMoney(amt)}</strong>`;
+          const px = num(a.lastPx);
+          if (px > 0 && num(a.shares) > 0) {
+            const lot = a.currency === 'USD' ? 1 : 100;
+            const sh = Math.floor(amt / (px * (a.currency === 'USD' ? fx : 1)) / lot) * lot;
+            if (sh > 0) txt += `（≈ ${sh.toLocaleString()} 股）`;
+          }
+          html += `<li>${txt} <span class="inline-note">[${escapeHtml(r.k)} 超配 ${r.drift.toFixed(1)}pp]</span></li>`;
+          remain -= amt;
+        });
+      });
+      // 买入建议：低配大类给桶级金额
+      under.forEach(r => {
+        html += `<li>补入 <strong>${escapeHtml(r.k)}</strong> 类 约 <strong>${fmtMoney(-r.driftCny)}</strong> <span class="inline-note">[低配 ${(-r.drift).toFixed(1)}pp；具体标的由你定，建议优先补该桶内现有品种]</span></li>`;
+      });
+      html += `</ol><p class="inline-note" style="margin-top:10px">执行前建议先到「⑤ 加减仓计划」过一遍退出/铁律检查（逻辑已破的票优先减）；A股按 100 股整手取整，实际以可成交数量为准。调完回来点「以当前实际为目标」或等偏离自然收敛。</p>`;
+    }
+    outCard.querySelector('#rb-out').innerHTML = html;
+  }
 };
 
 VIEWS.portfolio = function (app) {
@@ -4876,17 +5472,49 @@ VIEWS.help = function (app) {
   app.appendChild(el(`<div class="card"><div class="alert blue"><span class="icon">${icon('info')}</span><div>
     <strong>核心理念</strong>：投资比拼的是概率认知、仓位管理与人性约束。本工具不预测涨跌、不荐股，只做量化计算与纪律校验——把“人性约束”固化成代码，在情绪化时刻把你拉回理性。所有模型都依赖你的诚实输入。</div></div></div>`));
 
-  G('globe', '数据 · 实时行情 · 云端存储', [
-    ['自动更新涨跌', '<p>打开页面会自动刷新一次(15 分钟节流),也可在「投资组合」点<strong>一键刷新估值</strong>。覆盖:公募<strong>基金</strong>(天天基金实时估值)、<strong>A股/ETF/美股</strong>(腾讯/新浪行情)、<strong>黄金</strong>(国际现货金折人民币/克)。持仓表「今日」列显示当日涨跌。理财为银行自有产品无公开接口,保持手动维护 + 年化利息估算。</p>'],
-    ['持仓联动', '<p>刷新后,各分析模块(凯利/分散/回撤/止损/铁律)都会用<strong>最新占比与浮盈亏</strong>联动计算,无需手动同步。份额模型:首次用「金额÷现价」反推份额,之后市值=份额×最新价,单次异常波动>40% 自动跳过以防坏行情污染。</p>'],
-    ['云端存储与恢复', '<p>全部数据存到<strong>你自己的服务器</strong>(访问密码保护),换设备/清缓存自动恢复,本机浏览器仅作离线缓存。每天(含服务器定时 22:00/23:00/23:30)记录一份快照,「资产趋势」看走势;数据记错可在<strong>设置→数据管理→恢复到某一天</strong>一键回退。</p>'],
+  G('list', '使用顺序 · 每天 / 每周 / 每月怎么用', [
+    ['每天（约 5 分钟）', '<p>① 打开页面（自动刷新估值 + 自动记快照）→ ②「投资组合」扫一眼今日涨跌与浮盈亏 → ③ 有买卖就到「持仓 → 当日交易」<strong>按成交价录入</strong>（别直接改股数，否则当日盈亏失真）→ ④ 有转入/转出资金，到「资产趋势 → 出入金登记」记一笔。就这四步，数据地基就稳了。</p>'],
+    ['每周（约 15 分钟）', '<p>①「股票体检」看弹性仓占比、因子集中度、深套复核 → ② 想加仓先过「② 铁律校验」，想减仓先过「⑤ 加减仓计划」的退出决策树 → ③「收益归因 · 近 7 天」看这钱是从哪赚的。</p>'],
+    ['每月 / 每季（约 30 分钟）', '<p>①「资产趋势」开基准对比：TWR 有没有跑赢沪深300/标普500 → ②「压力测试」过一遍极端情景，跌破阈值就降风险 → ③「再平衡」看大类偏离，超阈值按清单调 → ④「复盘校准」登记几笔判断，验证自己的胜率 → ⑤「市场指标」补更新手填项，校准宏观假设。</p>'],
+    ['价值闭环', '<p><strong>记录</strong>（快照/出入金/当日交易）→ <strong>诊断</strong>（体检/归因/压力测试）→ <strong>决策</strong>（铁律/退出/再平衡）→ <strong>验证</strong>（TWR vs 基准、复盘校准）。四步循环缺一不可：只诊断不执行 = 纸上谈兵，只执行不验证 = 盲目自信。</p>'],
+  ]);
+
+  G('globe', '数据基石 · 行情 / 快照 / 出入金', [
+    ['自动更新涨跌', '<p>打开页面会自动刷新一次(15 分钟节流),也可在「投资组合」点<strong>一键刷新估值</strong>。覆盖:公募<strong>基金</strong>(天天基金实时估值)、<strong>A股/ETF/美股</strong>(腾讯行情,东财备份)、<strong>黄金</strong>(国际现货金折人民币/克)。理财为银行自有产品无公开接口,保持手动维护 + 年化利息估算。</p>'],
+    ['持仓联动与「今日」口径', '<p>刷新后,各分析模块(凯利/体检/回撤/止损/铁律)都会用<strong>最新占比与浮盈亏</strong>联动计算。持仓表「今日」列显示的是<strong>你的个人当日收益率</strong>(当日盈亏 ÷ 当日成本基础)——中途建仓/加仓的日子按买入价算,而非标的全天涨幅;金额同理按开盘持股+当日成交价精确分解。</p>'],
+    ['快照与云端', '<p>全部数据存到<strong>你自己的服务器</strong>(访问密码保护),换设备/清缓存自动恢复。每天(含服务器定时 22:00/23:00/23:30)记录一份快照,是趋势、归因、基准对比的数据源;数据记错可在<strong>设置→数据管理→恢复到某一天</strong>一键回退。</p>'],
+    ['出入金登记（收益率真实性的关键）', '<p>转入/转出资金会让「净值变化」严重失真——加了 10 万工资,净值 +10% 也不是你赚的。在「资产趋势 → 出入金登记」记一笔(正=入金 负=出金),TWR 收益率、收益归因、基准对比全部自动剔除这些流水。<strong>不登记,所有收益率口径都只是"账户余额变化"。</strong></p>'],
   ]);
 
   G('wallet', '投资组合 · 总览与 AI 诊断', [
-    ['怎么用', '<p>已导入你 7/19 的资产汇总表。查看大类配置、按类别明细、币种敞口与全部持仓；点「生成 AI 组合诊断」由 DeepSeek 给出健康度评分与下一步建议。</p>'],
+    ['怎么用', '<p>查看大类配置、按类别明细、币种敞口与全部持仓（<strong>按住行可拖拽排序</strong>，顺序自动保存到云端）；点「生成 AI 组合诊断」由 DeepSeek 给出健康度评分与下一步建议。</p>'],
     ['计算逻辑', '<p>把每笔资产按汇率折算人民币后，归并为大类（权益/固收理财/现金/黄金），并按类别、币种分别汇总占比；美元敞口 = 所有 USD 计价资产折人民币之和。AI 诊断把这些占比 + 股票子组合的有效持仓数/因子集中度打包发给模型。</p>'],
     ['理论', '<p>基于<strong>资产配置理论</strong>：长期收益的绝大部分由大类配置（而非选股择时）决定；跨大类、跨币种分散能在不显著牺牲收益的前提下降低组合波动。</p>'],
     ['遵循的收益', '<p>一个均衡、不过度集中于单一大类或单一 beta 的组合，能在系统性回调中少受伤、在长期获得更稳的复利，避免“牛市财富逆向转移”。</p>'],
+  ]);
+
+  G('chart', '资产趋势 · 净值曲线 / TWR / 基准对比', [
+    ['怎么用', '<p>每天自动记录的快照形成净值曲线。<strong>鼠标悬停</strong>看任一日期的数值及较昨日/较上月/较期初变化；可切换总资产/大类/类别维度；顶部选「对比 沪深300 / 标普500」，组合按 TWR 指数化与基准同起点（=100）对比，并给出超额收益；下方是「出入金登记」。</p>'],
+    ['计算逻辑', '<p><strong>TWR（时间加权收益率）</strong>：r<sub>日</sub> = (当日资产 − 当日出入金 − 昨日资产) ÷ 昨日资产，逐日连乘。它剔除加钱/取钱的影响，回答「我的投资操作本身赚没赚」；净值简单变化只回答「账户里钱多了没」。基准对比时双方都归一到 100 起算，公平可比。</p>'],
+    ['理论', '<p><strong>诚实的计量是一切的起点</strong>：基金业衡量基金经理用的就是 TWR（剔除申赎影响）。<strong>不跑赢基准的主动管理是在付费上班</strong>——基准对比就是这把尺子，连续跑输就该把更多仓位交给宽基指数。</p>'],
+  ]);
+
+  G('pie', '收益归因 · 钱是从哪赚的', [
+    ['怎么用', '<p>选区间（近 7 天/30 天/本月/全部），看收益按<strong>大类 → 因子 → 标的</strong>三层的贡献分解。「残差」= 利息、手动改金额、当日调仓的变动——残差大说明该区间手动操作多，归因仅供方向参考。</p>'],
+    ['计算逻辑', '<p>逐日累加「前一日持股 × 当日价格变动」得每标的贡献，再按大类/因子汇总，全程剔除出入金。需要至少 2 份含明细的快照（每天打开应用自动攒）。</p>'],
+    ['怎么用出价值', '<p>如果你以为自己在赚「选股」的钱，归因却发现大部分贡献来自某一个因子（比如 AI），那你实际在做的是<strong>因子押注</strong>——就该用压力测试去管理它，而不是骗自己说分散了。它与体检互相印证：<strong>体检看「现在多集中」，归因看「历史靠什么赚」</strong>。</p>'],
+  ]);
+
+  G('warn', '压力测试 · 极端行情亏多少', [
+    ['怎么用', '<p>点预设情景（科技成长 −30%、A股系统性 −15%、美股 −20%、黄金 −15%、美元贬值 5%、全面危机），或自定义「对象 + 幅度」叠加多条，直接施加在<strong>当前实际持仓</strong>上，看组合影响金额、幅度，及是否跌破你设的最大回撤阈值（默认 15%，设置可调）。</p>'],
+    ['计算逻辑', '<p>冲击按桶施加：个股按因子（科技因子组可整组冲击）、基金/黄金按类别、美元资产额外受汇率冲击；同标的多条命中则叠加（美股 −20% ＋ 美元 −5% ≈ −25%）。不做相关性抵消，是偏保守的估计。</p>'],
+    ['理论', '<p><strong>尾部风险管理</strong>：均值-方差告诉你"平时的波动"，压力测试告诉你"出事的时候"——2008、2015、2020 都证明真实尾部远比正态分布厚。对「集中」有金额上的体感（"这一下就是 −30 万"），比任何百分比都更能管住手。</p>'],
+  ]);
+
+  G('scissors', '再平衡 · 从"偏了"到"调回来"', [
+    ['怎么用', '<p>设定各大类目标占比（合计须 100%）与偏离阈值（默认 5 个百分点）。偏离超线 → 自动生成执行清单：超配类按桶内占比分摊<strong>卖出</strong>（股票换算股数，A股按 100 股整手取整），低配类给出<strong>补入金额</strong>。执行前建议先过「⑤ 加减仓计划」的退出/铁律检查——逻辑已破的票优先减。</p>'],
+    ['计算逻辑', '<p>偏离 = 实际% − 目标%；卖出金额 = 偏离 × 总资产，桶内按资产占比分摊；买入按桶给金额，具体标的由你定（优先补该桶内现有品种）。</p>'],
+    ['理论', '<p><strong>再平衡红利</strong>：本质是制度化的高卖低买——把涨多的减下来、跌多的补回去，让风险结构不随行情漂移。纪律化再平衡长期可增厚收益并显著降低回撤。但它不是频繁操作：<strong>偏离超线或每季度看一次即可</strong>，过度再平衡只会贡献手续费。</p>'],
   ]);
 
   G('gauge', '股票体检 · 弹性引擎（已合并「组合分散」）', [
@@ -4932,6 +5560,16 @@ VIEWS.help = function (app) {
     ['股票现金池(持股变动自动结算)', '<p>在「持仓」页<strong>改持股数即自动结算</strong>:Δ股数×现价,差额为正(净卖出)=资金盈余,自动<strong>计入现金池</strong>;差额为负(净买入)=动用现金,自动<strong>从池中扣减</strong>。按市场分币种:<strong>A股动人民币「股票现金池」,美股动美元「美股现金池」</strong>(都在投资组合 → 现金分类)。两池余额在持仓页底部实时可见;余额为负代表动用了池外资金。⑤减仓决策里的「一键记账」走同一套结算引擎。总资产始终守恒(股票↓＝现金↑),现金蓄水池铁律按真实现金计算。</p>'],
     ['理论', '<p><strong>“今天还会买吗”测试</strong>是破解深套死扛的关键:它把问题从"我亏了多少舍不舍得割"(向后看、被成本绑架)翻成"它未来还值不值得占这笔钱"。<strong>成本是沉没成本,市场不知道也不在乎你买在多少。</strong>研究亦表明投资者卖出决策质量普遍差,故用规则化退出。</p>'],
     ['遵循的收益', '<p>深套逻辑破了能果断认赔(=买回选择权),逻辑没破又能避免恐慌割在低点;加仓摊薄成本、减仓卖在相对高点,一进一出都有纪律。</p>'],
+  ]);
+
+  G('globe', '市场指标 · 宏观变量看板', [
+    ['怎么用', '<p>集中跟踪影响组合的宏观变量：利率 / 通胀 / 汇率 / 恐慌指数。大部分<strong>自动拉取</strong>（美元指数、VIX、中国 CPI/PMI/LPR、美国 CPI/失业率/核心PCE/PMI、美联储利率）；拉不到的（FOMC 倾向、社融、美债/中债收益率）每项旁边有来源链接，<strong>每月手动更新一次</strong>即可。</p>'],
+    ['怎么用出价值', '<p>别把看板当新闻看。每项都写了「对你组合的影响」——比如美元资产占你组合约 1/4，美元指数走弱 5%，人民币计价账面就少吃约 5%。看指标时问一句：<strong>我哪个持仓对它最敏感？</strong>答不上来的指标，对你就是噪音。</p>'],
+  ]);
+
+  G('check', '复盘校准 · 判断力体检', [
+    ['怎么用', '<p>把你的预测（"AI 板块 Q3 走强"）和当时的置信度记下来，到期对照实际打分。长期记录能回答：我的判断胜率多少？我哪类判断系统性不靠谱？</p>'],
+    ['理论', '<p><strong>校准（Calibration）</strong>：专业预测者与普通人的区别不在于更准，而在于<strong>知道自己有多准</strong>。连续记录会暴露系统性过度自信——它管的是"你"这个组合里最大的风险源。</p>'],
   ]);
 
   app.appendChild(el(`<div class="card"><div class="alert amber"><span class="icon">${icon('warn')}</span><div>
