@@ -641,15 +641,25 @@ function applySellToPool(posId, amtCny) {
 
 // 当日开盘持股：① 当日编辑时快照的 sodShares；② 否则取「今天之前最近一份快照」里同标的股数
 // （= 今日开盘持仓，能对已发生的改动追溯生效）；③ 再否则用当前股数。
+// 已有历史快照、但任何一份里都没有该标的 → 今天才建仓，开盘持股为 0：
+// 当天收益按「现价−成本」口径（见 dayPnlCny），不会错按全天涨幅记。
 function sodSharesOf(a) {
   const today = todayStr();
   if (a.sodDate === today && a.sodShares != null) return num(a.sodShares);
   const snaps = (STATE.snapshots || []).filter(s => s && s.date && s.date < today).sort((x, y) => (x.date < y.date ? 1 : -1));
   for (const s of snaps) {
     const sa = (s.assets || []).find(x => (a.code && x.code === a.code) || (a.id && x.id === a.id));
-    if (sa && num(sa.shares) > 0) return num(sa.shares);
+    if (sa) return num(sa.shares);          // 最近一份快照里有它 → 以快照股数为准（含 0）
   }
+  if (snaps.length) return 0;               // 有快照史但查无此标的 → 今日新建仓
   return num(a.shares);
+}
+// 今日之前是否已持有该标的（按历史快照判断）。无快照数据时视为「一直持有」(true)，保持旧口径。
+function heldBeforeToday(a) {
+  const today = todayStr();
+  const snaps = (STATE.snapshots || []).filter(s => s && s.date && s.date < today);
+  if (!snaps.length) return true;
+  return snaps.some(s => (s.assets || []).some(x => (a.code && x.code === a.code) || (a.id && x.id === a.id)));
 }
 // 当日盈亏金额（人民币，带正负）——按「当日开盘持股」算，而非当前持股。
 // 今天增/减持后，当日盈亏只算你当日开盘时就持有的那部分，和实际一致。
@@ -679,14 +689,16 @@ function dayPnlCny(a, fx) {
       if (t.type === 'sell') pnl += num(t.shares) * (num(t.price) - prev);   // 昨收→卖出价
       else if (t.type === 'buy') pnl += num(t.shares) * (px - num(t.price)); // 买入价→收盘
     });
-    if (sod === 0 && a.sodDate === todayStr() && !trades.length) {
-      // 当日纯新建仓、无当日交易明细：整仓都是今天建的，全部浮盈亏都发生在今天——
-      // 今日盈亏 = 该仓总浮盈亏（现价−成本），而非 0。没有成本(pnl 缺失)才回退 0。
+    if (sod === 0 && !trades.length) {
+      // 开盘持股为 0（当日新建仓：sodShares 记录，或历史快照查无此标的）、无当日交易明细——
+      // 整仓都是今天买的，全部浮盈亏都发生在今天：今日盈亏 = 总浮盈亏（现价−成本），而非 0、也非全天涨幅。没有成本才回退 0。
       return a.pnl != null ? num(a.pnl) : 0;
     }
     return pnl * cf;
   }
-  // 无持股数（手填金额资产）→ 回退按当前市值估算
+  // 无持股数（手填金额资产）：今日新建仓（历史快照里没有）且填了成本 → 当日盈亏 = 全部浮盈亏；
+  // 否则回退按当前市值估算全天涨幅
+  if (!heldBeforeToday(a) && a.pnl != null) return num(a.pnl);
   return assetCny(a, fx) * dp / (100 + dp);
 }
 // 个人当日收益率% —— 当日盈亏 ÷ 当日成本基础（开盘持仓×昨收 ＋ 当日买入×买入价）。
@@ -703,10 +715,17 @@ function dayPnlPct(a, fx) {
   let totalSell = 0, totalBuy = 0;
   trades.forEach(t => { if (t.type === 'sell') totalSell += num(t.shares); else if (t.type === 'buy') totalBuy += num(t.shares); });
   const hasPos = num(a.shares) > 0 || (a.sodDate === todayStr() && a.sodShares != null) || trades.length;
-  if (!hasPos) return dp;                                // 手填金额资产：无份额口径，用标的天涨幅
+  if (!hasPos) {
+    // 手填金额资产：今日新建仓（历史快照里没有）且填了成本 → 按成本口径，不吃全天涨幅
+    if (!heldBeforeToday(a) && a.pnl != null) {
+      const cost0 = num(a.amount) * cf - num(a.pnl);
+      return cost0 > 0 ? num(a.pnl) / cost0 * 100 : dp;
+    }
+    return dp;                                // 否则无份额口径，用标的天涨幅
+  }
   const sod = trades.length ? Math.max(0, num(a.shares) + totalSell - totalBuy) : sodSharesOf(a);
-  if (sod === 0 && a.sodDate === todayStr() && !trades.length) {
-    // 当日纯新建仓：收益率 = 总浮盈亏 ÷ 成本（成本 = 市值 − 浮盈亏）
+  if (sod === 0 && !trades.length) {
+    // 开盘持股为 0（当日新建仓）：收益率 = 总浮盈亏 ÷ 成本（成本 = 市值 − 浮盈亏）
     if (a.pnl == null) return dp;
     const costCny = num(a.amount) * cf - num(a.pnl);
     return costCny > 0 ? num(a.pnl) / costCny * 100 : dp;
