@@ -4454,16 +4454,25 @@ VIEWS.trends = function (app) {
   };
 };
 
-// 战略再平衡卡：选「期限×回撤」预设 → 科学目标盘 vs 当前偏离 + 压力回撤对照 + 锁定/美元提示
-function renderRebalanceCard(app) {
+/* =========================================================================
+   视图：再平衡 —— 期限×回撤预设 → 科学目标盘（8层）→ 偏离对照 + 具体调仓执行清单
+   ========================================================================= */
+VIEWS.rebalance = function (app) {
   const s = STATE.settings;
   const st = currentLayerState();
   const total = st.total;
   const activeId = s.rebalPreset || '3y15';
   const preset = getRebalPreset(activeId);
 
-  const card = el(`<div class="card" style="margin-top:16px"><h3>${icon('target')} 战略再平衡（按 期限×回撤 匹配科学目标盘）</h3>
-    <p class="hint">选一档你能接受的「投资期限 × 最大回撤」，系统按<strong>压力情景回撤预算</strong>反推目标配置，并算出<strong>当前离目标差多少钱</strong>。你的三层策略（股票博弹性 / 基金压舱 / 理财兜底）在这里被拆成 8 层对照，美元敞口单列。</p></div>`);
+  app.appendChild(el(`
+    <div class="view-head">
+      <h2>再平衡</h2>
+      <p>选一档你能接受的「投资期限 × 最大回撤」，系统按<strong>压力情景回撤预算</strong>反推科学目标盘（8层），算出当前离目标差多少钱，并生成<strong>具体调仓清单</strong>（卖哪只、几股；补哪层）。再平衡的本质是被动的高卖低买，让风险结构回到你设定的样子。</p>
+    </div>`));
+  if (!(total > 0)) { app.appendChild(el('<div class="card"><div class="empty"><p>暂无持仓数据。</p></div></div>')); return; }
+
+  const card = el(`<div class="card"><h3>${icon('target')} 战略目标盘（按 期限×回撤 科学校准）</h3>
+    <p class="hint">你的三层策略（股票博弹性 / 基金压舱 / 理财兜底）在这里被拆成 8 层对照，美元敞口单列。</p></div>`);
 
   // 预设选择
   const segRow = el('<div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:4px"></div>');
@@ -4521,7 +4530,66 @@ function renderRebalanceCard(app) {
     <strong>「压力回撤」怎么算的？</strong>给每层设危机情景回撤假设：兜底/现金 0%、海外固收 8%、压舱低波 15%、宽基 32%、单股 45%、美股 35%、黄金 5%（危机中风险资产同向下跌，故按占比加权<strong>线性求和</strong>作保守上界）。各预设的目标权重都已校准到"压力回撤 ≤ 该档预算"。假设偏保守（把黄金/债的对冲作用打折），实际回撤通常小于此值——宁可高估风险。</div></div>`));
 
   app.appendChild(card);
-}
+
+  // —— 执行清单（层级到具体标的：超配层卖哪只/几股，低配层补哪层）——
+  const fx = currentFx();
+  const DRIFT = 5;                                          // 漂移带 ±5pp：超过才生成动作
+  const layerAssets = {};                                  // 层 → 该层资产（按市值降序）
+  LAYER_ORDER.forEach(k => layerAssets[k] = []);
+  (STATE.assets || []).forEach(a => { const v = assetCny(a, fx); if (v > 0) layerAssets[layerOf(a)].push({ a, v }); });
+  LAYER_ORDER.forEach(k => layerAssets[k].sort((x, y) => y.v - x.v));
+
+  const gaps = LAYER_ORDER.map(k => {
+    const cur = st.pct[k] || 0, tgt = preset.t[k] || 0, devPct = cur - tgt;
+    return { k, devPct, devCny: devPct / 100 * total };
+  });
+  const overL = gaps.filter(g => g.devPct > DRIFT);         // 超配→减
+  const underL = gaps.filter(g => g.devPct < -DRIFT);       // 低配→补
+
+  const execCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('list')} 调仓执行清单（漂移带 ±${DRIFT}pp）</h3></div>`);
+  if (!overL.length && !underL.length) {
+    execCard.appendChild(el(`<div class="alert green"><span class="icon">${icon('check')}</span><div>各层偏离都在 ±${DRIFT}pp 内，<strong>无需调仓</strong>。再平衡不是频繁操作——偏离超线再动，每季度看一次即可。</div></div>`));
+  } else {
+    let html = '<ol style="margin:4px 0 0 18px;line-height:1.95">';
+    // 先卖（超配层）：层内按市值分摊卖出额；锁定资产不卖、单独标注
+    overL.forEach(g => {
+      const sellTotal = g.devCny;                            // 该层需减少的人民币金额
+      const layerVal = st.cny[g.k] || 0;
+      const sellable = layerAssets[g.k].filter(x => !isLockedAsset(x.a));
+      const sellableVal = sellable.reduce((s, x) => s + x.v, 0);
+      const lockedVal = layerVal - sellableVal;
+      if (sellableVal <= 0) {
+        html += `<li><strong>${LAYER_NAME[g.k]}</strong> 超配 ${g.devPct.toFixed(1)}pp（约 ${fmtMoney(sellTotal)}），但该层<strong>全是锁定资产</strong>（定存/未到期QDII）——到期再减，或用其它层腾挪。</li>`;
+        return;
+      }
+      let remain = Math.min(sellTotal, sellableVal);
+      sellable.forEach(x => {
+        if (remain <= 0.5) return;
+        let amt = Math.min(remain, x.v * (Math.min(sellTotal, sellableVal) / sellableVal));
+        amt = Math.min(amt, x.v);
+        let txt = `卖出 <strong>${escapeHtml(x.a.name)}</strong> 约 <strong>${fmtMoney(amt)}</strong>`;
+        const px = num(x.a.lastPx);
+        if (px > 0 && num(x.a.shares) > 0) {
+          const lot = x.a.currency === 'USD' ? 1 : 100;
+          const sh = Math.floor(amt / (px * (x.a.currency === 'USD' ? fx : 1)) / lot) * lot;
+          if (sh > 0) txt += `（≈ ${sh.toLocaleString()} 股）`;
+        }
+        html += `<li>${txt} <span class="inline-note">[${LAYER_NAME[g.k]} 超配 ${g.devPct.toFixed(1)}pp]</span></li>`;
+        remain -= amt;
+      });
+      if (lockedVal > 0) html += `<li><span class="inline-note">（${LAYER_NAME[g.k]} 另有锁定 ${fmtMoney(lockedVal)} 不动，到期再算）</span></li>`;
+    });
+    // 后买（低配层）：给层级金额 + 建议标的方向
+    const HINT = { safe: '在岸定存/国债/在岸货基', cash: '活期/货基', oseas: '每日可赎的美元固收QDII', ballast: '红利低波/高股息低波基金', broad: '沪深300/A500 宽基', single: '低相关的新主题个股（避开已重仓的AI链）', us: '优质美股/标普500', gold: '积存金/黄金ETF' };
+    underL.forEach(g => {
+      html += `<li>补入 <strong>${LAYER_NAME[g.k]}</strong> 约 <strong>${fmtMoney(-g.devCny)}</strong> <span class="inline-note">[低配 ${(-g.devPct).toFixed(1)}pp；建议方向：${HINT[g.k] || '该层现有品种'}]</span></li>`;
+    });
+    html += '</ol>';
+    execCard.appendChild(el(`<div>${html}</div>`));
+    execCard.appendChild(el(`<p class="inline-note" style="margin-top:10px">先卖后买、金额≈值。执行前先到「⑤ 加减仓计划」过一遍退出/铁律检查（逻辑已破的票优先减）；A股按 100 股整手取整，实际以可成交数量为准。<strong>锁定资产（定存/未到期QDII）不参与卖出</strong>，用活钱+新钱+每日可赎部分调整。</p>`));
+  }
+  app.appendChild(execCard);
+};
 /* =========================================================================
    视图：收益归因 —— 收益从哪来：大类分解 + 个股按因子分解（基于快照明细）
    ========================================================================= */
@@ -4825,132 +4893,6 @@ VIEWS.stress = function (app) {
   drawRules(); drawOut();
 };
 
-/* =========================================================================
-   视图：再平衡 —— 目标配置 vs 实际，偏离超阈值时给出具体调仓清单
-   ========================================================================= */
-VIEWS.rebalance = function (app) {
-  const fx = currentFx();
-  const assets = (STATE.assets || []).filter(a => assetCny(a, fx) > 0);
-  const total = assets.reduce((s, a) => s + assetCny(a, fx), 0);
-  app.appendChild(el(`
-    <div class="view-head">
-      <h2>再平衡</h2>
-      <p>体检告诉你"偏了"，这里回答"怎么调回来"：设定各大类的<strong>目标占比</strong>，实际偏离超过阈值就生成具体执行清单（卖哪只、卖多少；补哪类、补多少）。再平衡的本质是<strong>被动的高卖低买</strong>——把涨多的减下来、跌多的补回去，让风险结构回到你设定的样子。</p>
-    </div>`));
-  if (!assets.length) {
-    app.appendChild(el('<div class="card"><div class="empty"><p>暂无持仓数据。</p></div></div>'));
-    return;
-  }
-
-  // 实际配置（按大类）
-  const actual = {};
-  assets.forEach(a => { const k = bigClassOf(a.category); actual[k] = (actual[k] || 0) + assetCny(a, fx); });
-  const buckets = Object.keys(actual).sort((a, b) => actual[b] - actual[a]);
-  // 目标配置（首次进入：以当前实际为目标）
-  if (!STATE.targetAlloc) {
-    const t = {};
-    buckets.forEach(k => t[k] = +(actual[k] / total * 100).toFixed(1));
-    STATE.targetAlloc = { buckets: t, threshold: 5 };
-  }
-  const ta = STATE.targetAlloc;
-  buckets.forEach(k => { if (ta.buckets[k] == null) ta.buckets[k] = 0; });
-
-  const editCard = el(`<div class="card">
-    <h3>${icon('pencil')} 目标配置</h3>
-    <p class="hint">各大类目标占比（%），合计须等于 100。偏离阈值：实际与目标相差超过该百分点时触发调仓建议。</p>
-    <div class="grid grid-3" id="ta-inputs">
-      ${buckets.map(k => `<div class="field"><label>${escapeHtml(k)}（实际 ${(actual[k] / total * 100).toFixed(1)}%）</label>
-        <input data-tabucket="${escapeHtml(k)}" type="number" step="0.5" value="${ta.buckets[k]}"/></div>`).join('')}
-      <div class="field"><label>偏离阈值（百分点）</label><input id="ta-threshold" type="number" step="1" value="${ta.threshold || 5}"/></div>
-    </div>
-    <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
-      <button class="btn" id="ta-save" style="flex:0 0 auto">${icon('check')} 保存目标</button>
-      <button class="btn secondary" id="ta-current" style="flex:0 0 auto">以当前实际为目标</button>
-      <span class="inline-note" id="ta-sum"></span>
-    </div>
-  </div>`);
-  app.appendChild(editCard);
-  const outCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('list')} 偏离与执行清单</h3><div id="rb-out"></div></div>`);
-  app.appendChild(outCard);
-
-  function drawSum() {
-    const sum = buckets.reduce((s, k) => s + num(editCard.querySelector(`[data-tabucket="${k}"]`)?.value), 0);
-    const elSum = editCard.querySelector('#ta-sum');
-    elSum.textContent = '合计 ' + sum.toFixed(1) + '%';
-    elSum.style.color = Math.abs(sum - 100) < 0.01 ? 'var(--green-ink)' : 'var(--red-ink)';
-  }
-  editCard.querySelectorAll('[data-tabucket]').forEach(i => i.addEventListener('input', drawSum));
-  drawSum();
-
-  editCard.querySelector('#ta-current').onclick = () => {
-    buckets.forEach(k => { editCard.querySelector(`[data-tabucket="${k}"]`).value = +(actual[k] / total * 100).toFixed(1); });
-    drawSum();
-  };
-  editCard.querySelector('#ta-save').onclick = async () => {
-    const t = {};
-    let sum = 0;
-    buckets.forEach(k => { t[k] = num(editCard.querySelector(`[data-tabucket="${k}"]`).value); sum += t[k]; });
-    if (Math.abs(sum - 100) > 0.01) { alert('目标占比合计须等于 100%（当前 ' + sum.toFixed(1) + '%）'); return; }
-    STATE.targetAlloc = { buckets: t, threshold: num(editCard.querySelector('#ta-threshold').value) || 5 };
-    saveState(); await pushCloudNow(); render();
-  };
-
-  // 偏离表 + 执行清单
-  {
-    const th = num(ta.threshold, 5);
-    const rows = buckets.map(k => {
-      const tgt = num(ta.buckets[k]);
-      const actPct = actual[k] / total * 100;
-      const drift = actPct - tgt;                        // 百分点：正=超配
-      const driftCny = drift / 100 * total;              // 正=需卖出金额
-      const status = Math.abs(drift) <= th ? 'ok' : (drift > 0 ? 'over' : 'under');
-      return { k, tgt, actPct, act: actual[k], drift, driftCny, status };
-    });
-    const statusPill = st => st === 'ok' ? '<span class="pill green">均衡</span>'
-      : st === 'over' ? '<span class="pill red">超配</span>' : '<span class="pill gray">低配</span>';
-    let html = `<div class="table-scroll"><table>
-      <thead><tr><th>大类</th><th class="num">目标%</th><th class="num">实际%</th><th class="num">实际金额</th><th class="num">偏离</th><th class="num">状态</th></tr></thead>
-      <tbody>${rows.map(r => `<tr><td>${escapeHtml(r.k)}</td>
-        <td class="num">${r.tgt.toFixed(1)}%</td><td class="num">${r.actPct.toFixed(1)}%</td>
-        <td class="num">${fmtMoney(r.act)}</td>
-        <td class="num" style="color:${Math.abs(r.drift) <= th ? 'var(--muted)' : (r.drift > 0 ? 'var(--red-ink)' : 'var(--amber)')}">${r.drift >= 0 ? '+' : ''}${r.drift.toFixed(1)}pp</td>
-        <td class="num">${statusPill(r.status)}</td></tr>`).join('')}</tbody></table></div>`;
-
-    const over = rows.filter(r => r.status === 'over');
-    const under = rows.filter(r => r.status === 'under');
-    if (!over.length && !under.length) {
-      html += `<p class="hint" style="margin-top:12px">${icon('check')} 各大类偏离都在阈值（±${th}pp）内，<strong>无需调仓</strong>。再平衡不是频繁操作——偏离超线再动，每年/每季度看一次即可。</p>`;
-    } else {
-      html += '<div class="section-divider"></div><h4 style="margin:6px 0">执行清单（先卖后买，金额≈值）</h4><ol style="margin:8px 0 0 18px;line-height:1.9">';
-      // 卖出建议：超配大类内按资产占比分摊，股票换算股数（A股 100 股整手，美股按股向下取整）
-      over.forEach(r => {
-        const inBucket = assets.filter(a => bigClassOf(a.category) === r.k).sort((a, b) => assetCny(b, fx) - assetCny(a, fx));
-        let remain = r.driftCny;
-        inBucket.forEach(a => {
-          if (remain <= 0) return;
-          const v = assetCny(a, fx);
-          let amt = Math.min(remain, v * (r.driftCny / r.act));      // 按桶内占比分摊
-          amt = Math.min(amt, v);
-          let txt = `卖出 <strong>${escapeHtml(a.name)}</strong> 约 <strong>${fmtMoney(amt)}</strong>`;
-          const px = num(a.lastPx);
-          if (px > 0 && num(a.shares) > 0) {
-            const lot = a.currency === 'USD' ? 1 : 100;
-            const sh = Math.floor(amt / (px * (a.currency === 'USD' ? fx : 1)) / lot) * lot;
-            if (sh > 0) txt += `（≈ ${sh.toLocaleString()} 股）`;
-          }
-          html += `<li>${txt} <span class="inline-note">[${escapeHtml(r.k)} 超配 ${r.drift.toFixed(1)}pp]</span></li>`;
-          remain -= amt;
-        });
-      });
-      // 买入建议：低配大类给桶级金额
-      under.forEach(r => {
-        html += `<li>补入 <strong>${escapeHtml(r.k)}</strong> 类 约 <strong>${fmtMoney(-r.driftCny)}</strong> <span class="inline-note">[低配 ${(-r.drift).toFixed(1)}pp；具体标的由你定，建议优先补该桶内现有品种]</span></li>`;
-      });
-      html += `</ol><p class="inline-note" style="margin-top:10px">执行前建议先到「⑤ 加减仓计划」过一遍退出/铁律检查（逻辑已破的票优先减）；A股按 100 股整手取整，实际以可成交数量为准。调完回来点「以当前实际为目标」或等偏离自然收敛。</p>`;
-    }
-    outCard.querySelector('#rb-out').innerHTML = html;
-  }
-};
 
 VIEWS.portfolio = function (app) {
   const assets = STATE.assets || [];
@@ -5029,9 +4971,7 @@ VIEWS.portfolio = function (app) {
   const allocCard = el(`<div class="card"><h3>${icon('pie')} 大类配置</h3></div>`);
   allocCard.appendChild(buildPie(normalize(byBig), { total }));
   app.appendChild(allocCard);
-
-  // 战略再平衡（按 期限×回撤 预设匹配科学目标盘）
-  renderRebalanceCard(app);
+  app.appendChild(el(`<p class="inline-note" style="margin-top:-6px">想按「期限×回撤」科学配置并生成调仓清单？见导航栏「<strong>再平衡</strong>」页。</p>`));
 
   // 明细表：按类别（按大类排序：股票→基金→理财→黄金→现金）
   const catCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('list')} 按类别明细</h3></div>`);
