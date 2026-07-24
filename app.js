@@ -916,6 +916,8 @@ function applyStateDefaults(s) {
   s.corrCache = s.corrCache || null;
   s.cashflows = s.cashflows || [];              // 出入金登记 [{id,date,amount,note}]，正=入金 负=出金（人民币）
   s.targetAlloc = s.targetAlloc || null;        // 再平衡目标配置 {buckets:{...}, threshold}，null=未设置
+  s.layerOverrides = s.layerOverrides || {};    // 再平衡分层手动改层 {code||name: layerKey}，覆盖自动识别
+  s.thesisFlags = s.thesisFlags || {};          // 「逻辑已破」标记 {code||name: true}，卖出排序最高优先
   s.macro = Object.assign({ market: {}, ind: {}, updatedAt: null }, s.macro || {});
   s.macro.market = s.macro.market || {}; s.macro.ind = s.macro.ind || {};
   return s;
@@ -2950,8 +2952,11 @@ const REBAL_PRESETS = [
   { id: '5y20', years: 5, maxDD: 20, label: '5年·回撤≤20%', tone: '均衡', t: { safe: 10, cash: 11, oseas: 12, ballast: 15, broad: 12, single: 18, us: 10, gold: 12 } },
   { id: '5y25', years: 5, maxDD: 25, label: '5年·回撤≤25%', tone: '进取', t: { safe: 8, cash: 8, oseas: 12, ballast: 13, broad: 13, single: 24, us: 12, gold: 10 } },
 ];
-// 资产 → 战略层
+// 资产 → 战略层；手动改层（STATE.layerOverrides）优先于名称/类别自动识别
+function layerKeyOfAsset(a) { return String(a.code || a.name || '').trim(); }
 function layerOf(a) {
+  const ov = STATE && STATE.layerOverrides && STATE.layerOverrides[layerKeyOfAsset(a)];
+  if (ov && LAYER_NAME[ov]) return ov;
   const cat = a.category, name = a.name || '', usd = a.currency === 'USD';
   if (cat === '黄金') return 'gold';
   if (cat === '美股股票') return 'us';
@@ -2968,9 +2973,10 @@ function layerOf(a) {
   return 'cash';
 }
 // 锁定资产（不能自由调仓，只能用活钱/新钱平衡）：定存 + 未到期赎回期的QDII
+// 注意："2027-06-03可赎"这种是【锁定】——只有明确"每日/随时/活期/T+0"才算可自由赎回
 function isLockedAsset(a) {
   if (a.category === '定期存款') return true;
-  if (a.category === '理财(QDII)') return !/每日|可赎|可申赎|活期|T\+0/.test(a.note || '');
+  if (a.category === '理财(QDII)') return !/每日|随时|活期|T\+0/.test(a.note || '');
   return false;
 }
 // 压力回撤估算%：各层占比(0..1) × 层回撤假设，线性求和（危机相关性→1 的保守上界）
@@ -4546,14 +4552,42 @@ VIEWS.rebalance = function (app) {
   const overL = gaps.filter(g => g.devPct > DRIFT);         // 超配→减
   const underL = gaps.filter(g => g.devPct < -DRIFT);       // 低配→补
 
-  const execCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('list')} 调仓执行清单（漂移带 ±${DRIFT}pp）</h3></div>`);
+  // —— 卖出候选打分（科学排序：逻辑已破 > 冗余度(实测ρ̄) > 回撤贡献 > 市值）——
+  const cc = STATE.corrCache;
+  const avgRhoOf = (code) => {                              // 与组合其余标的的平均实测相关；不在矩阵→null
+    if (!cc || !cc.matrix || !cc.index || cc.index[code] == null) return null;
+    const i = cc.index[code]; let sum = 0, n = 0;
+    (cc.matrix[i] || []).forEach((v, j) => { if (j !== i && v != null && isFinite(v)) { sum += v; n++; } });
+    return n ? sum / n : null;
+  };
+  const posOf = (code) => (STATE.positions || []).find(p => p.code === code);
+  const scoreSell = (x) => {                                // 返回 {score, chips[]} 分数越大越先卖
+    const key = layerKeyOfAsset(x.a);
+    const broken = !!STATE.thesisFlags[key];
+    const rho = x.a.code ? avgRhoOf(x.a.code) : null;
+    const p = x.a.code ? posOf(x.a.code) : null;
+    const w = total > 0 ? x.v / total * 100 : 0;
+    const ddC = p ? w * num(p.maxDrop) / 100 : w * (LAYER_DD[layerOf(x.a)] || 0) / 100;  // 回撤贡献pp
+    const chips = [];
+    if (broken) chips.push('<span class="pill red">逻辑已破·优先卖</span>');
+    if (rho != null) chips.push(`<span class="pill ${rho >= 0.5 ? 'amber' : 'gray'}">ρ̄ ${rho.toFixed(2)}${rho >= 0.5 ? '·冗余' : ''}</span>`);
+    if (ddC > 0) chips.push(`<span class="pill gray">回撤贡献 ${ddC.toFixed(1)}pp</span>`);
+    if (p && p.trend === '上涨') chips.push('<span class="pill green">⚠ 趋势上涨·卖前想想动量</span>');
+    if (p && num(p.pnl) <= -20) chips.push(`<span class="pill amber">深套 ${num(p.pnl).toFixed(0)}%·先过⑤退出检查</span>`);
+    // 打分：破=最高档；冗余 0..1 归一按 1000 权重；回撤贡献按 10 权重；市值兜底（极小权重保证稳定序）
+    const score = (broken ? 1e9 : 0) + (rho != null ? rho * 1000 : 0) + ddC * 10 + x.v / 1e7;
+    return { score, chips, broken, rho, ddC };
+  };
+
+  const execCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('list')} 调仓执行清单（漂移带 ±${DRIFT}pp）</h3>
+    <p class="hint">卖出排序：<strong>逻辑已破 &gt; 冗余度（实测平均相关ρ̄，来自热力图）&gt; 回撤贡献 &gt; 市值</strong>——每卖1元让组合分散/回撤改善最多。${cc && cc.date ? `冗余数据取自 ${escapeHtml(cc.date)} 拉的真实相关性${cc.date !== todayStr() ? '（较旧，建议到「股票体检」重拉一次）' : ''}` : '<span style="color:var(--amber-ink)">尚未拉过真实相关性——先到「股票体检」拉一次，冗余排序才生效</span>'}。点标的旁「标记逻辑已破」可把它提到卖出队首。</p></div>`);
   if (!overL.length && !underL.length) {
     execCard.appendChild(el(`<div class="alert green"><span class="icon">${icon('check')}</span><div>各层偏离都在 ±${DRIFT}pp 内，<strong>无需调仓</strong>。再平衡不是频繁操作——偏离超线再动，每季度看一次即可。</div></div>`));
   } else {
-    let html = '<ol style="margin:4px 0 0 18px;line-height:1.95">';
-    // 先卖（超配层）：层内按市值分摊卖出额；锁定资产不卖、单独标注
+    let html = '<ol style="margin:4px 0 0 18px;line-height:2.05">';
+    // 先卖（超配层）：候选按科学分排序后贪心分配；锁定资产不卖、单独标注
     overL.forEach(g => {
-      const sellTotal = g.devCny;                            // 该层需减少的人民币金额
+      const sellTotal = g.devCny;
       const layerVal = st.cny[g.k] || 0;
       const sellable = layerAssets[g.k].filter(x => !isLockedAsset(x.a));
       const sellableVal = sellable.reduce((s, x) => s + x.v, 0);
@@ -4562,11 +4596,11 @@ VIEWS.rebalance = function (app) {
         html += `<li><strong>${LAYER_NAME[g.k]}</strong> 超配 ${g.devPct.toFixed(1)}pp（约 ${fmtMoney(sellTotal)}），但该层<strong>全是锁定资产</strong>（定存/未到期QDII）——到期再减，或用其它层腾挪。</li>`;
         return;
       }
+      const ranked = sellable.map(x => Object.assign({ sc: scoreSell(x) }, x)).sort((a, b) => b.sc.score - a.sc.score);
       let remain = Math.min(sellTotal, sellableVal);
-      sellable.forEach(x => {
+      ranked.forEach(x => {
         if (remain <= 0.5) return;
-        let amt = Math.min(remain, x.v * (Math.min(sellTotal, sellableVal) / sellableVal));
-        amt = Math.min(amt, x.v);
+        const amt = Math.min(remain, x.v);                  // 贪心：排前面的先卖满，冗余最大者可全卖
         let txt = `卖出 <strong>${escapeHtml(x.a.name)}</strong> 约 <strong>${fmtMoney(amt)}</strong>`;
         const px = num(x.a.lastPx);
         if (px > 0 && num(x.a.shares) > 0) {
@@ -4574,7 +4608,9 @@ VIEWS.rebalance = function (app) {
           const sh = Math.floor(amt / (px * (x.a.currency === 'USD' ? fx : 1)) / lot) * lot;
           if (sh > 0) txt += `（≈ ${sh.toLocaleString()} 股）`;
         }
-        html += `<li>${txt} <span class="inline-note">[${LAYER_NAME[g.k]} 超配 ${g.devPct.toFixed(1)}pp]</span></li>`;
+        const key = layerKeyOfAsset(x.a);
+        const flagBtn = `<a href="javascript:;" data-thesis="${escapeHtml(key)}" style="font-size:11px;color:${x.sc.broken ? 'var(--red-ink)' : 'var(--muted)'}">${x.sc.broken ? '✓已标记逻辑已破(点击取消)' : '标记逻辑已破'}</a>`;
+        html += `<li>${txt} <span class="inline-note">[${LAYER_NAME[g.k]} 超配 ${g.devPct.toFixed(1)}pp]</span><br>${x.sc.chips.join(' ')} ${flagBtn}</li>`;
         remain -= amt;
       });
       if (lockedVal > 0) html += `<li><span class="inline-note">（${LAYER_NAME[g.k]} 另有锁定 ${fmtMoney(lockedVal)} 不动，到期再算）</span></li>`;
@@ -4586,9 +4622,35 @@ VIEWS.rebalance = function (app) {
     });
     html += '</ol>';
     execCard.appendChild(el(`<div>${html}</div>`));
-    execCard.appendChild(el(`<p class="inline-note" style="margin-top:10px">先卖后买、金额≈值。执行前先到「⑤ 加减仓计划」过一遍退出/铁律检查（逻辑已破的票优先减）；A股按 100 股整手取整，实际以可成交数量为准。<strong>锁定资产（定存/未到期QDII）不参与卖出</strong>，用活钱+新钱+每日可赎部分调整。</p>`));
+    execCard.appendChild(el(`<p class="inline-note" style="margin-top:10px">先卖后买、金额≈值，分 2–3 批执行别一次到位。「⚠趋势上涨」只是提醒（动量效应），不改变风险排序；「深套」先过「⑤ 加减仓 → 减仓/退出」确认逻辑是否真破。基金持有<strong>不足 7 天赎回费 1.5%</strong>，短期刚买的別动。A股按 100 股整手取整。<strong>锁定资产（定存/未到期QDII）不参与卖出</strong>。</p>`));
+    // 「逻辑已破」标记切换
+    execCard.querySelectorAll('[data-thesis]').forEach(btn => btn.onclick = () => {
+      const k = btn.dataset.thesis;
+      if (STATE.thesisFlags[k]) delete STATE.thesisFlags[k]; else STATE.thesisFlags[k] = true;
+      saveState(); render();
+    });
   }
   app.appendChild(execCard);
+
+  // —— 分层核对（可改层；垃圾进垃圾出的保险丝）——
+  const chkCard = el(`<div class="card" style="margin-top:16px;padding:10px 16px"><details>
+    <summary style="cursor:pointer;font-weight:600;list-style:revert">${icon('search')} 分层核对（自动识别不准可手动改层）<span style="color:var(--muted);font-weight:400;font-size:12px"> — 点击展开</span></summary>
+    <p class="hint" style="margin-top:8px">分层靠类别+名称关键词自动识别，像「混合型基金」这类名字看不出属性的可能归错层——归错会让目标盘和清单失真。改过的选择永久保存。</p>
+    <div class="table-scroll"><table class="stack-mobile"><thead><tr><th>资产</th><th class="num">市值</th><th>当前层</th><th>改层</th></tr></thead><tbody>
+    ${(STATE.assets || []).filter(a => assetCny(a, fx) > 0).sort((a, b) => assetCny(b, fx) - assetCny(a, fx)).map(a => {
+      const key = layerKeyOfAsset(a), cur = layerOf(a), isOv = !!STATE.layerOverrides[key];
+      return `<tr><td>${escapeHtml(a.name)}<br><span class="inline-note">${escapeHtml(a.category)}${a.code ? ' · ' + escapeHtml(a.code) : ''}</span></td>
+        <td class="num">${fmtMoney(assetCny(a, fx))}</td>
+        <td>${LAYER_NAME[cur]}${isOv ? ' <span class="pill green">已手改</span>' : ''}</td>
+        <td><select data-lyov="${escapeHtml(key)}" style="max-width:150px"><option value="">自动（${LAYER_NAME[cur]}）</option>${LAYER_ORDER.map(k => `<option value="${k}" ${isOv && STATE.layerOverrides[key] === k ? 'selected' : ''}>${LAYER_NAME[k]}</option>`).join('')}</select></td></tr>`;
+    }).join('')}
+    </tbody></table></div></details></div>`);
+  chkCard.querySelectorAll('[data-lyov]').forEach(sel => sel.onchange = () => {
+    const k = sel.dataset.lyov, v = sel.value;
+    if (v) STATE.layerOverrides[k] = v; else delete STATE.layerOverrides[k];
+    saveState(); render();
+  });
+  app.appendChild(chkCard);
 };
 /* =========================================================================
    视图：收益归因 —— 收益从哪来：大类分解 + 个股按因子分解（基于快照明细）
