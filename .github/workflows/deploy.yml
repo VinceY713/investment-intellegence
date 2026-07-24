@@ -284,6 +284,27 @@ jobs:
                     add_header Cache-Control "no-store";
                 }
 
+                # 东财行业资金流代理：/api/emflow?fid=f62&fs=m:90+t:2&... → push2 行业板块主力净流入排行
+                # 注：push2 曾疑似仅 HTTP/2（黄金那次换了腾讯源）；此处强制 1.1 + 补齐头再试——
+                # 若真机 502/超时，前端资金流卡的诊断会显示原始返回，据此换备源
+                location = /api/emflow {
+                    proxy_pass https://push2.eastmoney.com/api/qt/clist/get$is_args$args;
+                    proxy_http_version 1.1;
+                    proxy_set_header Connection "";
+                    proxy_set_header Host push2.eastmoney.com;
+                    proxy_set_header Referer https://data.eastmoney.com/;
+                    proxy_set_header User-Agent "Mozilla/5.0";
+                    proxy_set_header Accept "*/*";
+                    proxy_ssl_server_name on;
+                    proxy_ssl_name push2.eastmoney.com;
+                    proxy_ssl_protocols TLSv1.2 TLSv1.3;
+                    resolver 119.29.29.29 223.5.5.5 valid=300s ipv6=off;
+                    resolver_timeout 5s;
+                    proxy_connect_timeout 10s;
+                    proxy_read_timeout 15s;
+                    add_header Cache-Control "no-store";
+                }
+
                 # 黄金代理：/api/gold → 腾讯伦敦金 hf_XAU（美元/盎司，与股票同源、HTTP/1.1 稳），前端 ×汇率÷31.1 折人民币/克
                 # （东方财富 push2 只认 HTTP/2，nginx 无法代理，故用腾讯源）
                 location = /api/gold {

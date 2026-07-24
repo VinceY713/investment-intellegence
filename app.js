@@ -5653,6 +5653,105 @@ function macroSignals() {
   return out;
 }
 
+/* -------------------------------------------------------------------------
+   资金流向（聪明钱·A股/港股通）：行业主力资金(东财push2) + 南向(东财datacenter)
+   + 两融余额(东财datacenter)。全部免key境内源；行业主力=大单净流入口径（零售可得
+   的"聪明钱"代理，非严格机构口径）。用法定位：拥挤度/佐证层，不是买卖信号。
+   ------------------------------------------------------------------------- */
+// 因子 → 行业板块名关键词（联动解读：你的持仓相关板块在流入/流出榜上吗）
+const FACTOR_SECTOR_HINTS = {
+  'AI应用': ['软件', '互联网', '计算机', '传媒'], 'AI算力': ['通信设备', '计算机设备', '半导体', '元件'],
+  'AI电力': ['电力', '电源', '电网'], '机器人': ['通用设备', '专用设备', '仪器'],
+  '创新药': ['生物制品', '化学制药', '医药', '医疗'], '消费': ['旅游', '酒店', '零售', '食品', '饮料', '白酒', '家电'],
+  '半导体': ['半导体'], '新能源车': ['汽车', '电池'], '有色资源': ['有色', '贵金属', '煤炭'],
+  '科技互联网': ['互联网', '软件', '传媒'], '高股息': ['银行', '煤炭', '电力'],
+};
+async function autoPullFlow() {
+  const diag = [];
+  const flow = { date: todayStr(), sectors: null, south: null, margin: null, diag };
+  // 1 行业板块主力资金（push2 clist，fid=f62 今日主力净额降序；带5日/10日字段）
+  try {
+    const q = 'fid=f62&po=1&pz=100&pn=1&np=1&fltt=2&invt=2&fs=' + encodeURIComponent('m:90+t:2')
+      + '&fields=' + encodeURIComponent('f12,f14,f62,f164,f174,f184');
+    const r = await fetch('/api/emflow?' + q, { cache: 'no-store' });
+    const txt = await r.text();
+    let j = null; try { j = JSON.parse(txt); } catch (e) {}
+    const arr = j && j.data && j.data.diff;
+    if (Array.isArray(arr) && arr.length > 10) {
+      flow.sectors = arr.map(x => ({ name: String(x.f14 || ''), today: num(x.f62) / 1e8, d5: num(x.f164) / 1e8, d10: num(x.f174) / 1e8 }))
+        .filter(x => x.name && isFinite(x.today));
+      diag.push({ label: '行业主力资金(push2)', ok: true, raw: arr.length + ' 个板块，Top1 ' + flow.sectors[0].name + ' ' + flow.sectors[0].today.toFixed(1) + '亿' });
+    } else diag.push({ label: '行业主力资金(push2)', ok: false, raw: 'HTTP ' + r.status + ' ' + txt.slice(0, 160) });
+  } catch (e) { diag.push({ label: '行业主力资金(push2)', ok: false, raw: e.message }); }
+  // 2 南向资金（datacenter 沪深港通历史：003=港股通沪 004=港股通深，取最新交易日净买额，亿元）
+  try {
+    const get = async (t) => {
+      const u = '/api/emmacro?reportName=RPT_MUTUAL_DEAL_HISTORY&columns=ALL&sortColumns=TRADE_DATE&sortTypes=-1&pageSize=1&pageNumber=1&filter=' + encodeURIComponent(`(MUTUAL_TYPE="${t}")`);
+      const r = await fetch(u, { cache: 'no-store' });
+      const j = JSON.parse(await r.text());
+      const row = j && j.result && j.result.data && j.result.data[0];
+      return row ? { date: String(row.TRADE_DATE || '').slice(0, 10), net: num(row.NET_DEAL_AMT) } : null;
+    };
+    const [sh, sz] = await Promise.all([get('003'), get('004')]);
+    if (sh || sz) {
+      const net = (sh ? sh.net : 0) + (sz ? sz.net : 0);
+      if (Math.abs(net) < 2000) {                            // 亿元级别理性范围
+        flow.south = { date: (sh || sz).date, net };
+        diag.push({ label: '南向资金(datacenter)', ok: true, raw: flow.south.date + ' 净买 ' + net.toFixed(1) + '亿' });
+      } else diag.push({ label: '南向资金(datacenter)', ok: false, raw: '数值越界疑似单位不符: ' + net });
+    } else diag.push({ label: '南向资金(datacenter)', ok: false, raw: '无数据行' });
+  } catch (e) { diag.push({ label: '南向资金(datacenter)', ok: false, raw: e.message }); }
+  // 3 两融余额（datacenter 融资融券历史汇总，元 → 万亿；带较上日变化）
+  try {
+    const u = '/api/emmacro?reportName=RPTA_RZRQ_LSHJ&columns=ALL&sortColumns=DIM_DATE&sortTypes=-1&pageSize=2&pageNumber=1';
+    const r = await fetch(u, { cache: 'no-store' });
+    const txt = await r.text();
+    const j = JSON.parse(txt);
+    const rows = j && j.result && j.result.data;
+    if (rows && rows.length) {
+      const bal = num(rows[0].RZRQYE), prev = rows[1] ? num(rows[1].RZRQYE) : NaN;
+      if (bal > 5e11 && bal < 5e12) {                        // 0.5万亿~5万亿 理性区间
+        flow.margin = { date: String(rows[0].DIM_DATE || '').slice(0, 10), balWy: bal / 1e12, deltaYi: isFinite(prev) ? (bal - prev) / 1e8 : null };
+        diag.push({ label: '两融余额(datacenter)', ok: true, raw: flow.margin.date + ' ' + flow.margin.balWy.toFixed(3) + '万亿' });
+      } else diag.push({ label: '两融余额(datacenter)', ok: false, raw: '数值越界: ' + bal + ' · ' + txt.slice(0, 120) });
+    } else diag.push({ label: '两融余额(datacenter)', ok: false, raw: 'HTTP ' + r.status + ' ' + txt.slice(0, 160) });
+  } catch (e) { diag.push({ label: '两融余额(datacenter)', ok: false, raw: e.message }); }
+  return flow;
+}
+// 资金流的确定性解读：持仓相关板块的流入/流出 + 拥挤提示 + 杠杆/南向水位
+function flowSignals(flow) {
+  const out = [];
+  if (!flow) return out;
+  const s = flow.sectors || [];
+  if (s.length) {
+    // 持仓联动：因子 → 相关板块在榜单上的位置
+    const seen = new Set();
+    (STATE.positions || []).forEach(p => {
+      const hints = FACTOR_SECTOR_HINTS[p.factor] || [];
+      s.forEach(sec => {
+        if (seen.has(sec.name) || !hints.some(h => sec.name.indexOf(h) >= 0)) return;
+        seen.add(sec.name);
+        if (sec.today <= -5) out.push(['amber', `你的「${escapeHtml(p.factor)}」相关板块「${escapeHtml(sec.name)}」今日主力净流出 ${Math.abs(sec.today).toFixed(1)} 亿（5日 ${sec.d5 >= 0 ? '+' : ''}${sec.d5.toFixed(1)} 亿）——资金撤离中，与再平衡卖出排序相互印证。`]);
+        else if (sec.today >= 5) out.push(['blue', `你的「${escapeHtml(p.factor)}」相关板块「${escapeHtml(sec.name)}」今日主力净流入 +${sec.today.toFixed(1)} 亿（5日 ${sec.d5 >= 0 ? '+' : ''}${sec.d5.toFixed(1)} 亿）——有资金承接。`]);
+      });
+    });
+    // 拥挤度：今日榜首且5日也大幅为正 → 提示别追高
+    const top = s[0];
+    if (top && top.today > 20 && top.d5 > 40) out.push(['amber', `「${escapeHtml(top.name)}」今日+5日都在大幅吸金（今日 +${top.today.toFixed(0)} 亿 / 5日 +${top.d5.toFixed(0)} 亿）——<strong>历史级流入常伴随拥挤</strong>，若计划新进该方向请分批、别追。`]);
+  }
+  if (flow.south && isFinite(flow.south.net)) {
+    const n = flow.south.net;
+    if (n >= 50) out.push(['blue', `南向资金 ${escapeHtml(flow.south.date)} 净买入 +${n.toFixed(0)} 亿——港股通标的（恒生科技/创新药HK/港股高股息）有水位支撑。`]);
+    else if (n <= -50) out.push(['amber', `南向资金 ${escapeHtml(flow.south.date)} 净卖出 ${n.toFixed(0)} 亿——港股通持仓短期承压，非基本面信号、勿情绪化操作。`]);
+  }
+  if (flow.margin && flow.margin.deltaYi != null) {
+    const d = flow.margin.deltaYi;
+    if (d >= 100) out.push(['amber', `两融余额单日 +${d.toFixed(0)} 亿（${flow.margin.balWy.toFixed(2)}万亿）——杠杆资金升温，涨势中助涨、跌时踩踏，弹性仓遵守止损纪律。`]);
+    else if (d <= -100) out.push(['blue', `两融余额单日 ${d.toFixed(0)} 亿（${flow.margin.balWy.toFixed(2)}万亿）——杠杆退潮，抛压释放中。`]);
+  }
+  return out;
+}
+
 VIEWS.macro = function (app) {
   if (!STATE.macro || !STATE.macro.market) STATE.macro = { market: {}, ind: {}, updatedAt: null };
   const m = STATE.macro;
@@ -5715,6 +5814,58 @@ VIEWS.macro = function (app) {
       render();   // 重绘：填入的指标 + 触发信号解读
     } catch (e) {
       note.innerHTML = `${icon('warn')} 自动拉取失败：${escapeHtml(e.message)}——可继续手填`;
+    } finally { btn.disabled = false; }
+  };
+
+  // —— 资金流向（聪明钱·A股/港股通）——
+  const flowCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('coins')} 资金流向（聪明钱 · A股/港股通）</h3>
+    <p class="hint">行业<strong>主力资金</strong>（大单净流入，零售可得的"聪明钱"代理）+ <strong>南向资金</strong> + <strong>两融余额</strong>，全部免key境内源。<strong>用法：拥挤度/佐证层，不是买卖信号</strong>——历史级流入常出现在情绪高点附近，进方向前先看挤不挤；持仓相关板块被撤离时与再平衡排序互相印证。</p></div>`);
+  const flowBar = el(`<div class="row" style="gap:8px;flex-wrap:wrap"><button class="btn" id="flow-go" style="flex:0 0 auto">${icon('refresh')} 拉取资金流向</button><span id="flow-note" class="inline-note" style="align-self:center">${m.flow && m.flow.date ? '上次更新 ' + escapeHtml(m.flow.date) : '点击拉取行业主力/南向/两融'}</span></div>`);
+  flowCard.appendChild(flowBar);
+  const flowOut = el('<div id="flow-out"></div>');
+  flowCard.appendChild(flowOut);
+  app.appendChild(flowCard);
+  const renderFlow = (f) => {
+    if (!f) { flowOut.innerHTML = ''; return; }
+    let html = '';
+    if (f.sectors && f.sectors.length) {
+      const topIn = f.sectors.slice(0, 5);
+      const topOut = f.sectors.slice(-5).reverse();
+      const row = x => `<tr><td>${escapeHtml(x.name)}</td><td class="num" style="color:${x.today >= 0 ? 'var(--green-ink)' : 'var(--red-ink)'}">${x.today >= 0 ? '+' : ''}${x.today.toFixed(1)}</td><td class="num" style="color:${x.d5 >= 0 ? 'var(--green-ink)' : 'var(--red-ink)'}">${x.d5 >= 0 ? '+' : ''}${x.d5.toFixed(1)}</td></tr>`;
+      html += `<div class="grid grid-2" style="gap:12px;margin-top:8px">
+        <div><h4 style="margin:4px 0 6px">主力净流入 Top5（亿元）</h4><div class="table-scroll"><table><thead><tr><th>板块</th><th class="num">今日</th><th class="num">5日</th></tr></thead><tbody>${topIn.map(row).join('')}</tbody></table></div></div>
+        <div><h4 style="margin:4px 0 6px">主力净流出 Top5（亿元）</h4><div class="table-scroll"><table><thead><tr><th>板块</th><th class="num">今日</th><th class="num">5日</th></tr></thead><tbody>${topOut.map(row).join('')}</tbody></table></div></div>
+      </div>`;
+    }
+    const bits = [];
+    if (f.south) bits.push(`<div class="stat"><div class="label">南向资金（${escapeHtml(f.south.date)}）</div><div class="value" style="font-size:20px;color:${f.south.net >= 0 ? 'var(--green-ink)' : 'var(--red-ink)'}">${f.south.net >= 0 ? '+' : ''}${f.south.net.toFixed(1)} 亿</div><div class="sub">港股通(沪+深)净买额</div></div>`);
+    if (f.margin) bits.push(`<div class="stat"><div class="label">两融余额（${escapeHtml(f.margin.date)}）</div><div class="value" style="font-size:20px">${f.margin.balWy.toFixed(3)} 万亿</div><div class="sub">${f.margin.deltaYi != null ? '较上日 ' + (f.margin.deltaYi >= 0 ? '+' : '') + f.margin.deltaYi.toFixed(0) + ' 亿' : ''}</div></div>`);
+    if (bits.length) html += `<div class="stat-grid" style="margin-top:12px">${bits.join('')}</div>`;
+    // 确定性解读（联动你的持仓）
+    const sig = flowSignals(f);
+    if (sig.length) html += sig.map(([t, msg]) => `<div class="alert ${t}" style="margin-top:8px"><span class="icon">${t === 'amber' ? icon('warn') : icon('info')}</span><div>${msg}</div></div>`).join('');
+    // 诊断（折叠）
+    if (f.diag && f.diag.length) {
+      const okN = f.diag.filter(d => d.ok).length;
+      html += `<details style="margin-top:10px"><summary style="cursor:pointer;font-size:12px;color:var(--muted)">拉取诊断（成功 ${okN} / 失败 ${f.diag.length - okN}）— 点击展开</summary>
+        <div class="table-scroll"><table class="stack-mobile"><thead><tr><th>项</th><th>结果</th><th>原始返回 / 值</th></tr></thead><tbody>
+        ${f.diag.map(d => `<tr><td style="white-space:nowrap">${escapeHtml(d.label)}</td><td>${d.ok ? '<span class="pill green">成功</span>' : '<span class="pill red">失败</span>'}</td><td style="font-size:11px;font-family:monospace;word-break:break-all">${escapeHtml(d.raw)}</td></tr>`).join('')}
+        </tbody></table></div></details>`;
+    }
+    flowOut.innerHTML = html || '<p class="inline-note">暂无数据，点上方按钮拉取。</p>';
+  };
+  renderFlow(m.flow);
+  flowBar.querySelector('#flow-go').onclick = async () => {
+    const btn = flowBar.querySelector('#flow-go'), note = flowBar.querySelector('#flow-note');
+    btn.disabled = true; note.innerHTML = icon('refresh', 'spin') + ' 拉取中（约 3–10 秒）…';
+    try {
+      const f = await autoPullFlow();
+      m.flow = f; saveState();
+      const okN = f.diag.filter(d => d.ok).length;
+      note.innerHTML = `${icon(okN ? 'check' : 'warn')} 拉取：成功 ${okN} / 失败 ${f.diag.length - okN} 项 · ${escapeHtml(f.date)}${okN < f.diag.length ? '（失败项见下方诊断，可截图发我校准）' : ''}`;
+      renderFlow(f);
+    } catch (e) {
+      note.innerHTML = `${icon('warn')} 拉取失败：${escapeHtml(e.message)}`;
     } finally { btn.disabled = false; }
   };
 
