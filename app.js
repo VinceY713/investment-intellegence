@@ -918,6 +918,7 @@ function applyStateDefaults(s) {
   s.targetAlloc = s.targetAlloc || null;        // 再平衡目标配置 {buckets:{...}, threshold}，null=未设置
   s.layerOverrides = s.layerOverrides || {};    // 再平衡分层手动改层 {code||name: layerKey}，覆盖自动识别
   s.thesisFlags = s.thesisFlags || {};          // 「逻辑已破」标记 {code||name: true}，卖出排序最高优先
+  s.kellyEvals = s.kellyEvals || {};            // 凯利AI评估持久缓存 {codeKey: {win,up,down,date,factor,trend,...}}——刷新不丢，同参数同结果
   s.macro = Object.assign({ market: {}, ind: {}, updatedAt: null }, s.macro || {});
   s.macro.market = s.macro.market || {}; s.macro.ind = s.macro.ind || {};
   return s;
@@ -1179,6 +1180,17 @@ const Calc = {
     const u = upPct / 100, d = downPct / 100, q = 1 - p;
     if (!(u > 0) || !(d > 0)) return 0;
     return (p * u - q * d) / (u * d);
+  },
+
+  // 凯利稳健度：胜率 ±5 个点内正负号是否翻转。凯利在 EV≈0 附近是误差放大器
+  // （AI 估计固有 ±5pp 噪声 → 仓位可摆动几十个点甚至翻号），翻号的结论一律不可用。
+  // pos=悲观(−5pp)仍为正 → 可执行；neg=乐观(+5pp)仍≤0 → 稳健不值得下注；unstable=翻号 → 按0处理/观望
+  kellyRobust(winPct, upPct, downPct) {
+    const f = this.kellyStock(winPct / 100, upPct, downPct);
+    const fPess = this.kellyStock(Math.max(0, winPct - 5) / 100, upPct, downPct);
+    const fOpt = this.kellyStock(Math.min(100, winPct + 5) / 100, upPct, downPct);
+    const verdict = fPess > 0 ? 'pos' : (fOpt <= 0 ? 'neg' : 'unstable');
+    return { f, fPess, fOpt, verdict };
   },
 
   // 有效持仓数：按因子分组后 1 / Σ(因子权重²)（逆 HHI）
@@ -2403,7 +2415,6 @@ VIEWS.positions = function (app) {
    ========================================================================= */
 // 凯利 AI 评估的会话内缓存：{ "code|日期": {win,up,down,bulls,bears,note} }
 // 同一标的当日重复评估复用同一结果，保证一致（刷新页面或次日自动失效重评）
-const KELLY_EVAL_CACHE = {};
 
 VIEWS.kelly = function (app) {
   const s = STATE.settings;
@@ -2491,12 +2502,18 @@ VIEWS.kelly = function (app) {
     evalBtns.forEach(b => b.disabled = true);
     out.innerHTML = '<div class="inline-note" style="margin-top:10px">' + icon('refresh', 'spin') + ' 正在请求 DeepSeek 评估「' + escapeHtml(p.name) + '」，约 10–30 秒…</div>';
     try {
-      // 会话内缓存：键随「真正影响评估的输入」变化（代码+日期+因子+趋势），
-      // 不含 maxDrop/浮盈亏/仓位——这些不该影响标的自身的下注质量评分，避免“回填回撤数据后评分突变”。
-      const cacheKey = ((p.code || p.name || '').toLowerCase()) + '|' + todayStr() + '|' + (p.factor || '') + '|' + (p.trend || '');
-      let cached = KELLY_EVAL_CACHE[cacheKey], win, up, down, bulls, bears, note, fromCache = false;
+      // 持久缓存（STATE.kellyEvals，随云端同步）：7 天内且 因子/趋势 未变 → 直接复用，
+      // 刷新页面/换设备也返回同一结果——修"两次相同测试结果差异大"。
+      // 键不含 maxDrop/浮盈亏/仓位——这些不该影响标的自身的下注质量评分。
+      const cacheKey = (p.code || p.name || '').toLowerCase();
+      const stored = STATE.kellyEvals[cacheKey];
+      const freshDays = stored ? Math.floor((Date.now() - new Date(stored.date).getTime()) / 864e5) : 999;
+      const cached = (stored && freshDays <= 7 && stored.factor === (p.factor || '') && stored.trend === (p.trend || '')) ? stored : null;
+      let win, up, down, bulls, bears, note, fromCache = false, evalDate = todayStr();
       if (cached) {
-        ({ win, up, down, bulls, bears, note } = cached); fromCache = true;
+        win = cached.win; up = cached.up; down = cached.down;
+        bulls = cached.bulls || []; bears = cached.bears || []; note = cached.note || '';
+        fromCache = true; evalDate = cached.date;
       } else {
         const sys = '你是一位严谨、保守的投资分析师，评估对象可能是股票或基金。基于你对该标的（公司/行业/指数/主题）的认知，给出未来 6–12 个月的保守评估。'
           + '一致性要求：请给出你最有把握的【单一保守中枢估计】，不要给区间、不要发散；相同输入应得到相同结论。'
@@ -2519,7 +2536,8 @@ VIEWS.kelly = function (app) {
         bulls = (j.bulls || []).map(x => String(x).trim()).filter(Boolean).slice(0, 4);
         bears = (j.bears || []).map(x => String(x).trim()).filter(Boolean).slice(0, 4);
         note = String(j.note || '').trim();
-        KELLY_EVAL_CACHE[cacheKey] = { win, up, down, bulls, bears, note };
+        STATE.kellyEvals[cacheKey] = { win, up, down, bulls, bears, note, date: todayStr(), factor: p.factor || '', trend: p.trend || '' };
+        saveState();
       }
 
       const prob = win / 100;
@@ -2534,18 +2552,25 @@ VIEWS.kelly = function (app) {
       const scoreColor = score >= 65 ? 'var(--green-ink)' : (score >= 45 ? 'var(--amber-ink)' : 'var(--red-ink)');
 
       let sizing = '', advice = '', caveat = '';
+      const robust = Calc.kellyRobust(win, up, down);       // 胜率±5pp 稳健度：翻号的结论不可用
       if (rtype === 'stock') {
-        // 个股/集中头寸：凯利适用
+        // 个股/集中头寸：凯利适用——但只在「稳健」时给具体目标，不稳健一律按 0 处理
         const target = Math.max(0, f * frac * 100);
         const capped = Math.min(target, s.singleCap);
         const diff = capped - cur;
         const diffMoney = total > 0 ? Math.abs(diff) / 100 * total : 0;
-        sizing = `<div class="result-box"><div class="metric-row"><span class="k">${fracTxt} 凯利目标仓位（≤单股上限 ${s.singleCap}%）</span><span class="v" style="color:var(--accent-ink)">${capped.toFixed(1)}%${total > 0 ? '（约 ' + fmtMoney(capped / 100 * total) + '）' : ''}</span></div></div>`;
-        if (ev < 0) advice = `<div class="alert red"><span class="icon">${icon('danger')}</span><div><strong>EV 为负（${ev.toFixed(1)}%）· 数学上不值得下注</strong><br>纪律做法：不加仓，考虑减仓或离场；当前占 ${cur.toFixed(1)}%。</div></div>`;
+        if (robust.verdict === 'unstable') {
+          sizing = `<div class="result-box"><div class="metric-row"><span class="k">${fracTxt} 凯利目标仓位</span><span class="v" style="color:var(--amber-ink)">不稳健 → 按 0 处理</span></div>
+            <div class="metric-row"><span class="k">胜率±5个点的满凯利区间</span><span class="v" style="color:var(--muted)">${(robust.fPess*100).toFixed(0)}% ~ ${(robust.fOpt*100).toFixed(0)}%（翻号）</span></div></div>`;
+          advice = `<div class="alert amber"><span class="icon">${icon('warn')}</span><div><strong>结论不稳健：胜率仅 ±5 个点，凯利仓位就正负翻转</strong>——AI 估计的固有噪声就有这么大，此时任何具体百分数都是假精确。<br>纪律做法：<strong>当 0 处理、观望</strong>；已持有的维持不动或按其它纪律（止损/铁律）处理，不要按凯利加减仓。</div></div>`;
+        } else {
+        sizing = `<div class="result-box"><div class="metric-row"><span class="k">${fracTxt} 凯利目标仓位（≤单股上限 ${s.singleCap}%）</span><span class="v" style="color:var(--accent-ink)">${capped.toFixed(1)}%${total > 0 ? '（约 ' + fmtMoney(capped / 100 * total) + '）' : ''} <span class="pill ${robust.verdict==='pos'?'green':'red'}" style="font-size:11px">稳健${robust.verdict==='pos'?'为正':'为负'}·胜率±5不翻号</span></span></div></div>`;
+        if (ev < 0) advice = `<div class="alert red"><span class="icon">${icon('danger')}</span><div><strong>EV 为负（${ev.toFixed(1)}%）且稳健（胜率+5个点仍不为正）· 数学上不值得下注</strong><br>纪律做法：不加仓，考虑减仓或离场；当前占 ${cur.toFixed(1)}%。此结论会同步给「再平衡」卖出排序。</div></div>`;
         else if (f <= 0) advice = `<div class="alert amber"><span class="icon">${icon('warn')}</span><div><strong>期望值恰为零（EV=0）</strong>：凯利仓位为 0，数学上不值得下注，建议观望。</div></div>`;
         else if (diff > 0.5) advice = `<div class="alert green"><span class="icon">${icon('check')}</span><div><strong>目标 ${capped.toFixed(1)}% vs 当前 ${cur.toFixed(1)}% → 有 ${diff.toFixed(1)} 个百分点空间（约 ${fmtMoney(diffMoney)}）</strong><br>加仓前必须过「⑤ 铁律校验」。</div></div>`;
         else if (diff < -0.5) advice = `<div class="alert amber"><span class="icon">${icon('warn')}</span><div><strong>目标 ${capped.toFixed(1)}% vs 当前 ${cur.toFixed(1)}% → 超配 ${(-diff).toFixed(1)} 个百分点（约 ${fmtMoney(diffMoney)}）</strong><br>按凯利纪律应逐步减到目标附近，别一次性调仓。</div></div>`;
         else advice = `<div class="alert green"><span class="icon">${icon('check')}</span><div><strong>当前 ${cur.toFixed(1)}% ≈ 目标 ${capped.toFixed(1)}%，仓位基本合理</strong>，保持并按纪律跟踪即可。</div></div>`;
+        }
       } else {
         // 配置型基金：凯利会系统性低估，改用「资产角色 + 策略权重区间」
         const band = ROLE_BAND[rtype];
@@ -2584,7 +2609,7 @@ VIEWS.kelly = function (app) {
         </div>
         ${note ? `<p class="inline-note" style="margin-top:8px">${icon('sparkles')} AI 结论：${escapeHtml(note)}</p>` : ''}
         <div class="row" style="margin-top:10px"><button class="btn secondary small" id="ka-record" style="flex:0 0 auto">${icon('clipboard')} 记录此判断到「复盘校准」</button></div>
-        <p class="inline-note">${fromCache ? '本次会话已评估过该标的，复用一致结果（<a href="#" id="ka-recompute" style="color:var(--accent-ink)">重新评估</a>）。' : ''}参数已回填到下方计算器，可自行微调后重算。AI 生成内容仅供参考，不构成投资建议。</p>`;
+        <p class="inline-note">${fromCache ? `已复用 <strong>${escapeHtml(evalDate)}</strong> 的评估（7天内同参数固定同结果，刷新/换设备不变——<a href="#" id="ka-recompute" style="color:var(--accent-ink)">重新评估</a>）。` : `评估于 ${escapeHtml(evalDate)}，已固定保存：7 天内重复评估返回同一结果。`}参数已回填到下方计算器，可自行微调后重算。AI 生成内容仅供参考，不构成投资建议。</p>`;
 
       // 记录预测：把「当下判断的胜率/空间」存进复盘校准，日后回填结果校准你的判断力
       const recBtn = out.querySelector('#ka-record');
@@ -2601,7 +2626,7 @@ VIEWS.kelly = function (app) {
 
       // “重新评估”：清掉该标的缓存后重跑（键须与上方 cacheKey 一致：代码|日期|因子|趋势）
       const recompute = out.querySelector('#ka-recompute');
-      if (recompute) recompute.onclick = (e) => { e.preventDefault(); delete KELLY_EVAL_CACHE[((p.code || p.name || '').toLowerCase()) + '|' + todayStr() + '|' + (p.factor || '') + '|' + (p.trend || '')]; evaluateCandidate(p); };
+      if (recompute) recompute.onclick = (e) => { e.preventDefault(); delete STATE.kellyEvals[(p.code || p.name || '').toLowerCase()]; saveState(); evaluateCandidate(p); };
 
       // 回填手动计算器（含理由），方便微调
       card.querySelector('#k-up').value = up.toFixed(0);
@@ -4561,6 +4586,15 @@ VIEWS.rebalance = function (app) {
     return n ? sum / n : null;
   };
   const posOf = (code) => (STATE.positions || []).find(p => p.code === code);
+  // 凯利稳健判定（读①的持久评估，30天内有效）：稳健为负→提前卖；稳健为正→层内保护后卖；不稳健→忽略
+  const kellyVerdictOf = (a) => {
+    const ev = STATE.kellyEvals[(a.code || a.name || '').toLowerCase()];
+    if (!ev || !ev.date) return null;
+    const days = Math.floor((Date.now() - new Date(ev.date).getTime()) / 864e5);
+    if (days > 30) return null;
+    const r = Calc.kellyRobust(ev.win, ev.up, ev.down);
+    return { verdict: r.verdict, evPct: Calc.ev(ev.win / 100, ev.up, ev.down), date: ev.date };
+  };
   const scoreSell = (x) => {                                // 返回 {score, chips[]} 分数越大越先卖
     const key = layerKeyOfAsset(x.a);
     const broken = !!STATE.thesisFlags[key];
@@ -4568,19 +4602,27 @@ VIEWS.rebalance = function (app) {
     const p = x.a.code ? posOf(x.a.code) : null;
     const w = total > 0 ? x.v / total * 100 : 0;
     const ddC = p ? w * num(p.maxDrop) / 100 : w * (LAYER_DD[layerOf(x.a)] || 0) / 100;  // 回撤贡献pp
+    const kv = kellyVerdictOf(x.a);
     const chips = [];
     if (broken) chips.push('<span class="pill red">逻辑已破·优先卖</span>');
+    if (kv) {
+      if (kv.verdict === 'neg') chips.push(`<span class="pill red">凯利稳健为负 EV${kv.evPct.toFixed(1)}%·提前卖</span>`);
+      else if (kv.verdict === 'pos') chips.push(`<span class="pill green">凯利稳健为正·层内后卖</span>`);
+      else chips.push('<span class="pill gray">凯利不稳健·不参与排序</span>');
+    }
     if (rho != null) chips.push(`<span class="pill ${rho >= 0.5 ? 'amber' : 'gray'}">ρ̄ ${rho.toFixed(2)}${rho >= 0.5 ? '·冗余' : ''}</span>`);
     if (ddC > 0) chips.push(`<span class="pill gray">回撤贡献 ${ddC.toFixed(1)}pp</span>`);
     if (p && p.trend === '上涨') chips.push('<span class="pill green">⚠ 趋势上涨·卖前想想动量</span>');
     if (p && num(p.pnl) <= -20) chips.push(`<span class="pill amber">深套 ${num(p.pnl).toFixed(0)}%·先过⑤退出检查</span>`);
-    // 打分：破=最高档；冗余 0..1 归一按 1000 权重；回撤贡献按 10 权重；市值兜底（极小权重保证稳定序）
-    const score = (broken ? 1e9 : 0) + (rho != null ? rho * 1000 : 0) + ddC * 10 + x.v / 1e7;
+    // 打分层级：人的判断(破)1e9 ≫ 凯利稳健为负+3000 > 冗余 0..1000 > 回撤贡献×10 > 市值兜底；
+    // 凯利稳健为正 −600（有优势的注不该被机械再平衡先砍）；不稳健 0（噪声不进排序）
+    const kAdj = kv ? (kv.verdict === 'neg' ? 3000 : kv.verdict === 'pos' ? -600 : 0) : 0;
+    const score = (broken ? 1e9 : 0) + kAdj + (rho != null ? rho * 1000 : 0) + ddC * 10 + x.v / 1e7;
     return { score, chips, broken, rho, ddC };
   };
 
   const execCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('list')} 调仓执行清单（漂移带 ±${DRIFT}pp）</h3>
-    <p class="hint">卖出排序：<strong>逻辑已破 &gt; 冗余度（实测平均相关ρ̄，来自热力图）&gt; 回撤贡献 &gt; 市值</strong>——每卖1元让组合分散/回撤改善最多。${cc && cc.date ? `冗余数据取自 ${escapeHtml(cc.date)} 拉的真实相关性${cc.date !== todayStr() ? '（较旧，建议到「股票体检」重拉一次）' : ''}` : '<span style="color:var(--amber-ink)">尚未拉过真实相关性——先到「股票体检」拉一次，冗余排序才生效</span>'}。点标的旁「标记逻辑已破」可把它提到卖出队首。</p></div>`);
+    <p class="hint">卖出排序：<strong>逻辑已破（你的判断）&gt; 凯利稳健为负（①的评估，胜率±5不翻号才算数）&gt; 冗余度（实测ρ̄）&gt; 回撤贡献 &gt; 市值</strong>——每卖1元让组合改善最多；凯利稳健为<strong>正</strong>的层内后卖（有优势的注不先砍），凯利<strong>不稳健</strong>的一律忽略不进排序。${cc && cc.date ? `冗余数据取自 ${escapeHtml(cc.date)} 拉的真实相关性${cc.date !== todayStr() ? '（较旧，建议到「股票体检」重拉一次）' : ''}` : '<span style="color:var(--amber-ink)">尚未拉过真实相关性——先到「股票体检」拉一次，冗余排序才生效</span>'}。点标的旁「标记逻辑已破」可把它提到卖出队首。</p></div>`);
   if (!overL.length && !underL.length) {
     execCard.appendChild(el(`<div class="alert green"><span class="icon">${icon('check')}</span><div>各层偏离都在 ±${DRIFT}pp 内，<strong>无需调仓</strong>。再平衡不是频繁操作——偏离超线再动，每季度看一次即可。</div></div>`));
   } else {
