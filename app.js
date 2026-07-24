@@ -4097,26 +4097,43 @@ VIEWS.settings = function (app) {
   };
 
   // —— 修改日志 · 一键还原（误删/录错的后悔药）——
+  // 两类还原点合并按时间排：①操作级（日志上线后每个关键操作前留底）；
+  // ②每日快照（含明细的历史快照，覆盖日志上线【之前】的历史——一天一个还原点）
   const oplog = loadOplog();
   const fmtTs = ts => { const d = new Date(ts); return `${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`; };
+  const opPoints = oplog.map((e, i) => ({ kind: 'op', ts: e.ts, label: e.label || '数据修改', nA: (e.assets || []).length, nP: (e.positions || []).length, ref: i }));
+  const snapPoints = (STATE.snapshots || []).filter(sn => sn.assets && sn.assets.length)
+    .map(sn => ({ kind: 'snap', ts: new Date(sn.date + 'T23:59:59').getTime(), label: '每日快照 ' + sn.date, nA: sn.assets.length, nP: (sn.positions || []).length, ref: sn.date }))
+    .sort((a, b) => b.ts - a.ts).slice(0, 21);            // 最近3周的快照点，更早的用「数据管理→恢复到该日」
+  const points = opPoints.concat(snapPoints).sort((a, b) => b.ts - a.ts);
   const logCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('book')} 修改日志 · 一键还原</h3>
-    <p class="hint">每次<strong>增删改资产/持仓、赎回记账、出入金、导入/清空</strong>前，系统自动留存当时的资产+持仓+出入金副本（本设备保存最近 ${oplog.length ? oplog.length + '/' : ''}30 条）。误删或录错 → 点「还原」回到<strong>该操作之前</strong>的状态。还原只覆盖资产/持仓/出入金，不动设置、快照历史与评估缓存。</p>
-    ${oplog.length ? `<div class="table-scroll"><table class="stack-mobile">
-      <thead><tr><th>时间</th><th>操作</th><th class="num">当时资产/持仓数</th><th></th></tr></thead>
-      <tbody>${oplog.map((e, i) => `<tr>
-        <td style="white-space:nowrap">${fmtTs(e.ts)}</td>
-        <td>${escapeHtml(e.label || '数据修改')}</td>
-        <td class="num">${(e.assets || []).length} / ${(e.positions || []).length}</td>
-        <td class="num"><button class="btn secondary small" data-oprestore="${i}">还原到此前</button></td>
+    <p class="hint">每次<strong>增删改资产/持仓、赎回记账、出入金、导入/清空</strong>前，系统自动留存当时的资产+持仓+出入金副本（本设备保存最近 30 条）。更早的历史（日志功能上线前）以<strong>每日快照</strong>形式提供——一天一个还原点。误删或录错 → 点「还原」。还原只覆盖资产/持仓${''}（操作级还原另含出入金），不动设置、快照历史与评估缓存；还原本身也会先留底，可再次反悔。</p>
+    ${points.length ? `<div class="table-scroll"><table class="stack-mobile">
+      <thead><tr><th>时间</th><th>还原点</th><th class="num">当时资产/持仓数</th><th></th></tr></thead>
+      <tbody>${points.map((p, i) => `<tr>
+        <td style="white-space:nowrap">${p.kind === 'snap' ? escapeHtml(String(p.ref)) : fmtTs(p.ts)}</td>
+        <td>${p.kind === 'snap' ? '<span class="pill gray">快照</span> ' : '<span class="pill green">操作</span> '}${escapeHtml(p.label)}</td>
+        <td class="num">${p.nA} / ${p.nP}</td>
+        <td class="num"><button class="btn secondary small" data-oprestore="${i}">还原到此${p.kind === 'snap' ? '日' : '前'}</button></td>
       </tr>`).join('')}</tbody></table></div>`
-    : '<p class="inline-note">暂无记录。之后每次增删改资产/持仓都会自动留底。</p>'}</div>`);
+    : '<p class="inline-note">暂无还原点。之后每次增删改资产/持仓都会自动留底；每天也会自动记快照。</p>'}</div>`);
   logCard.querySelectorAll('[data-oprestore]').forEach(b => b.onclick = () => {
-    const i = +b.dataset.oprestore;
-    const e = oplog[i];
-    if (!e) return;
-    if (!confirm(`还原到「${e.label}」执行之前（${fmtTs(e.ts)}）？\n将用当时的副本覆盖当前 资产(${(e.assets||[]).length}) / 持仓(${(e.positions||[]).length}) / 出入金(${(e.cashflows||[]).length}) ——此时间点之后的相关修改都会被撤销。\n（还原本身也会先留底，可再次反悔。）`)) return;
-    logOp('还原前留底（还原到 ' + fmtTs(e.ts) + '「' + (e.label || '') + '」之前）');
-    if (restoreOp(e)) { alert('已还原。'); render(); }
+    const p = points[+b.dataset.oprestore];
+    if (!p) return;
+    if (p.kind === 'op') {
+      const e = oplog[p.ref];
+      if (!e) return;
+      if (!confirm(`还原到「${e.label}」执行之前（${fmtTs(e.ts)}）？\n将用当时的副本覆盖当前 资产(${(e.assets||[]).length}) / 持仓(${(e.positions||[]).length}) / 出入金(${(e.cashflows||[]).length}) ——此时间点之后的相关修改都会被撤销。\n（还原本身也会先留底，可再次反悔。）`)) return;
+      logOp('还原前留底（还原到 ' + fmtTs(e.ts) + '「' + (e.label || '') + '」之前）');
+      if (restoreOp(e)) { alert('已还原。'); render(); }
+    } else {
+      const snap = (STATE.snapshots || []).find(sn => sn.date === p.ref);
+      if (!snap) return;
+      if (!confirm(`用 ${p.ref} 的每日快照覆盖当前资产与持仓？（出入金与快照历史不受影响；还原前会先留底，可反悔。）`)) return;
+      logOp('还原前留底（还原到每日快照 ' + p.ref + '）');
+      if (restoreFromSnapshot(snap)) { alert('已还原到 ' + p.ref + '。'); render(); }
+      else alert('该快照没有明细副本，无法恢复');
+    }
   });
   app.appendChild(logCard);
 };
