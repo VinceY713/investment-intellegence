@@ -941,6 +941,35 @@ function saveState() {
   scheduleCloudPush();                              // 同时（防抖）回传云端
 }
 
+/* -------------------------------------------------------------------------
+   修改日志（操作还原）：每个关键操作【执行前】把 资产/持仓/出入金 完整副本
+   记入独立日志（本设备 localStorage，最多 30 条）。误删/录错 → 设置页一键
+   还原到该操作前。行情刷新等高频写入不记录，日志不被噪声淹没。
+   ------------------------------------------------------------------------- */
+const OPLOG_KEY = STORAGE_KEY + '.oplog';
+function loadOplog() { try { return JSON.parse(localStorage.getItem(OPLOG_KEY)) || []; } catch (e) { return []; } }
+function logOp(label) {
+  try {
+    const log = loadOplog();
+    log.unshift({
+      ts: Date.now(), label,
+      assets: JSON.parse(JSON.stringify(STATE.assets || [])),
+      positions: JSON.parse(JSON.stringify(STATE.positions || [])),
+      cashflows: JSON.parse(JSON.stringify(STATE.cashflows || [])),
+    });
+    while (log.length > 30) log.pop();
+    localStorage.setItem(OPLOG_KEY, JSON.stringify(log));
+  } catch (e) { console.warn('修改日志写入失败（不影响操作）', e); }
+}
+function restoreOp(entry) {
+  if (!entry) return false;
+  STATE.assets = JSON.parse(JSON.stringify(entry.assets || []));
+  STATE.positions = JSON.parse(JSON.stringify(entry.positions || []));
+  STATE.cashflows = JSON.parse(JSON.stringify(entry.cashflows || []));
+  saveState();
+  return true;
+}
+
 function uid() {
   return 'p' + Math.random().toString(36).slice(2, 9);
 }
@@ -1630,6 +1659,7 @@ function renderRealCorrCard(app, positions) {
       <p class="inline-note">回填后「③ 回撤控制」「股票体检」的回撤口径将基于真实历史，而非手填估计。回填只覆盖能取到序列的<strong>个股</strong>（基金不进弹性仓回撤口径）。</p>`;
     const fill = out.querySelector('#rc-fill');
     if (fill) fill.onclick = () => {
+      logOp('回填历史最大回撤到「最大跌幅」');
       let cnt = 0;
       c.stats.forEach(st => {
         const p = (STATE.positions || []).find(x => x.code === st.code);
@@ -2259,6 +2289,7 @@ VIEWS.positions = function (app) {
       cost,
       price,
     };
+    logOp((editId ? '编辑持仓：' : '新增持仓：') + (pos.name || pos.code || '未命名'));
     if (editId) {
       const i = STATE.positions.findIndex(p => p.id === editId);
       if (i >= 0) STATE.positions[i] = Object.assign(STATE.positions[i], pos);
@@ -2374,6 +2405,7 @@ VIEWS.positions = function (app) {
       const linkedAsset = p.code ? (STATE.assets || []).find(x => x.code === p.code) : null;
       if (linkedAsset) {
         if (!confirm(`「${p.name}」在「当前持仓」和「全部持仓/资产」里都有。\n「确定」= 两处一起删除（不动现金池，用于清理/纠错）；「取消」= 不删。`)) return;
+        logOp('删除持仓+资产：' + p.name);
         STATE.positions = STATE.positions.filter(x => x.id !== p.id);
         STATE.assets = (STATE.assets || []).filter(x => x.id !== linkedAsset.id);
         saveState(); render();
@@ -2381,6 +2413,7 @@ VIEWS.positions = function (app) {
       }
       // 无联动资产：删除可视为「全部卖出」并把所得计入现金池
       const prev = previewSharesSettlement(num(p.shares), 0, num(p.price), p.code);
+      logOp('删除持仓：' + p.name);
       if (prev && confirm(`删除「${p.name}」视为全部卖出：${p.shares} 股 ≈ ${fmtOrig(-prev.deltaOrig, prev.ccy)}，盈余计入「${poolName(prev.ccy)}」？\n「确定」=卖出并入账，「取消」=仅删除记录、不动现金池。`)) {
         settleToPool(-prev.deltaOrig, prev.ccy, '卖出' + p.name + '（删除持仓）');
       }
@@ -3808,6 +3841,7 @@ VIEWS.planner = function (app) {
         const hasAsset = p.code && (STATE.assets || []).some(x => x.code === p.code);
         if (!hasAsset && !confirm(`「${p.name}」未在「投资组合」登记对应资产，卖出回款 ${fmtMoney(amt)} 计入现金池后，总资产会相应增加（因为该股票市值此前未入账）。\n建议先到「投资组合」补录该资产再记账，账才能守恒。仍要继续吗？`)) return;
         if (!confirm(`确认记账：卖出「${p.name}」${fmtMoney(amt)}？\n资产/股数自动减少，所得进入股票现金池。`)) return;
+        logOp('减仓记账：' + p.name);
         const r = applySellToPool(p.id, amt);
         recordDailySnapshot();            // 资产结构变了 → 覆盖今日快照
         alert(`已记账：${fmtMoney(amt)} 计入「${poolName(r.ccy)}」（当前余额 ${fmtOrig(r.pool, r.ccy)}）。`
@@ -4007,6 +4041,7 @@ VIEWS.settings = function (app) {
     const snap = (STATE.snapshots || []).find(sn => sn.date === d);
     if (!snap) return;
     if (!confirm(`用 ${d} 的快照明细覆盖当前资产与持仓？（快照历史不受影响）`)) return;
+    logOp('恢复到快照 ' + d + '（覆盖前）');
     if (restoreFromSnapshot(snap)) {
       await pushCloudNow();
       alert(`已恢复到 ${d}`);
@@ -4017,6 +4052,7 @@ VIEWS.settings = function (app) {
   };
   dataCard.querySelector('#dm-seed').onclick = () => {
     if (!confirm('用 7/19 资产汇总表覆盖当前全部数据？')) return;
+    logOp('载入 7/19 初始数据（覆盖前）');
     STATE = buildSeedState(); saveState(); render();
   };
 
@@ -4035,6 +4071,7 @@ VIEWS.settings = function (app) {
     reader.onload = () => {
       try {
         const imported = JSON.parse(reader.result);
+        logOp('导入数据（覆盖前）');
         // 全量恢复（与导出对称）：forecasts/corrCache/macro 一并还原，缺失字段走默认值
         STATE = applyStateDefaults({
           settings: imported.settings,
@@ -4052,11 +4089,36 @@ VIEWS.settings = function (app) {
     reader.readAsText(file);
   };
   dataCard.querySelector('#dm-clear').onclick = () => {
-    if (!confirm('确定清空全部持仓、资产与设置？此操作不可撤销。')) return;
+    if (!confirm('确定清空全部持仓、资产与设置？（清空前会记入「修改日志」，可从那里还原资产/持仓）')) return;
+    logOp('清空全部数据（覆盖前）');
     STATE = buildEmptyState();
     saveState();
     render();
   };
+
+  // —— 修改日志 · 一键还原（误删/录错的后悔药）——
+  const oplog = loadOplog();
+  const fmtTs = ts => { const d = new Date(ts); return `${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`; };
+  const logCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('book')} 修改日志 · 一键还原</h3>
+    <p class="hint">每次<strong>增删改资产/持仓、赎回记账、出入金、导入/清空</strong>前，系统自动留存当时的资产+持仓+出入金副本（本设备保存最近 ${oplog.length ? oplog.length + '/' : ''}30 条）。误删或录错 → 点「还原」回到<strong>该操作之前</strong>的状态。还原只覆盖资产/持仓/出入金，不动设置、快照历史与评估缓存。</p>
+    ${oplog.length ? `<div class="table-scroll"><table class="stack-mobile">
+      <thead><tr><th>时间</th><th>操作</th><th class="num">当时资产/持仓数</th><th></th></tr></thead>
+      <tbody>${oplog.map((e, i) => `<tr>
+        <td style="white-space:nowrap">${fmtTs(e.ts)}</td>
+        <td>${escapeHtml(e.label || '数据修改')}</td>
+        <td class="num">${(e.assets || []).length} / ${(e.positions || []).length}</td>
+        <td class="num"><button class="btn secondary small" data-oprestore="${i}">还原到此前</button></td>
+      </tr>`).join('')}</tbody></table></div>`
+    : '<p class="inline-note">暂无记录。之后每次增删改资产/持仓都会自动留底。</p>'}</div>`);
+  logCard.querySelectorAll('[data-oprestore]').forEach(b => b.onclick = () => {
+    const i = +b.dataset.oprestore;
+    const e = oplog[i];
+    if (!e) return;
+    if (!confirm(`还原到「${e.label}」执行之前（${fmtTs(e.ts)}）？\n将用当时的副本覆盖当前 资产(${(e.assets||[]).length}) / 持仓(${(e.positions||[]).length}) / 出入金(${(e.cashflows||[]).length}) ——此时间点之后的相关修改都会被撤销。\n（还原本身也会先留底，可再次反悔。）`)) return;
+    logOp('还原前留底（还原到 ' + fmtTs(e.ts) + '「' + (e.label || '') + '」之前）');
+    if (restoreOp(e)) { alert('已还原。'); render(); }
+  });
+  app.appendChild(logCard);
 };
 
 /* =========================================================================
@@ -4258,6 +4320,7 @@ VIEWS.trends = function (app) {
       : '<tbody><tr><td class="inline-note" style="padding:10px">暂无登记。发生过转入/转出就记一笔，TWR 才是你的真实收益率。</td></tr></tbody>';
     t.querySelectorAll('[data-cfdel]').forEach(b => b.onclick = async () => {
       if (!confirm('删除这条出入金记录？（只影响收益率口径，不动资产）')) return;
+      logOp('删除出入金记录');
       STATE.cashflows = (STATE.cashflows || []).filter(c => c.id !== b.dataset.cfdel);
       saveState(); await pushCloudNow(); render();
     });
@@ -4268,6 +4331,7 @@ VIEWS.trends = function (app) {
     const note = cfCard.querySelector('#cf-note').value.trim();
     if (!date) { alert('请选择日期'); return; }
     if (!(isFinite(amount) && amount !== 0)) { alert('请填写非零金额（正=入金，负=出金）'); return; }
+    logOp('登记出入金：' + date + ' ' + fmtMoney(amount));
     (STATE.cashflows = STATE.cashflows || []).push({ id: uid(), date, amount, note });
     saveState(); await pushCloudNow(); render();
   };
@@ -5245,6 +5309,7 @@ VIEWS.portfolio = function (app) {
     if (rateStr !== '') asset.annualRate = num(rateStr) / 100;
     if (pnlStr !== '') asset.pnl = num(pnlStr);
     if (rpnlStr !== '') asset.realizedPnl = num(rpnlStr);
+    logOp((editId ? '编辑资产：' : '新增资产：') + name);
     if (editId) {
       const i = STATE.assets.findIndex(x => x.id === editId);
       // 合并保存（不整体替换）：表单只覆盖它能编辑的字段，保留 shares / lastPx /
@@ -5282,6 +5347,7 @@ VIEWS.portfolio = function (app) {
       ? `「${a.name}」在「全部持仓/资产」和「当前持仓」里都有。\n「确定」= 两处一起删除；「取消」= 不删。`
       : '删除这笔资产？';
     if (!confirm(msg)) return;
+    logOp('删除资产：' + ((a && a.name) || '未知'));
     STATE.assets = STATE.assets.filter(x => x.id !== b.dataset.adel);
     if (linkedPos) STATE.positions = (STATE.positions || []).filter(x => x.id !== linkedPos.id);
     saveState(); render();
