@@ -5028,11 +5028,12 @@ VIEWS.portfolio = function (app) {
   });
   const usdCny = byCur['USD'] || 0;
   const pct = v => (v / total * 100);
-  let interestTotal = 0, pnlTotal = 0;
+  let interestTotal = 0, pnlTotal = 0, realizedTotal = 0;
   assets.forEach(a => {
     const inc = assetIncome(a, fx);
     if (inc.kind === 'interest') interestTotal += inc.value;
     else if (inc.value != null) pnlTotal += inc.value;
+    if (a.realizedPnl != null) realizedTotal += num(a.realizedPnl);
   });
 
   // 汇率控制条（美元/人民币中间价，每日更新）
@@ -5067,7 +5068,7 @@ VIEWS.portfolio = function (app) {
         <div class="sub">美元 3% · 人民币实际</div></div>
       <div class="stat"><div class="label">股票/基金/黄金浮盈亏</div>
         <div class="value" style="color:${pnlTotal>=0?'var(--green-ink)':'var(--red-ink)'};font-size:22px">${pnlTotal>=0?'+':''}${fmtMoney(pnlTotal)}</div>
-        <div class="sub">有盈亏记录部分合计</div></div>
+        <div class="sub">有盈亏记录部分合计${realizedTotal !== 0 ? ` · 另累计已实现 ${realizedTotal>=0?'+':''}${fmtMoney(realizedTotal)}` : ''}</div></div>
     </div>
   `));
 
@@ -5118,6 +5119,11 @@ VIEWS.portfolio = function (app) {
     } else if (inc.value != null) {
       incCell = `<span style="color:${inc.value>=0?'var(--green-ink)':'var(--red-ink)'}">${inc.value>=0?'+':''}${fmtMoney(inc.value)}</span>`;
     } else { incCell = '—'; }
+    // 累计已实现收益（赎回/卖出落袋的历史战果）：独立于上面的"未来估计/浮盈"，有则显示
+    if (a.realizedPnl != null && num(a.realizedPnl) !== 0) {
+      const rp = num(a.realizedPnl);
+      incCell += `<br><span class="inline-note" style="color:${rp>=0?'var(--green-ink)':'var(--red-ink)'}" title="历史赎回/卖出已落袋的累计收益，与当前持仓的估算无关">已实现 ${rp>=0?'+':''}${fmtMoney(rp)}</span>`;
+    }
     let dayCell = '—';
     const pxStale = a.pxDate && a.pxDate !== todayStr();   // 价格不是今天刷的：旧涨跌不冒充「今日」
     if (a.dayPct != null && isFinite(a.dayPct) && !pxStale) {
@@ -5207,6 +5213,9 @@ VIEWS.portfolio = function (app) {
       <div class="field"><label>平台/账户（可选）</label><input id="af-platform" placeholder="如 招商银行 基金"/></div>
       <div class="field"><label>备注（可选）</label><input id="af-note"/></div>
     </div>
+    <div class="grid grid-3">
+      <div class="field"><label>累计已实现收益 ¥（赎回/卖出落袋，可选）</label><input id="af-rpnl" type="number" step="1" placeholder="如 326——历史赎回赚到手的部分"/></div>
+    </div>
     <button class="btn" id="af-add">${icon('plus')} 添加资产</button>
     <input type="hidden" id="af-edit"/>
     <p class="inline-note" style="margin-top:10px">提示：股票的<strong>买卖请在「持仓」页改持股数</strong>——释放/占用的资金会自动结算到对应现金池（A股 → 股票现金池，美股 → 美股现金池），并同步回写这里的资产金额。</p>
@@ -5222,7 +5231,11 @@ VIEWS.portfolio = function (app) {
     const cat = $a('#af-cat').value;
     const rateStr = $a('#af-rate').value.trim();
     const pnlStr = $a('#af-pnl').value.trim();
+    const rpnlStr = $a('#af-rpnl').value.trim();
     const editId = $a('#af-edit').value;
+    // 赎回检测：编辑理财/存款且金额减少 → 保存后提示把这笔钱结转进现金池，防"钱凭空消失"
+    const oldAsset = editId ? STATE.assets.find(x => x.id === editId) : null;
+    const oldAmount = oldAsset ? num(oldAsset.amount) : 0;
     const asset = {
       id: editId || uid(), name, code: $a('#af-code').value.trim(),
       platform: $a('#af-platform').value.trim(), category: cat, currency: cur,
@@ -5231,6 +5244,7 @@ VIEWS.portfolio = function (app) {
     };
     if (rateStr !== '') asset.annualRate = num(rateStr) / 100;
     if (pnlStr !== '') asset.pnl = num(pnlStr);
+    if (rpnlStr !== '') asset.realizedPnl = num(rpnlStr);
     if (editId) {
       const i = STATE.assets.findIndex(x => x.id === editId);
       // 合并保存（不整体替换）：表单只覆盖它能编辑的字段，保留 shares / lastPx /
@@ -5250,6 +5264,14 @@ VIEWS.portfolio = function (app) {
         }
       }
     } else { STATE.assets.push(asset); }
+    // 理财/存款赎回结转：金额减少的差额提示一键入现金池（总资产守恒：理财↓＝现金↑）。
+    // 拒绝则视为钱已离开组合，提醒去「出入金登记」，否则趋势/归因会把它当亏损。
+    if (editId && (cat === '理财(QDII)' || cat === '定期存款') && oldAmount - amount > 1) {
+      const redeemed = oldAmount - amount;                  // 原币
+      if (confirm(`「${name}」金额减少了 ${fmtOrig(redeemed, cur)}（赎回/到期？）。\n「确定」= 自动把这笔钱计入「${poolName(cur)}」（总资产守恒）；\n「取消」= 不入池——若这笔钱已转出组合，请到「资产趋势 → 出入金登记」记一笔出金，否则趋势会把它当亏损。`)) {
+        settleToPool(redeemed, cur, name + ' 赎回');
+      }
+    }
     saveState(); render();
   };
   holdScroll.querySelectorAll('[data-adel]').forEach(b => b.onclick = () => {
@@ -5272,6 +5294,7 @@ VIEWS.portfolio = function (app) {
     $a('#af-amount').value = a.amount != null ? a.amount : '';
     $a('#af-rate').value = a.annualRate != null ? (a.annualRate * 100) : '';
     $a('#af-pnl').value = a.pnl != null ? a.pnl : '';
+    $a('#af-rpnl').value = a.realizedPnl != null ? a.realizedPnl : '';
     $a('#af-code').value = a.code || '';
     $a('#af-platform').value = a.platform || '';
     $a('#af-note').value = a.note || '';
