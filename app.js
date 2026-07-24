@@ -703,8 +703,12 @@ function dayPnlCny(a, fx) {
     const soldFromBuys = Math.max(0, totalSell - Math.min(totalSell, sod));
     if (soldFromBuys > 0) pnl -= soldFromBuys * (px - avgBuy);
     if (sod === 0 && !trades.length) {
-      // 开盘持股为 0（当日新建仓：sodShares 记录，或历史快照查无此标的）、无当日交易明细——
-      // 整仓都是今天买的，全部浮盈亏都发生在今天：今日盈亏 = 总浮盈亏（现价−成本），而非 0、也非全天涨幅。没有成本才回退 0。
+      // 开盘持股为 0 且无当日交易。要区分两种情形：
+      //  · 真·当日新建仓（sodShares 明确记 0，或历史快照查无此标的）→ 今日盈亏 = 总浮盈亏（现价−成本）
+      //  · 老资产今天才首次校准份额（历史快照里有它、只是当时没记 shares）→ 浮盈亏是长期累计的，
+      //    绝不能全计为当日 → 按市值×全天涨幅估算
+      const newToday = (a.sodDate === todayStr() && a.sodShares != null) ? num(a.sodShares) === 0 : !heldBeforeToday(a);
+      if (!newToday) return assetCny(a, fx) * dp / (100 + dp);
       return a.pnl != null ? num(a.pnl) : 0;
     }
     return pnl * cf;
@@ -739,7 +743,10 @@ function dayPnlPct(a, fx) {
   }
   const sod = trades.length ? Math.max(0, num(a.shares) + totalSell - totalBuy) : sodSharesOf(a);
   if (sod === 0 && !trades.length) {
-    // 开盘持股为 0（当日新建仓）：收益率 = 总浮盈亏 ÷ 成本（成本 = 市值 − 浮盈亏）
+    // 与 dayPnlCny 同口径：老资产今天才首次校准份额 → 累计浮盈亏不是当日的，按全天涨幅
+    const newToday = (a.sodDate === todayStr() && a.sodShares != null) ? num(a.sodShares) === 0 : !heldBeforeToday(a);
+    if (!newToday) return dp;
+    // 真·当日新建仓：收益率 = 总浮盈亏 ÷ 成本（成本 = 市值 − 浮盈亏）
     if (a.pnl == null) return dp;
     const costCny = num(a.amount) * cf - num(a.pnl);
     return costCny > 0 ? num(a.pnl) / costCny * 100 : dp;
@@ -997,7 +1004,23 @@ function uid() {
    每日资产快照（以 7/19 为起点）→ 支撑「资产趋势」按月/季/年查看
    ------------------------------------------------------------------------- */
 function todayStr() {
-  const d = new Date();
+  // 统一按东八区取日期（服务端快照 cron 也是东八区）：人在海外/跨时区打开页面时，
+  // 快照日期、当日交易、pxDate 等口径与云端一致，不再产生错位或重复快照
+  try {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
+  } catch (e) {
+    const d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+}
+// 最近一个交易日（东八区口径，仅剔除周六日）：周末刷新行情时给 pxDate 用，
+// 避免周六把周五的涨跌盖成「今日盈亏」
+function lastTradingDayStr() {
+  const t = todayStr();
+  const d = new Date(t + 'T00:00:00');
+  const back = d.getDay() === 6 ? 1 : d.getDay() === 0 ? 2 : 0;
+  if (!back) return t;
+  d.setDate(d.getDate() - back);
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
 
@@ -1793,7 +1816,7 @@ function buildLineChart(points, opts) {
   const vals = points.map(p => p.value);
   extras.forEach(e => e.points.forEach(p => { if (isFinite(p.value)) vals.push(p.value); }));
   let min = Math.min(...vals), max = Math.max(...vals);
-  if (min === max) { min = min * 0.98; max = max * 1.02 || 1; }
+  if (min === max) { const d0 = Math.abs(min) * 0.02 || 1; min -= d0; max += d0; }   // 用绝对偏移撑开区间：负值序列不会 min/max 翻转
   const pad = (max - min) * 0.12; min -= pad; max += pad;
   const n = points.length;
   const X = i => padL + (n === 1 ? iw / 2 : iw * i / (n - 1));
@@ -1914,7 +1937,7 @@ function parseTencent(text, opts) {
   if (opts.us) {                                       // 美股名称取靠后「含空格的字母」字段（如 "Trip Com Group Ltd"）
     name = (p.find(f => /[A-Za-z]/.test(f) && /\s/.test(f) && f.trim().length > 3) || p[2] || '').trim();
   }
-  if (!name || !isFinite(price)) throw new Error('解析失败');
+  if (!name || !(price > 0)) throw new Error('解析失败');   // 现价/昨收都为 0（停牌坏数据）视为失败，不能返回 price=0
   return { name, price, changePct: isFinite(changePct) ? changePct : null, prevClose: prevClose > 0 ? prevClose : null };
 }
 
@@ -1936,7 +1959,7 @@ function parseSina(text, opts) {
     if (!(price > 0)) price = prevClose;
     if (prevClose > 0) changePct = (price - prevClose) / prevClose * 100;
   }
-  if (!name || !isFinite(price)) throw new Error('解析失败');
+  if (!name || !(price > 0)) throw new Error('解析失败');   // 同 parseTencent：坏数据不能返回 price=0
   return { name, price, changePct: isFinite(changePct) ? changePct : null, prevClose: prevClose > 0 ? prevClose : null };
 }
 
@@ -2059,7 +2082,9 @@ function assetFetchable(a) {
 }
 
 async function refreshOneAsset(a, fx) {
-  let px = null, dayPct = null, pxDateVal = todayStr();
+  // 默认盖「最近交易日」而非今天：周末刷新拿到的是周五收盘/涨跌，
+  // pxDate 记周五 → dayPnl 判定「非今日价格」不计当日盈亏（基金分支会再覆盖为净值日）
+  let px = null, dayPct = null, pxDateVal = lastTradingDayStr();
   if (a.category === '黄金') {
     const g = await fetchGold(fx); px = g.px; dayPct = g.dayPct;   // 金价（元/克）+ 当日涨跌
   } else if (a.category === '基金') {
@@ -2390,7 +2415,12 @@ VIEWS.positions = function (app) {
     // 持股数变动 → 现金自动结算：差额为正（净卖出）= 盈余计入现金池；
     // 差额为负（净买入）= 动用现金。A股动人民币现金池，美股动美元现金池。
     {
-      const settlePx = price > 0 ? price : (oldPos && num(oldPos.price) > 0 ? num(oldPos.price) : 0);
+      // 与上方资产记账同价：现价为空时优先用同代码资产的 lastPx（资产就按它记的账），
+      // 再退回旧持仓价——保证「资产金额变动」和「现金池结算」两口径一致
+      const la = pos.code ? (STATE.assets || []).find(x => x.code === pos.code) : null;
+      const settlePx = price > 0 ? price
+        : (la && num(la.lastPx) > 0 ? num(la.lastPx)
+        : (oldPos && num(oldPos.price) > 0 ? num(oldPos.price) : 0));
       const prev = previewSharesSettlement(oldShares, shares, settlePx, pos.code);
       if (prev) {
         const after = prev.poolBal - prev.deltaOrig;
@@ -5246,10 +5276,22 @@ VIEWS.portfolio = function (app) {
     <p class="hint">组合会随时间变化——可随时在下方「管理资产」增删改。<strong>按住行可拖拽排序</strong>（顺序自动保存）；未拖拽时默认按大类排序：股票 → 基金 → 理财 → 黄金 → 现金。
       ${fetchableCount ? `<br>其中 <strong>${fetchableCount}</strong> 只基金/股票可自动更新（打开页面自动刷新，最近 <span id="pf-lastref">${lastRefStr}</span>）。理财为银行自有产品无公开接口，请手动维护。` : ''}</p></div>`);
   const orderMap = new Map((STATE.assetOrder || []).map((id, i) => [id, i]));
+  // 拖拽过之后新增的资产：插到自定义顺序里「同大类最后一个」之后（而不是一律沉底），
+  // 同大类还没有已排序资产时才按大类排在末尾
+  const lastOfClass = {};
+  assets.forEach(x => {
+    if (!orderMap.has(x.id)) return;
+    const r = classRank(x.category);
+    lastOfClass[r] = Math.max(lastOfClass[r] != null ? lastOfClass[r] : -1, orderMap.get(x.id));
+  });
+  const orderKeyOf = a => {
+    if (orderMap.has(a.id)) return orderMap.get(a.id);
+    const r = classRank(a.category);
+    return lastOfClass[r] != null ? lastOfClass[r] + 0.5 : 1e9 + r;
+  };
   const sorted = assets.slice().sort((a, b) => {
-    const ia = orderMap.has(a.id) ? orderMap.get(a.id) : Infinity;
-    const ib = orderMap.has(b.id) ? orderMap.get(b.id) : Infinity;
-    if (ia !== ib) return ia - ib;                 // 用户拖拽过的自定义顺序优先
+    const ia = orderKeyOf(a), ib = orderKeyOf(b);
+    if (ia !== ib) return ia - ib;                 // 用户拖拽过的自定义顺序优先，新资产插同类之后
     return classRank(a.category) - classRank(b.category) || cnyOf(b) - cnyOf(a);
   });
   const hrows = sorted.map(a => {
