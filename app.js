@@ -253,6 +253,139 @@ async function fetchUsKlinesEM(code, count = 160) {
   }
   throw new Error('美股日K获取失败（东财 105/106/107 均无该代码）');
 }
+/* -------------------------------------------------------------------------
+   技术面客观读数：K线（含成交量）→ 均线/MACD/RSI/支撑阻力 → 0-10 技术面评分。
+   刻意用【确定性公式】而非 LLM 打分：同样的行情永远得同样的分，可复现、可核对。
+   （让模型"看图给分"会出现同输入两次不同分——凯利模块已验证过这个坑。）
+   ------------------------------------------------------------------------- */
+async function fetchTechKlines(code, count = 250) {
+  if (isUsCode(code)) {
+    const sym = String(code).toUpperCase().replace(/\s+/g, '');
+    const end = todayStr().replace(/-/g, '');
+    const d0 = new Date(todayStr() + 'T00:00:00'); d0.setDate(d0.getDate() - Math.ceil(count * 2.2));
+    const beg = `${d0.getFullYear()}${String(d0.getMonth() + 1).padStart(2, '0')}${String(d0.getDate()).padStart(2, '0')}`;
+    for (const mkt of [105, 106, 107]) {
+      try {
+        const res = await fetch('/api/uskline?secid=' + mkt + '.' + encodeURIComponent(sym) + '&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f53,f56&klt=101&fqt=1&beg=' + beg + '&end=' + end, { cache: 'no-store' });
+        if (!res.ok) continue;
+        const j = await res.json();
+        const list = j && j.data && j.data.klines;
+        if (!Array.isArray(list) || !list.length) continue;
+        const out = list.map(x => { const p = String(x).split(','); return { date: p[0], close: parseFloat(p[1]), vol: parseFloat(p[2]) }; })
+          .filter(x => x.date && isFinite(x.close) && x.close > 0);
+        if (out.length) return out;
+      } catch (e) { /* 试下一个市场 */ }
+    }
+    throw new Error('美股日K获取失败');
+  }
+  const sym = klineSymbol(code);
+  if (!sym) throw new Error('该代码无日K（场外基金/无代码）');
+  const res = await fetch('/api/kline?param=' + encodeURIComponent(sym + ',day,,,' + count + ',qfq'), { cache: 'no-store' });
+  if (!res.ok) throw new Error('接口返回 ' + res.status);
+  const node = (await res.json()).data[sym];
+  const arr = node && (node.qfqday || node.day);
+  if (!Array.isArray(arr) || !arr.length) throw new Error('无K线数据');
+  // 腾讯 qfqday 行：[日期, 开, 收, 高, 低, 量]
+  return arr.map(r => ({ date: r[0], close: parseFloat(r[2]), vol: parseFloat(r[5]) }))
+    .filter(x => isFinite(x.close) && x.close > 0);
+}
+function smaAt(arr, n, i) {
+  if (i + 1 < n) return null;
+  let s = 0; for (let k = i - n + 1; k <= i; k++) s += arr[k];
+  return s / n;
+}
+function emaSeries(arr, n) {
+  const k = 2 / (n + 1), out = [];
+  let prev = arr[0];
+  arr.forEach((v, i) => { prev = i === 0 ? v : v * k + prev * (1 - k); out.push(prev); });
+  return out;
+}
+function macdOf(closes) {
+  if (closes.length < 35) return null;
+  const e12 = emaSeries(closes, 12), e26 = emaSeries(closes, 26);
+  const dif = closes.map((_, i) => e12[i] - e26[i]);
+  const dea = emaSeries(dif, 9);
+  const i = closes.length - 1;
+  return { dif: dif[i], dea: dea[i], hist: (dif[i] - dea[i]) * 2, difPrev: dif[i - 1], deaPrev: dea[i - 1] };
+}
+function rsiOf(closes, n) {
+  n = n || 14;
+  if (closes.length < n + 1) return null;
+  let g = 0, l = 0;
+  for (let i = 1; i <= n; i++) { const d = closes[i] - closes[i - 1]; if (d >= 0) g += d; else l -= d; }
+  let ag = g / n, al = l / n;
+  for (let i = n + 1; i < closes.length; i++) {
+    const d = closes[i] - closes[i - 1];
+    ag = (ag * (n - 1) + Math.max(0, d)) / n;
+    al = (al * (n - 1) + Math.max(0, -d)) / n;
+  }
+  if (al === 0) return 100;
+  return 100 - 100 / (1 + ag / al);
+}
+// 0-10 技术面评分 + 全部中间读数（每一分都能追到出处）
+function techScore(rows) {
+  const closes = rows.map(r => r.close);
+  const n = closes.length;
+  if (n < 60) return { ok: false, err: '样本不足 60 个交易日（' + n + '）' };
+  const i = n - 1, px = closes[i];
+  const ma = {};
+  [5, 10, 20, 60].forEach(p => { ma[p] = smaAt(closes, p, i); });
+  if (n >= 120) ma[120] = smaAt(closes, 120, i);
+  const md = macdOf(closes), rsi = rsiOf(closes, 14);
+  const parts = [];
+  let score = 0;
+  // ① 均线排列 0-3
+  const arr = [ma[5], ma[10], ma[20], ma[60]];
+  let up = 0, dn = 0;
+  for (let k = 0; k < arr.length - 1; k++) { if (arr[k] > arr[k + 1]) up++; else dn++; }
+  const maPt = up === 3 ? 3 : up === 2 ? 2 : up === 1 ? 1 : 0;
+  score += maPt;
+  parts.push({ k: '均线排列', v: up === 3 ? '完全多头排列(MA5>10>20>60)' : dn === 3 ? '完全空头排列' : `部分交织(${up}/3 顺序向上)`, p: maPt, max: 3 });
+  // ② 价格站位 0-2
+  const above = [ma[20], ma[60]].filter(v => v != null && px > v).length;
+  score += above;
+  parts.push({ k: '价格站位', v: above === 2 ? '同时站上 MA20/MA60' : above === 1 ? '仅站上其一' : '跌破 MA20 与 MA60', p: above, max: 2 });
+  // ③ MACD 0-2.5
+  let mPt = 0, mTxt = '数据不足';
+  if (md) {
+    const cross = md.dif > md.dea;
+    mPt = cross && md.dif > 0 ? 2.5 : cross ? 1.5 : md.dif > 0 ? 1 : 0;
+    mTxt = `DIF ${md.dif.toFixed(3)} / DEA ${md.dea.toFixed(3)}（${cross ? '金叉状态' : '死叉状态'}，${md.dif > 0 ? '零轴上' : '零轴下'}）`;
+  }
+  score += mPt;
+  parts.push({ k: 'MACD', v: mTxt, p: mPt, max: 2.5 });
+  // ④ RSI 0-1.5
+  let rPt = 0, rTxt = '数据不足';
+  if (rsi != null) {
+    rPt = rsi >= 50 && rsi <= 70 ? 1.5 : (rsi > 70 && rsi <= 80) ? 1 : rsi > 80 ? 0.3 : (rsi >= 40 ? 1 : rsi >= 30 ? 0.5 : 0.8);
+    rTxt = rsi.toFixed(1) + (rsi > 80 ? '（超买）' : rsi < 30 ? '（超卖）' : rsi >= 50 ? '（强势区）' : '（弱势区）');
+  }
+  score += rPt;
+  parts.push({ k: 'RSI(14)', v: rTxt, p: rPt, max: 1.5 });
+  // ⑤ 中期动量 0-1（60日涨跌）
+  const ret60 = closes[i - 59] > 0 ? (px / closes[i - 59] - 1) * 100 : null;
+  const dPt = ret60 == null ? 0 : ret60 > 10 ? 1 : ret60 > 0 ? 0.7 : ret60 > -10 ? 0.3 : 0;
+  score += dPt;
+  parts.push({ k: '60日动量', v: ret60 == null ? '—' : (ret60 >= 0 ? '+' : '') + ret60.toFixed(1) + '%', p: dPt, max: 1 });
+  // 量价（有量才算，作为提示不计分——美股源成交量口径不一，不进分数保证可比）
+  let volNote = '';
+  const vols = rows.map(r => r.vol).filter(v => isFinite(v) && v > 0);
+  if (vols.length >= 60) {
+    const v5 = vols.slice(-5).reduce((a, b) => a + b, 0) / 5, v60 = vols.slice(-60).reduce((a, b) => a + b, 0) / 60;
+    const ratio = v60 > 0 ? v5 / v60 : null;
+    if (ratio != null) volNote = `近5日均量 / 60日均量 = ${ratio.toFixed(2)}` + (ratio > 1.5 ? '（放量）' : ratio < 0.7 ? '（缩量）' : '（平稳）')
+      + (ret60 != null && ((ret60 > 0 && ratio < 0.7) || (ret60 < 0 && ratio > 1.5)) ? ' ⚠ 量价背离' : '');
+  }
+  // 支撑/阻力：近 60 日低/高点（给止损价参考）
+  const win = closes.slice(-60);
+  const low60 = Math.min.apply(null, win), high60 = Math.max.apply(null, win);
+  return {
+    ok: true, score: Math.round(score * 10) / 10, parts, px, ma, rsi, macd: md,
+    low60, high60, volNote, date: rows[i].date, bars: n,
+    stopHint: Math.round(low60 * 0.97 * 100) / 100,   // 支撑下方 3% 作技术止损参考
+  };
+}
+
 /* 基准指数库：每个基准配多个候选源（腾讯 fqkline / 东财 push2his），逐个尝试直到取到足够长的序列。
    指数用 fqt=0（不复权；指数本无复权，个别源对 fqt=1 会返回空——原标普500 拉不到的已知成因之一）。
    取不到时把每个候选源的原始返回收进 diag，供页面「基准诊断」展示并据此校准 secid。 */
@@ -4161,6 +4294,11 @@ VIEWS.thesis = function (app) {
       <div class="field"><label>建卡日期</label><input id="th-date" type="date" value="${todayStr()}"/></div>
       <div class="field"></div>
     </div>
+    <div class="row" style="gap:8px;flex-wrap:wrap;margin:4px 0 8px">
+      <button class="btn secondary small" id="th-tech" style="flex:0 0 auto">${icon('calc')} 自动算技术面评分（真实K线·纯公式）</button>
+      <span class="inline-note" style="align-self:center">技术面可算，故不由你估；基本面/消息面留手填——见下方说明</span>
+    </div>
+    <div id="th-tech-out"></div>
     <div class="grid grid-2" id="th-scores"></div>
     <div id="th-gates"></div>
     <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px">
@@ -4174,11 +4312,21 @@ VIEWS.thesis = function (app) {
 
   // 四维评分（只记录，不做加权裁决——加权打分是假精确）
   const scoreBox = formCard.querySelector('#th-scores');
+  const SCORE_HOW = { tech: '点上方按钮自动算', fund: '手填（见下方说明）', news: '手填（见下方说明）', senti: '手填 · 可参考「市场指标→资金流向」' };
   scoreBox.innerHTML = Object.keys(SCORE_ANCHORS).map(k => {
     const [label, anchor] = SCORE_ANCHORS[k];
-    return `<div class="field"><label>${label}评分 0–10 <span class="inline-note" title="${escapeHtml(anchor)}">（锚点↗悬停）</span></label>
-      <input data-sc="${k}" type="number" min="0" max="10" step="1" placeholder="未评"/></div>`;
+    return `<div class="field"><label>${label}评分 0–10 <span class="inline-note" title="${escapeHtml(anchor)}">（锚点↗悬停 · ${SCORE_HOW[k]}）</span></label>
+      <input data-sc="${k}" type="number" min="0" max="10" step="0.1" placeholder="未评"/></div>`;
   }).join('');
+  formCard.querySelector('#th-gates').insertAdjacentHTML('beforebegin',
+    `<details style="margin:6px 0"><summary style="cursor:pointer;font-size:12px;color:var(--muted);list-style:revert">为什么不用 AI 自动打这四个分？— 点击展开</summary>
+      <div style="font-size:12.5px;line-height:1.6;margin-top:6px">
+      <p style="margin:0 0 6px"><strong>技术面：已自动算</strong>，但用的是<strong>公式不是模型</strong>。均线排列、MACD、RSI、动量都有确定算法，同样的行情永远得同样的分——让模型"看图给分"反而会同输入两次不同分（凯利模块踩过这个坑）。上方按钮会列出每一分的出处，你可以逐项核对。</p>
+      <p style="margin:0 0 6px"><strong>基本面：手填。</strong>ROE、毛利率、估值历史分位这些需要财报数据库，本工具的免key数据源取不到。没有数据的情况下让模型打分，它只会<strong>编一个看起来合理的数字</strong>——对认真投资是负资产。宁可空着。</p>
+      <p style="margin:0 0 6px"><strong>消息面：手填。</strong>同理，且更危险——模型有训练截止日，问它"最近有什么消息"会自信地给出过时或虚构的事件。你自己看到的公告和研报才是可靠输入。</p>
+      <p style="margin:0"><strong>资金面：半自动。</strong>「市场指标 → 资金流向」已经拉了行业主力资金/南向/两融的真实数据，可以据此打分；个股级别的龙虎榜、北向持股本工具暂无可靠免key源。</p>
+      <p style="margin:6px 0 0;color:var(--muted)">那套方法论用 4 个 agent 并行打分，看着更"智能"，但它的前提是接了付费金融数据库（neodata）。<strong>没有数据的 agent 不会产生信息，只会产生自信。</strong>这四个分只做记录、不参与任何自动裁决，所以空着几项完全不影响决策卡的核心功能。</p>
+      </div></details>`);
 
   const $f = sel => formCard.querySelector(sel);
   // 三道闸预览：入场/止损变动时实时算
@@ -4187,7 +4335,8 @@ VIEWS.thesis = function (app) {
     const g = sizingGates(entry, stop, total, null);
     const box = $f('#th-gates');
     if (!(g.byRisk > 0)) {
-      box.innerHTML = `<p class="inline-note">填入<strong>入场价</strong>与<strong>止损价</strong>（止损&lt;入场）即可算出「这笔最多能买多少」。</p>`;
+      box.innerHTML = `<p class="inline-note">${!(total > 0) ? '总资产为 0，无法反推仓位（先到「投资组合」录入资产）。'
+        : '填入<strong>入场价</strong>与<strong>止损价</strong>（止损&lt;入场）即可算出「这笔最多能买多少」——点上方「自动算技术面评分」会顺带给出技术止损参考位。'}</p>`;
       return;
     }
     const bindName = { risk: '风险预算', layer: '分层剩余', cap: '单标的上限' }[g.binding] || '';
@@ -4201,13 +4350,49 @@ VIEWS.thesis = function (app) {
   ['#th-entry', '#th-stop'].forEach(s => { $f(s).oninput = drawGates; });
   drawGates();
 
+  // 自动技术面评分：拉真实K线 → 确定性公式 → 列出每一分的出处，并给技术止损参考位
+  $f('#th-tech').onclick = async () => {
+    const k = $f('#th-pick').value;
+    if (!k) { alert('请先选择标的'); return; }
+    const a = cands.find(x => thesisKeyOf(x) === k);
+    const code = (a && a.code) || '';
+    const out = $f('#th-tech-out'), btn = $f('#th-tech');
+    if (!code) { out.innerHTML = '<p class="inline-note">该标的无代码，无法取K线。</p>'; return; }
+    btn.disabled = true; const ob = btn.innerHTML; btn.innerHTML = icon('refresh', 'spin') + ' 计算中…';
+    out.innerHTML = '<div class="inline-note">正在拉取日K并计算…</div>';
+    try {
+      const rows = await fetchTechKlines(code);
+      const t = techScore(rows);
+      if (!t.ok) { out.innerHTML = `<div class="alert amber" style="margin:8px 0"><span class="icon">${icon('warn')}</span><div>${escapeHtml(t.err)}</div></div>`; return; }
+      const sc = scoreBox.querySelector('[data-sc="tech"]');
+      if (sc) sc.value = t.score;
+      // 入场价空着（该标的还没刷过估值）→ 用刚取到的最新收盘价补上，三道闸才算得出来
+      let entryNote = '';
+      if (!(num($f('#th-entry').value) > 0)) { $f('#th-entry').value = t.px; entryNote = `（入场价空着，已用最新收盘价 ${t.px} 填入，可自行改成你的实际成本）`; }
+      const rows2 = t.parts.map(p => `<tr><td>${escapeHtml(p.k)}</td><td>${escapeHtml(p.v)}</td><td class="num">${p.p} / ${p.max}</td></tr>`).join('');
+      out.innerHTML = `<div class="alert blue" style="margin:8px 0"><span class="icon">${icon('calc')}</span><div>
+        <strong>技术面评分 ${t.score} / 10</strong>（${escapeHtml(t.date)} 收盘，${t.bars} 根日K，现价 ${t.px}）——已填入下方。${escapeHtml(entryNote)}每一分的出处：
+        <div class="table-scroll" style="margin-top:6px"><table><thead><tr><th>项</th><th>读数</th><th class="num">得分</th></tr></thead><tbody>${rows2}</tbody></table></div>
+        <div class="inline-note" style="margin-top:6px">均线：${[5, 10, 20, 60, 120].filter(p => t.ma[p] != null).map(p => 'MA' + p + ' ' + t.ma[p].toFixed(2)).join(' · ')}
+        ${t.volNote ? '<br>量能：' + escapeHtml(t.volNote) : ''}
+        <br>近60日区间：低 ${t.low60.toFixed(2)} / 高 ${t.high60.toFixed(2)}</div>
+        <div class="row" style="gap:6px;margin-top:8px"><button class="btn secondary small" id="th-usestop" style="flex:0 0 auto">用技术支撑填止损价（${t.stopHint}）</button></div>
+        <span class="inline-note">口径固定：同样的行情永远得同样的分，可复现、可核对——这是公式不是模型判断。技术面只说明「现在的位置」，不预测涨跌。</span></div></div>`;
+      const us = out.querySelector('#th-usestop');
+      if (us) us.onclick = () => { $f('#th-stop').value = t.stopHint; drawGates(); };
+    } catch (e) {
+      out.innerHTML = `<div class="alert red" style="margin:8px 0"><span class="icon">${icon('warn')}</span><div>取K线失败：${escapeHtml(e.message)}</div></div>`;
+    } finally { btn.disabled = false; btn.innerHTML = ob; }
+  };
+
   // 选标的 → 回填已有卡
   function loadThesis(k) {
     const t = theses[k];
     $f('#th-del').style.display = t ? '' : 'none';
     const a = cands.find(x => thesisKeyOf(x) === k);
     if (!t) {
-      ['#th-bull', '#th-bear', '#th-fals', '#th-target', '#th-stop'].forEach(s => { $f(s).value = ''; });
+      $f('#th-tech-out').innerHTML = '';
+    ['#th-bull', '#th-bear', '#th-fals', '#th-target', '#th-stop'].forEach(s => { $f(s).value = ''; });
       $f('#th-entry').value = a && num(a.lastPx) > 0 ? num(a.lastPx) : '';
       $f('#th-months').value = 12; $f('#th-date').value = todayStr(); $f('#th-conf').value = '中';
       scoreBox.querySelectorAll('[data-sc]').forEach(i => { i.value = ''; });
