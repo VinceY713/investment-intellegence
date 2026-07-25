@@ -439,6 +439,7 @@ async function fetchFundamentals(code) {
         + (f10 ? ' 报告期=' + String(f10.REPORT_DATE || '').slice(0, 10) + ' ROEJQ=' + f10.ROEJQ + '→年化' + roe : '') + ' ' + macroClip(r2.text));
       const out = {
         secid: secucode, name: (v && v.SECURITY_NAME_ABBR) || (f10 && f10.SECURITY_NAME_ABBR) || '',
+        board: (v && v.BOARD_NAME) || '',        // 所属细分行业（如「其他电源设备Ⅱ」）——AI 起草时的行业锚点
         pe: v ? pv(v.PE_TTM) : null,
         pb: v ? pv(v.PB_MRQ) : null,
         roe, roeNote,
@@ -4925,9 +4926,23 @@ VIEWS.thesis = function (app) {
       if (lastData.code !== code) lastData = { tech: null, fund: null, ann: null, rs: null, code, name: (a && a.name) || '' };
       if (!lastData.fund && code) { try { const f0 = await fetchFundamentals(code); if (f0.ok) lastData.fund = f0; } catch (e) {} }
       if (!lastData.ann && code) { try { const a0 = await fetchAnnouncements(code, 20); if (a0.ok) lastData.ann = a0.list; } catch (e) {} }
-      if (!lastData.tech && code) { try { const t0 = techScore(await fetchTechKlines(code)); if (t0.ok) lastData.tech = t0; } catch (e) {} }
+      let rows0 = null;
+      if (!lastData.tech && code) { try { rows0 = await fetchTechKlines(code); const t0 = techScore(rows0); if (t0.ok) lastData.tech = t0; } catch (e) {} }
+      if (!lastData.rs && code) {
+        try {
+          if (!rows0) rows0 = await fetchTechKlines(code);
+          const bm = await fetchRsBenchmark(isUsCode(code));
+          const r0 = rsScore(rows0, bm.series, bm.name);
+          if (r0.ok) lastData.rs = r0;
+        } catch (e) {}
+      }
       const F = lastData.fund, T = lastData.tech, A = lastData.ann;
       const facts = [];
+      // 行业锚点：细分行业（东财 BOARD_NAME）+ 你在「持仓」里给它标的因子——
+      // 没有这个，模型只能对着财务数字复述，写不出「需求从哪来 → 公司卡在哪 → 怎么兑现」的链条
+      const pos0 = code ? (STATE.positions || []).find(x => x.code === code) : null;
+      const industry = [(F && F.board) ? '细分行业：' + F.board : '', pos0 && pos0.factor ? '你标注的因子：' + pos0.factor : ''].filter(Boolean).join('；');
+      if (industry) facts.push('【行业定位】' + industry);
       if (F) facts.push('【基本面·真实数据】' + [
         F.pe != null ? 'PE(TTM) ' + F.pe.toFixed(2) : '', F.pb != null ? 'PB ' + F.pb.toFixed(2) : '',
         F.roe != null ? 'ROE(年化) ' + F.roe + '%' : '', F.gross != null ? '毛利率 ' + F.gross.toFixed(2) + '%' : '',
@@ -4942,15 +4957,24 @@ VIEWS.thesis = function (app) {
       if (A && A.length) facts.push('【近期公告·真实标题】\n' + A.slice(0, 15).map(x => '· ' + x.date + ' ' + x.title).join('\n'));
       if (!facts.length) facts.push('（未取到任何真实数据，请在结论中明确说明"数据不足"，不要编造数字）');
 
-      const sys = '你是一位严谨的证券研究员，同时扮演多头与空头两个角色。用户给你【已检索到的真实数据】，请据此起草多空论证与证伪条件。'
-        + '硬性要求：'
-        + '(1) 绝对不给买入/卖出/持有评级，不给目标价，不预测涨跌——那不是你的任务；'
-        + '(2) 只能引用给定数据中出现的数字，禁止编造任何未给出的财务或经营数据，不确定就写"需核实"；'
-        + '(3) 证伪条件必须是【客观可验证且带阈值】的事件（如"单季毛利率跌破25%"、"营收同比连续两季转负"、"某项目投产延后两个季度以上"），'
-        + '禁止写"股价下跌"、"市场情绪转弱"这类同义反复或不可证伪的表述；优先使用上面给定数据里已有的指标，便于日后逐条核对；'
-        + '(4) 多头/空头各一句话，直接、具体、可反驳；'
-        + '(5) 用中文。严格返回 JSON：'
-        + '{"bull":"一句话看多逻辑","bear":"一句话最强空头论证","risks":["下行风险1","下行风险2","下行风险3"],"falsify":["证伪条件1","证伪条件2","证伪条件3"]}';
+      const sys = '你是一位严谨的证券研究员，同时扮演多头与空头两个角色。用户给你【已检索到的真实数据】与【行业定位】，请据此起草多空论证与证伪条件。\n'
+        + '写作要求（最重要）：\n'
+        + '· 多空论证必须是【业务因果链】，不是财务数字的复述。合格的多头长这样：'
+        + '"需求端X在扩张 → 公司在Y环节卡位 → 通过Z兑现为收入/利润"，然后才用给定数字佐证。'
+        + '不合格的多头长这样："净利同比增444%、ROE 62.8%，基本面强势"——那只是念数据，用户自己看得到。\n'
+        + '· 空头要攻击这条链条最脆弱的一环（需求证伪？卡位不牢？兑现不了？），而不是只说"估值高、动量弱"。\n'
+        + '真实性边界（务必分清）：\n'
+        + '· 允许：使用你对该行业的【一般性常识】做推理，例如这个细分行业的下游需求来自哪里、'
+        + '典型商业模式、竞争格局的一般特征、产业链上下游关系——这些是可被读者独立核实的公共认知；\n'
+        + '· 禁止：编造【具体事实】——具体订单、客户名、产能数字、市占率、未给出的财务数据、'
+        + '具体政策文件、未来事件时间表。凡涉及具体数字，只能用上面给定数据里出现过的；不确定就写"需核实"。\n'
+        + '其它硬性要求：\n'
+        + '(1) 绝对不给买入/卖出/持有评级，不给目标价，不预测涨跌——那不是你的任务；\n'
+        + '(2) 证伪条件必须【客观可验证且带阈值】（如"单季毛利率跌破25%"、"营收同比连续两季转负"），'
+        + '禁止"股价下跌""市场情绪转弱"这类同义反复；优先使用上面给定数据里已有的指标，便于日后逐条核对；\n'
+        + '(3) 多头/空头各一到两句，直接、具体、可反驳；\n'
+        + '(4) 用中文。严格返回 JSON：'
+        + '{"bull":"看多逻辑（业务因果链+数据佐证）","bear":"最强空头论证（攻击链条最弱环节）","risks":["下行风险1","下行风险2","下行风险3"],"falsify":["证伪条件1","证伪条件2","证伪条件3"]}';
       const user = '标的：' + ((a && a.name) || k) + (code ? '（' + code + '）' : '') + '\n\n'
         + facts.join('\n\n')
         + (bull ? '\n\n【用户已写的看多逻辑】' + bull + '\n请以用户这条为准写 bull（可据数据润色，但不得改变其核心主张），并针对它写最强反驳。'
@@ -5131,6 +5155,9 @@ VIEWS.thesis = function (app) {
           try { const a0 = await fetchAnnouncements(code, 20); if (a0.ok) A = a0.list; } catch (e) {}
         }
         const facts = [];
+        const pm = t.code ? (STATE.positions || []).find(x => x.code === t.code) : null;
+        const ind = [(F && F.board) ? '细分行业：' + F.board : '', pm && pm.factor ? '你标注的因子：' + pm.factor : ''].filter(Boolean).join('；');
+        if (ind) facts.push('【行业定位】' + ind);
         if (F) facts.push('【基本面·最新真实数据】' + [
           F.pe != null ? 'PE(TTM) ' + F.pe.toFixed(2) : '', F.pb != null ? 'PB ' + F.pb.toFixed(2) : '',
           F.roe != null ? 'ROE(年化) ' + F.roe + '%' : '', F.gross != null ? '毛利率 ' + F.gross.toFixed(2) + '%' : '',
@@ -5139,6 +5166,12 @@ VIEWS.thesis = function (app) {
           F.reportDate ? '报告期 ' + F.reportDate : '',
         ].filter(Boolean).join('，'));
         if (T) facts.push('【技术面·最新读数】' + T.date + ' 收盘 ' + T.px + '，评分 ' + T.score + '/10；' + T.parts.map(p => p.k + '：' + p.v).join('；'));
+        try {
+          const bm = await fetchRsBenchmark(isUsCode(t.code || ''));
+          const rows2 = await fetchTechKlines(t.code);
+          const R2 = rsScore(rows2, bm.series, bm.name);
+          if (R2.ok) facts.push('【行业/相对强弱】对比 ' + R2.benchName + '，评分 ' + R2.score + '/10；' + R2.parts.map(p => p.k + '：' + p.v).join('；'));
+        } catch (e) {}
         if (A && A.length) facts.push('【近期公告】\n' + A.slice(0, 12).map(x => '· ' + x.date + ' ' + x.title).join('\n'));
         const sys = '你是空头研究员，负责复核一张已存在的投资决策卡是否还站得住。'
           + '硬性要求：(1) 不给买入/卖出/持有评级、不给目标价、不预测涨跌；'

@@ -234,6 +234,14 @@ select { appearance: none; -webkit-appearance: none;
   background-repeat: no-repeat; background-position: right 12px center; padding-right: 36px;
 }
 textarea { resize: vertical; min-height: 62px; }
+/* iOS Safari 的原生 date 控件有很大的固有宽度，而 grid/flex 子项默认 min-width:auto
+   不会收缩到内容宽度以下 —— 于是日期框会撑破栅格、超出卡片右边缘。
+   关掉原生外观 + 允许收缩即可对齐其它输入框。 */
+input[type="date"], input[type="month"], input[type="time"] {
+  -webkit-appearance: none; appearance: none;
+  min-width: 0; max-width: 100%; text-align: left;
+}
+.grid > *, .row > * { min-width: 0; }
 .row { display: flex; gap: 12px; }
 .row > * { flex: 1; }
 .suffix-input { position: relative; }
