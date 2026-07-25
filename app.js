@@ -3522,6 +3522,28 @@ function layerKeyOfAsset(a) { return String(a.code || a.name || '').trim(); }
             ③ 触及目标价/止损价/到期 → 一键记入「复盘校准」，回填后校准你的胜率
    ========================================================================= */
 function thesisKeyOf(x) { return String((x && (x.code || x.name)) || '').trim(); }
+/* 成本价（每股/每份，原币）——决策卡的「入场价」应取这个，不是现价。
+   与「④止损防御」同口径，优先级：
+     ① 持仓页手填的 cost   ② 现价 ÷ (1+持仓浮盈亏%)   ③ (资产市值 − 浮盈亏) ÷ 份额
+   取不到返回 {price:null}，由调用方决定是否回退现价并标注。 */
+function costPriceOf(a) {
+  if (!a) return { price: null, src: '' };
+  const fx = currentFx();
+  const p = a.code ? (STATE.positions || []).find(x => x.code === a.code) : null;
+  if (p && num(p.cost) > 0) return { price: num(p.cost), src: '持仓成本价' };
+  const shares = num(a.shares);
+  const cur = num(a.lastPx) > 0 ? num(a.lastPx) : (shares > 0 ? num(a.amount) / shares : null);
+  if (p && cur != null && p.pnl != null && num(p.pnl) !== 0) {
+    const c = cur / (1 + num(p.pnl) / 100);
+    if (c > 0) return { price: +c.toFixed(4), src: '按持仓浮盈亏反推' };
+  }
+  if (shares > 0 && a.amount != null) {
+    const pnlOrig = a.pnl != null ? (a.currency === 'USD' ? num(a.pnl) / fx : num(a.pnl)) : 0;
+    const costTotal = num(a.amount) - pnlOrig;         // 原币成本总额 = 市值 − 浮盈亏
+    if (costTotal > 0 && isFinite(costTotal / shares)) return { price: +(costTotal / shares).toFixed(4), src: '按市值−浮盈亏反推' };
+  }
+  return { price: null, src: '' };
+}
 function thesisOf(x) { const k = thesisKeyOf(x); return k ? (STATE.theses || {})[k] : null; }
 // 证伪条件是否已触发（任一勾中）
 function thesisFalsified(t) { return !!(t && Array.isArray(t.falsify) && t.falsify.some(f => f && f.hit)); }
@@ -4501,7 +4523,8 @@ VIEWS.thesis = function (app) {
     <div class="field"><label>证伪条件（每行一条，2–3 条；发生任一条即认错）<span class="req">*</span></label>
       <textarea id="th-fals" rows="3" placeholder="金价跌破 3000 美元且持续 1 个月&#10;巨龙铜矿二期投产进度延后 2 个季度以上&#10;单季扣非净利同比转负"></textarea></div>
     <div class="grid grid-3">
-      <div class="field"><label>入场价</label><input id="th-entry" type="number" step="0.01"/></div>
+      <div class="field"><label>入场价（你的成本价）</label><input id="th-entry" type="number" step="0.01"/>
+        <p class="inline-note" id="th-entry-note"></p></div>
       <div class="field"><label>目标价</label><input id="th-target" type="number" step="0.01"/></div>
       <div class="field"><label>止损价</label><input id="th-stop" type="number" step="0.01"/></div>
     </div>
@@ -4587,12 +4610,16 @@ VIEWS.thesis = function (app) {
       lastData.tech = t; lastData.code = code; lastData.name = (a && a.name) || '';
       const sc = scoreBox.querySelector('[data-sc="tech"]');
       if (sc) sc.value = t.score;
-      // 入场价空着（该标的还没刷过估值）→ 用刚取到的最新收盘价补上，三道闸才算得出来
+      // 入场价空着 → 优先补【成本价】；实在没有成本数据才用最新收盘价占位并明确标注
       let entryNote = '';
-      if (!(num($f('#th-entry').value) > 0)) { $f('#th-entry').value = t.px; entryNote = `（入场价空着，已用最新收盘价 ${t.px} 填入，可自行改成你的实际成本）`; }
+      if (!(num($f('#th-entry').value) > 0)) {
+        const cp = costPriceOf(a);
+        if (cp.price != null) { $f('#th-entry').value = cp.price; entryNote = `（入场价空着，已带出成本价 ${cp.price}，${cp.src}）`; }
+        else { $f('#th-entry').value = t.px; entryNote = `（无成本数据，暂用最新收盘价 ${t.px} 占位——<strong>请改成你的实际买入价</strong>，否则浮动盈亏与止损幅度都不对）`; }
+      }
       const rows2 = t.parts.map(p => `<tr><td>${escapeHtml(p.k)}</td><td>${escapeHtml(p.v)}</td><td class="num">${p.p} / ${p.max}</td></tr>`).join('');
       out.innerHTML = `<div class="alert blue" style="margin:8px 0"><span class="icon">${icon('calc')}</span><div>
-        <strong>技术面评分 ${t.score} / 10</strong>（${escapeHtml(t.date)} 收盘，${t.bars} 根日K，现价 ${t.px}）——已填入下方。${escapeHtml(entryNote)}每一分的出处：
+        <strong>技术面评分 ${t.score} / 10</strong>（${escapeHtml(t.date)} 收盘，${t.bars} 根日K，现价 ${t.px}）——已填入下方。${entryNote}每一分的出处：
         <div class="table-scroll" style="margin-top:6px"><table><thead><tr><th>项</th><th>读数</th><th class="num">得分</th></tr></thead><tbody>${rows2}</tbody></table></div>
         <div class="inline-note" style="margin-top:6px">均线：${[5, 10, 20, 60, 120].filter(p => t.ma[p] != null).map(p => 'MA' + p + ' ' + t.ma[p].toFixed(2)).join(' · ')}
         ${t.volNote ? '<br>量能：' + escapeHtml(t.volNote) : ''}
@@ -4710,7 +4737,13 @@ VIEWS.thesis = function (app) {
     if (!t) {
       $f('#th-tech-out').innerHTML = '';
     ['#th-bull', '#th-bear', '#th-fals', '#th-target', '#th-stop'].forEach(s => { $f(s).value = ''; });
-      $f('#th-entry').value = a && num(a.lastPx) > 0 ? num(a.lastPx) : '';
+      // 入场价取【成本价】而非现价：现价会让浮动盈亏恒为 0、三道闸的止损幅度也算错
+      const cp = costPriceOf(a);
+      $f('#th-entry').value = cp.price != null ? cp.price : '';
+      const en = $f('#th-entry-note');
+      if (en) en.innerHTML = cp.price != null
+        ? `已带出成本价 <strong>${cp.price}</strong>（${escapeHtml(cp.src)}），可手改为你的实际买入价`
+        : (a && num(a.lastPx) > 0 ? `<span style="color:var(--amber-ink)">该标的没有成本数据（份额/浮盈亏为空），请手填你的实际买入价；现价 ${num(a.lastPx)} 仅供参考</span>` : '');
       $f('#th-months').value = 12; $f('#th-date').value = todayStr(); $f('#th-conf').value = '中';
       scoreBox.querySelectorAll('[data-sc]').forEach(i => { i.value = ''; });
       drawGates(); return;
