@@ -66,9 +66,16 @@ jobs:
             probe "emflow 广期所(碳酸锂)" "/api/emflow?fid=f12&po=0&pz=10&pn=1&np=1&fltt=2&invt=2&fs=m%3A225&fields=f2,f3,f12,f14" 500
             probe "emmacro 南向" "/api/emmacro?reportName=RPT_MUTUAL_DEAL_HISTORY&columns=ALL&sortColumns=TRADE_DATE&sortTypes=-1&pageSize=1&pageNumber=1&filter=%28MUTUAL_TYPE%3D%22003%22%29" 400
 
-            echo "########## 7. 商品价格（腾讯外盘 hf_ 与东财）"
+            echo "########## 7. 商品价格（腾讯外盘 hf_ / 广期所官方）"
             probe "quote hf_GC 黄金" "/api/quote?code=hf_GC" 300
             probe "quote hf_CAD 铜" "/api/quote?code=hf_CAD" 300
+            YD=$(date -d '1 day ago' +%Y%m%d 2>/dev/null || date +%Y%m%d)
+            probe "gfex 碳酸锂 $YD" "/api/gfex?trade_date=$YD" 500
+
+            echo "########## 7b. 基本面兜底源（东财数据中心：估值分析 + F10 主指标）"
+            probe "dc 估值分析 $STOCK" "/api/emmacro?reportName=RPT_VALUEANALYSIS_DET&columns=ALL&filter=%28SECURITY_CODE%3D%22$STOCK%22%29&pageSize=1&source=WEB&client=WEB" 600
+            SUF=".SZ"; case "$STOCK" in 6*|5*|11*|13*) SUF=".SH";; esac
+            probe "dc F10主指标 $STOCK$SUF" "/api/emmacro?reportName=RPT_F10_FINANCE_MAINFINADATA&columns=ALL&filter=%28SECUCODE%3D%22$STOCK$SUF%22%29&pageSize=1&sortColumns=REPORT_DATE&sortTypes=-1&source=HSF10&client=PC" 800
 
             echo "########## 8. A股日K与基金净值（已知可用，作对照组）"
             probe "kline sz$STOCK" "/api/kline?param=sz$STOCK,day,,,5,qfq" 300
