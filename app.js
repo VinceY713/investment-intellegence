@@ -5603,6 +5603,83 @@ const MACRO_GROUPS = [
     { key: 'vix', name: 'VIX 恐慌指数', unit: '', meaning: '美股隐含波动率、市场情绪。', impact: '飙升→避险、波动放大，最易情绪化操作——铁律该发挥作用。', watch: '>25 恐慌 / <13 自满。', src: 'https://www.cboe.com/tradable_products/vix/' },
   ]},
 ];
+const MACRO_ITEM_BY_KEY = {};
+MACRO_GROUPS.forEach(g => g.items.forEach(it => { MACRO_ITEM_BY_KEY[it.key] = it; }));
+
+// 方法论文案：点「详解」/商品瓦片弹窗展示——怎么读、看什么、对组合意味着什么动作
+const MACRO_METHOD = {
+  vix: 'VIX 由标普500期权价格反推的未来30天预期波动率（年化）。它强烈均值回归：飙到25以上的恐慌通常数周内回落，长期停在高位很罕见——所以高 VIX 更多是「别割肉、分批捡」的窗口而非卖出信号；低于13的自满期才是控杠杆、检查止损的时候。除水平外看变化速度：两天从15跳到25，比稳定在22危险得多。',
+  dxy: '美元对六种主要货币的加权汇率指数（欧元占近六成）。对你有三层传导：①强美元压金价（计价效应）②压新兴市场与A股外资流入 ③抬高你美元资产的人民币价值——所以 DXY 上行对你不全是坏事，先看自己的美元敞口再定情绪。用 98/105 分界看「区间」，不预测点位。',
+  fedUpper: '联邦基金目标利率上限，全球资产定价的分母。方向比水平重要：开始降息前后6个月通常是黄金与成长股最好的窗口；「higher for longer」则持续压估值。配合 CME FedWatch 的下次会议概率一起看，单次数据不构成方向。',
+  fomcBias: '把 CME FedWatch 的下次会议概率抄进来即可（如「降息25bp概率70%」）。市场交易的是预期差：概率>80%的动作落地时几乎没有行情，「意外」才有行情。',
+  ust10: '全球长期无风险利率，一切估值模型的锚。10Y 上行对高估值成长股伤害最大；黄金无息、与实际利率（10Y−通胀）负相关。重点不是水平而是：与2Y的利差（曲线形态）和变化速度——一个月内快速上行50bp以上才是需要防御的信号。',
+  ust2: '对美联储未来1-2年政策路径最敏感的期限。10Y−2Y 利差是最著名的衰退领先指标：倒挂（为负）后6-18个月衰退概率大增；但注意「解除倒挂」（重新转正）往往才是衰退临近的信号。',
+  cn10: '中国无风险利率与经济温度计。持续下行=资金避险+宽松预期，利好你的债基/理财底仓与红利股；快速上行=经济修复或资金面收紧。与美债10Y的利差决定人民币汇率压力方向。',
+  usCPI: '看三个层次：同比水平（离2%目标多远）、环比动量（近3个月折年更灵敏）、核心分项（服务通胀最顽固）。数据公布前后美股波动放大——发布日别做大额操作。',
+  usPCE: '美联储官方盯的通胀口径，权重比 CPI 更贴近实际消费结构，通常比 CPI 低0.3-0.5个百分点。规则同 CPI：水平看距离2%目标，动量看近3个月。',
+  usUnemp: '失业率是滞后指标，但一旦趋势性上行就很难停：较过去12个月低点上行0.5个百分点（Sahm 规则）历史上几乎总对应衰退开始。它决定美联储从「抗通胀」切到「保就业」的时点——切换期黄金与债券通常最受益。',
+  usPMI: '采购经理调查，50为荣枯线，比 GDP 早1-2个月反映拐点。连续3个月同向才算趋势；新订单分项比总指数更领先。扩张利好顺周期（铜/能源/周期股），收缩期成长与债占优。',
+  cnPMI: '中国制造业景气调查，50为荣枯线。连续3个月同向才算趋势；新订单与生产分项背离时以新订单为准。持续>50 利好顺周期A股与铜，持续<50 时政策宽松预期反而会托底成长。',
+  cnCPI: '低于0.5%即有通缩压力：名义增长受压、企业利润难扩张，压制顺周期，但利好债与高股息；同时是政策加码的催化剂——「差数据=宽松预期」在A股常表现为跌后反弹。',
+  cnTSF: '社会融资规模同比，A股流动性最领先的指标之一：社融拐点历史上领先A股盈利拐点约2-3个季度。回升初期先利好券商/成长，随后传导到顺周期。',
+  cnLPR1: 'LPR 是贷款定价基准（1年期影响企业短贷）。下调≥10bp 才算实质宽松信号；对你主要是「确认政策方向」，单次调整的边际影响已不大。',
+  cnLPR5: '5年期 LPR 影响房贷与长期投资。下调=稳地产意图明确，利好地产链与银行让利逻辑的再平衡；连续按兵不动=政策定力，别把预期抢跑当事实。',
+  c_gold: '你的双重敞口：实物金/黄金基金直接跟价格；紫金矿业的金板块利润≈(金价−完全成本)×产量——金价涨10%，矿企利润弹性常放大到20-30%。核心驱动：实际利率（负相关）、美元（负相关）、央行购金（近年最大边际买家）。纪律：金价单日−2%以上时先看 DXY 与美债实际利率有没有同步异动，没有则多为情绪波动、不动仓。',
+  c_copper: '全球增长温度计，紫金第二引擎。供给端矿山品位下降+新矿建设周期7-10年；需求端电网/新能源车/AI数据中心都是铜密集——长期供需偏紧是紫金的核心逻辑。短期看 LME 库存与中国 PMI：库存快速下降+PMI>50 = 需求真实。',
+  c_silver: '一半贵金属（跟金）、一半工业品（光伏用银占需求近三成）。金银比（金÷银）>85 说明银相对低估、<60 说明银已透支；银的波动约是金的1.5-2倍，不适合做底仓。',
+  c_oil: '全球通胀的自变量：油价快速上行→通胀预期抬头→压制降息预期→间接压估值。对你组合是间接变量，主要通过美联储路径起作用；80美元以上开始成为风险资产逆风。',
+  c_lith: '紫金第三引擎（2026-2028放量）。碳酸锂自2022年高点回落后长期磨底：价格在多数矿山成本线（6-8万/吨）附近徘徊越久，供给出清越充分、后续弹性越大。对紫金这是「看涨期权」性质的板块——别当确定性收益，锂价决定增量兑现度。',
+  c_cuau: '同一家公司（紫金）的两台发动机对冲：经济向好→铜强金稳（比值升）；避险→金涨铜跌（比值降）。比值绝对水平没有好坏，方向变化才是信号：连续上行=顺周期资产可更积极；连续下行=仓位重心移向防御。这也是华尔街用 copper/gold ratio 判断美债利率方向的逻辑（比值与长端利率同向）。',
+};
+// 通用弹窗（点遮罩或「关闭」退出）
+function showModal(titleHtml, bodyHtml) {
+  const ov = el(`<div data-modal style="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1000;display:flex;align-items:center;justify-content:center;padding:16px">
+    <div class="card" style="max-width:560px;width:100%;max-height:84vh;overflow:auto;margin:0">
+      <div class="card-head-row"><h3 style="margin:0">${titleHtml}</h3><button class="btn secondary small" data-close style="flex:0 0 auto">关闭 ✕</button></div>
+      <div>${bodyHtml}</div></div></div>`);
+  ov.addEventListener('click', e => { if (e.target === ov || e.target.closest('[data-close]')) ov.remove(); });
+  document.body.appendChild(ov);
+}
+// 指标详解弹窗：当前值 + 大刻度条 + 走势 + 分区依据 + 方法论 + 对组合的含义
+function showIndicatorModal(key) {
+  const it = MACRO_ITEM_BY_KEY[key];
+  if (!it) return;
+  const m = STATE.macro || {};
+  const cur = (m.ind && m.ind[key]) || {};
+  const val = cur.value != null ? num(cur.value, NaN) : NaN;
+  const z = MACRO_ZONES[key];
+  let html = `<div class="stat" style="margin-bottom:8px"><div class="label">当前值${it.unit ? '（' + it.unit + '）' : ''}</div>
+    <div class="value" style="font-size:24px">${isFinite(val) ? val : (cur.value != null ? escapeHtml(String(cur.value)) : '未填写')}</div>
+    <div class="sub">${cur.date ? '更新于 ' + escapeHtml(cur.date) : '在市场指标页填入或自动拉取'}</div></div>`;
+  if (isFinite(val) && z) html += `<div style="margin:10px 0">${scaleBarHtml(val, z, true)}</div>`;
+  const spark = sparklineHtml(key, 260, 48);
+  if (spark) html += `<div style="margin:10px 0">${spark} ${histDeltaHtml(key)}</div>`;
+  html += `<h4 style="margin:12px 0 6px">这是什么</h4><p style="font-size:13px;line-height:1.6;margin:0">${escapeHtml(it.meaning)}</p>`;
+  if (z) html += `<h4 style="margin:12px 0 6px">分区怎么划的</h4>${zoneLegendHtml(z)}`;
+  if (MACRO_METHOD[key]) html += `<h4 style="margin:12px 0 6px">方法论 · 怎么用</h4><p style="font-size:13px;line-height:1.6;margin:0">${MACRO_METHOD[key]}</p>`;
+  html += `<h4 style="margin:12px 0 6px">对你的组合</h4><p style="font-size:13px;line-height:1.6;margin:0">${escapeHtml(it.impact)}</p>`;
+  html += `<p style="font-size:12px;color:var(--muted);margin-top:10px"><strong>关注节奏</strong>：${escapeHtml(it.watch)} · <a href="${it.src}" target="_blank" rel="noopener" style="color:var(--accent-ink)">官方来源↗</a></p>`;
+  showModal(escapeHtml(it.name), html);
+}
+// 商品详解弹窗：价格 + 走势 + 你的敞口 + 方法论
+function showCmdtyModal(key) {
+  const cd = CMDTY_LIST.find(x => x.key === key) || (key === 'cuau' ? { key: 'cuau', name: '铜金比（增长/避险温度计）', unit: '' } : null);
+  if (!cd) return;
+  const it = (STATE.macro && STATE.macro.cmdty && STATE.macro.cmdty.items && STATE.macro.cmdty.items[key]) || null;
+  let html = '';
+  if (it) html += `<div class="stat" style="margin-bottom:8px"><div class="label">当前价${cd.unit ? '（' + cd.unit + '）' : ''}</div>
+    <div class="value" style="font-size:24px;color:${it.chg == null ? 'inherit' : (it.chg >= 0 ? 'var(--green-ink)' : 'var(--red-ink)')}">${(+it.price).toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
+    <div class="sub">${it.chg != null ? (it.chg >= 0 ? '+' : '') + it.chg.toFixed(2) + '% · ' : ''}${escapeHtml(it.date || '')}</div></div>`;
+  else html += `<p class="inline-note">尚未拉取，点「拉取商品价格」。</p>`;
+  const spark = sparklineHtml('c_' + key, 260, 48);
+  if (spark) html += `<div style="margin:10px 0">${spark} ${histDeltaHtml('c_' + key)}</div>`;
+  if (key === 'gold' || key === 'copper' || key === 'lith' || key === 'cuau') {
+    const exp = goldCopperExposure();
+    if (exp.gold + exp.zijin > 0) html += `<div class="alert blue" style="margin:10px 0"><span class="icon">${icon('info')}</span><div>你的相关敞口：实物金/黄金基金 ${fmtMoney(exp.gold)}${exp.zijin > 0 ? ' + 紫金矿业 ' + fmtMoney(exp.zijin) : ''}。</div></div>`;
+  }
+  if (MACRO_METHOD['c_' + key]) html += `<h4 style="margin:12px 0 6px">方法论 · 怎么用</h4><p style="font-size:13px;line-height:1.6;margin:0">${MACRO_METHOD['c_' + key]}</p>`;
+  showModal(escapeHtml(cd.name), html);
+}
 
 // 取新浪 hq.sinajs.cn 一行报价，逗号切分为字段数组
 async function sinaFields(sym) {
@@ -5779,19 +5856,32 @@ const MACRO_ZONES = {
   usPMI:    { min: 44, max: 56, zones: [[50, '收缩', 'amber'], [Infinity, '扩张', 'green']] },
   usUnemp:  { min: 2, max: 9, zones: [[4.5, '强劲', 'green'], [5.5, '正常', 'green'], [Infinity, '走弱', 'amber']] },
 };
-function scaleBarHtml(value, z) {
+function scaleBarHtml(value, z, wide) {
   if (value == null || !isFinite(value) || !z) return '';
   const span = z.max - z.min;
   let prev = z.min, segs = '';
   z.zones.forEach(([to, label, color]) => {
     const end = Math.min(to === Infinity ? z.max : to, z.max);
     const w = Math.max(0, (end - prev) / span * 100);
-    if (w > 0) segs += `<div style="width:${w.toFixed(1)}%;background:${ZONE_FILL[color]};display:flex;align-items:center;justify-content:center;font-size:9px;color:var(--muted);overflow:hidden;white-space:nowrap">${label}</div>`;
+    // 窄分区（<14%）不放文字（会被裁切、看着像挤进邻区），悬停/长按看提示
+    if (w > 0) segs += `<div title="${escapeHtml(label)}" style="width:${w.toFixed(1)}%;background:${ZONE_FILL[color]};display:flex;align-items:center;justify-content:center;font-size:9px;color:var(--muted);overflow:hidden;white-space:nowrap">${w >= 14 ? escapeHtml(label) : ''}</div>`;
     prev = Math.max(prev, end);
   });
   const pos = Math.max(1, Math.min(99, (value - z.min) / span * 100));
-  return `<div style="position:relative;height:18px;border-radius:4px;overflow:hidden;display:flex;min-width:130px;max-width:230px">${segs}
+  return `<div style="position:relative;height:18px;border-radius:4px;overflow:hidden;display:flex;min-width:130px;${wide ? '' : 'max-width:230px'}">${segs}
     <div style="position:absolute;left:${pos.toFixed(1)}%;top:0;bottom:0;width:2px;background:var(--ink);transform:translateX(-1px)"></div></div>`;
+}
+// 分区划分依据（弹窗里展示：每一段的区间与含义）
+function zoneLegendHtml(z) {
+  if (!z) return '';
+  let prev = z.min;
+  const rows = z.zones.map(([to, label, color]) => {
+    const range = to === Infinity ? '≥ ' + prev : prev + ' ~ ' + to;
+    const r = `<tr><td class="num" style="white-space:nowrap">${range}</td><td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${ZONE_FILL[color]};border:1px solid rgba(127,127,127,.35);vertical-align:middle"></span> ${escapeHtml(label)}</td></tr>`;
+    if (to !== Infinity) prev = to;
+    return r;
+  }).join('');
+  return `<div class="table-scroll"><table><thead><tr><th class="num">区间</th><th>状态</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 // 确定性 regime 信号：读已填指标，输出对「你这种组合」的含义。无 AI、可复现、不臆造。
@@ -5842,7 +5932,8 @@ const CMDTY_LIST = [
   { key: 'copper', name: '铜 LME',      unit: '美元/吨',   digits: 0, range: [3000, 20000],  sources: [{ kind: 'thf', sym: 'hf_CAD' }, { kind: 'emq', secid: '120.CAD' }] },
   { key: 'silver', name: '白银 COMEX',  unit: '美元/盎司', digits: 2, range: [5, 200],       sources: [{ kind: 'thf', sym: 'hf_SI' }, { kind: 'emq', secid: '101.SI00Y' }] },
   { key: 'oil',    name: '原油 WTI',    unit: '美元/桶',   digits: 1, range: [10, 300],      sources: [{ kind: 'thf', sym: 'hf_CL' }, { kind: 'emq', secid: '102.CL00Y' }] },
-  { key: 'lith',   name: '碳酸锂 GFEX', unit: '元/吨',     digits: 0, range: [20000, 500000], sources: [{ kind: 'emq', secid: '225.lcm' }, { kind: 'emq', secid: '225.LC0' }] },
+  // 东财 push2 stock/get 对广期所 secid 返回 502（真机确认），首选改走已验证可达的 push2 clist（/api/emflow 同通道）
+  { key: 'lith',   name: '碳酸锂 GFEX', unit: '元/吨',     digits: 0, range: [20000, 500000], sources: [{ kind: 'clist', fs: 'm:225', re: /^lcm$|碳酸锂主/ }, { kind: 'emq', secid: '225.lcm' }] },
 ];
 async function fetchCmdtySource(src) {
   try {
@@ -5869,6 +5960,22 @@ async function fetchCmdtySource(src) {
         }
       } catch (e) {}
       return { price, chg, raw: 'emq/' + src.secid + ' HTTP' + r.status + ' ' + macroClip(r.text) };
+    }
+    if (src.kind === 'clist') {
+      // push2 clist（与资金流同通道）：fs 指定市场（m:225=广期所），按 f12 代码/f14 名称匹配主力合约
+      const r = await fetchRaw('/api/emflow?fid=f12&po=0&pz=80&pn=1&np=1&fltt=2&invt=2&fs=' + encodeURIComponent(src.fs) + '&fields=' + encodeURIComponent('f2,f3,f12,f14'));
+      let price = null, chg = null, hit = '';
+      try {
+        const arr = JSON.parse(r.text).data.diff;
+        const list = Array.isArray(arr) ? arr : Object.values(arr || {});
+        const row = list.find(x => x && (src.re.test(String(x.f12 || '')) || src.re.test(String(x.f14 || ''))));
+        if (row && typeof row.f2 === 'number' && isFinite(row.f2)) {
+          price = row.f2;
+          if (typeof row.f3 === 'number' && isFinite(row.f3) && Math.abs(row.f3) < 15) chg = row.f3;
+          hit = String(row.f12 || '') + '/' + String(row.f14 || '');
+        }
+      } catch (e) {}
+      return { price, chg, raw: 'clist/' + src.fs + (hit ? ' 命中' + hit : '') + ' HTTP' + r.status + ' ' + macroClip(r.text) };
     }
   } catch (e) { return { price: null, chg: null, raw: (src.kind || '?') + ' 异常:' + macroClip(e.message) }; }
   return { price: null, chg: null, raw: '未知源' };
@@ -6095,6 +6202,11 @@ VIEWS.macro = function (app) {
   const cmOut = el('<div></div>');
   cmCard.appendChild(cmOut);
   app.appendChild(cmCard);
+  // 点瓦片弹详解（事件委托：renderCmdty 重设 innerHTML 也不失效）
+  cmOut.addEventListener('click', e => {
+    const t = e.target.closest('[data-cmi]');
+    if (t) showCmdtyModal(t.dataset.cmi);
+  });
   const renderCmdty = (c) => {
     if (!c || !c.items || !Object.keys(c.items).length) { cmOut.innerHTML = ''; return; }
     const tiles = [];
@@ -6102,13 +6214,13 @@ VIEWS.macro = function (app) {
       const d = c.items[cd.key];
       if (!d) return;
       const chg = d.chg != null && isFinite(d.chg) ? d.chg : null;
-      tiles.push(`<div class="stat"><div class="label">${escapeHtml(cd.name)}</div>
+      tiles.push(`<div class="stat" data-cmi="${cd.key}" style="cursor:pointer"><div class="label">${escapeHtml(cd.name)} <span style="color:var(--accent-ink);font-size:10px">详解</span></div>
         <div class="value" style="font-size:20px;color:${chg == null ? 'inherit' : (chg >= 0 ? 'var(--green-ink)' : 'var(--red-ink)')}">${(+d.price).toLocaleString(undefined, { maximumFractionDigits: cd.digits })}</div>
         <div class="sub">${chg != null ? (chg >= 0 ? '+' : '') + chg.toFixed(2) + '% · ' : ''}${escapeHtml(cd.unit)}</div>
         <div>${sparklineHtml('c_' + cd.key)} ${histDeltaHtml('c_' + cd.key)}</div></div>`);
     });
     if (c.items.cuau) {
-      tiles.push(`<div class="stat"><div class="label">铜金比（增长/避险温度计）</div>
+      tiles.push(`<div class="stat" data-cmi="cuau" style="cursor:pointer"><div class="label">铜金比（增长/避险温度计） <span style="color:var(--accent-ink);font-size:10px">详解</span></div>
         <div class="value" style="font-size:20px">${(+c.items.cuau.price).toFixed(2)}</div>
         <div class="sub">↑增长预期(利铜) · ↓避险(利金)</div>
         <div>${sparklineHtml('c_cuau')} ${histDeltaHtml('c_cuau')}</div></div>`);
@@ -6267,9 +6379,7 @@ VIEWS.macro = function (app) {
       const trend = spark ? spark + ' ' + histDeltaHtml(it.key) : '<span class="inline-note">—</span>';
       return `<tr>
         <td><strong>${escapeHtml(it.name)}</strong>${it.unit ? ' <span style="color:var(--muted)">(' + it.unit + ')</span>' : ''}
-          <details style="margin-top:2px"><summary style="cursor:pointer;font-size:11px;color:var(--muted);list-style:revert">说明 / 对你的影响</summary>
-            <div style="font-size:12px;line-height:1.5;margin-top:4px;max-width:420px"><strong>含义</strong>：${escapeHtml(it.meaning)}<br><strong style="color:var(--accent-ink)">对你组合</strong>：${escapeHtml(it.impact)}<br><strong style="color:var(--amber-ink)">关注</strong>：${escapeHtml(it.watch)} · <a href="${it.src}" target="_blank" rel="noopener" style="color:var(--accent-ink)">官方来源↗</a></div>
-          </details></td>
+          <a data-mki="${it.key}" style="cursor:pointer;font-size:11px;color:var(--accent-ink);margin-left:4px">详解</a></td>
         <td class="num"><input data-mk="${it.key}" value="${cur.value != null ? escapeHtml(String(cur.value)) : ''}" placeholder="填入最新值" style="max-width:110px"/></td>
         <td>${bar}</td>
         <td style="white-space:nowrap">${trend}</td>
@@ -6285,6 +6395,7 @@ VIEWS.macro = function (app) {
       else { m.ind[k] = { value: v, date: todayStr() }; const nv = num(v, NaN); if (isFinite(nv)) pushMacroHist(k, nv); }
       saveState(); render();   // 重绘以刷新信号徽章/刻度条/走势
     });
+    scroll.querySelectorAll('[data-mki]').forEach(a => a.onclick = () => showIndicatorModal(a.dataset.mki));
   });
 
   app.appendChild(el(`<div class="card" style="margin-top:16px"><div class="alert blue"><span class="icon">${icon('info')}</span><div>
