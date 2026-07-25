@@ -84,6 +84,17 @@ jobs:
             sudo touch /var/log/ii-snapshot.log
             echo "已安装每日快照定时任务（22:00/23:00/23:30 北京时间）"
 
+            # 1e) 让系统解析优先 IPv4：本机无 IPv6 出口路由，但 DNS 会返回 AAAA，
+            #     nginx 对静态 host 的 proxy_pass 在启动时用 getaddrinfo 解析（resolver 的 ipv6=off 管不到），
+            #     导致每个上游都先试一串 IPv6 地址、逐个 "Network is unreachable" 超时后才回退 IPv4。
+            #     写入 gai.conf 的 IPv4 优先规则可消除这段无谓等待（幂等，重复执行不重复写）。
+            if ! grep -q '^precedence ::ffff:0:0/96' /etc/gai.conf 2>/dev/null; then
+              echo 'precedence ::ffff:0:0/96  100' | sudo tee -a /etc/gai.conf >/dev/null
+              echo "已设置 gai.conf：解析优先 IPv4"
+            else
+              echo "gai.conf 已是 IPv4 优先，跳过"
+            fi
+
             # 2) 写站点配置（含 Basic Auth 密码门）
             sudo tee /etc/nginx/conf.d/investment-intelligence.conf >/dev/null <<'NGINXCONF'
             server {

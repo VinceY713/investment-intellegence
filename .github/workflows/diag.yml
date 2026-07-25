@@ -108,6 +108,18 @@ jobs:
               | tr ',' '\n' | grep -Ei '"(ROE|MLL|XSMLL|ZCFZL|MLR|TOTALOPERATEREVE|PARENTNETPROFIT|WEIGHTAVG|JROA)[A-Z]*"' | head -30
             echo ""
 
+            echo "########## 8f. 美股K线：腾讯返回的代码带 .OQ/.N 后缀，试完整符号能否拿到完整序列"
+            for S in usAAPL.OQ usTCOM.OQ usNVDA.OQ; do
+              echo -n "--- $S : "
+              curl -s -m 15 -u "$AUTH" "http://127.0.0.1/api/usidxkline?param=$S,day,,,20,qfq" 2>/dev/null | head -c 260; echo ""
+            done
+            echo ""
+
+            echo "########## 8g. 个股/行业资金流的非 push2 替代（datacenter 报表）"
+            probe "dc 个股资金流 RPT_DATA_STOCK_FLOW" "/api/emmacro?reportName=RPT_DATA_STOCK_FLOW&columns=ALL&filter=%28SECURITY_CODE%3D%22${STOCK}%22%29&pageSize=1&source=WEB&client=WEB" 300
+            probe "dc 行业资金流 RPT_BKZJL" "/api/emmacro?reportName=RPT_BKZJL_ZJLRQS&columns=ALL&pageSize=2&source=WEB&client=WEB" 300
+            probe "dc 板块资金 RPT_DFZJL" "/api/emmacro?reportName=RPT_DFZJL_HYZJL&columns=ALL&pageSize=2&source=WEB&client=WEB" 300
+
             echo "########## 9. nginx 错误日志（尾部 40 行）"
             sudo tail -n 40 /var/log/nginx/error.log 2>/dev/null || tail -n 40 /var/log/nginx/error.log 2>/dev/null || echo "(读不到 error.log)"
             echo ""

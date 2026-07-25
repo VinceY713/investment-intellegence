@@ -412,8 +412,50 @@ function pickScaled(v, lo, hi) {
 const FUND_FIELDS = 'f43,f57,f58,f59,f105,f116,f162,f167,f173,f183,f184,f185,f186,f187,f188';
 async function fetchFundamentals(code) {
   const diag = [];
-  const secids = [];
   const s = emSecidOf(code);
+  // ① 主源：东财数据中心（估值分析 + F10 财务主指标）。
+  //    push2.eastmoney.com 已从本服务器完全不可达（直连 curl 亦 000，非 nginx 问题、非 HTTP/2 问题），
+  //    故数据中心升为主源；push2 保留为次源，日后恢复可自动用上。
+  if (s) {
+    const c = String(code).trim();
+    const secucode = c + (s[0] === '1' ? '.SH' : '.SZ');
+    const pv = v => (v == null || !isFinite(parseFloat(v))) ? null : parseFloat(v);
+    try {
+      const r1 = await fetchRaw('/api/emmacro?reportName=RPT_VALUEANALYSIS_DET&columns=ALL&filter=' + encodeURIComponent('(SECURITY_CODE="' + c + '")') + '&pageSize=1&source=WEB&client=WEB');
+      const r2 = await fetchRaw('/api/emmacro?reportName=RPT_F10_FINANCE_MAINFINADATA&columns=ALL&filter=' + encodeURIComponent('(SECUCODE="' + secucode + '")') + '&pageSize=1&sortColumns=REPORT_DATE&sortTypes=-1&source=HSF10&client=PC');
+      let v = null, f10 = null;
+      try { v = (JSON.parse(r1.text).result.data || [])[0] || null; } catch (e) {}
+      try { f10 = (JSON.parse(r2.text).result.data || [])[0] || null; } catch (e) {}
+      // ROEJQ 是【报告期累计】加权ROE（一季报 2.83% 并非年化 2.83%）：直接拿去对"ROE>15%优秀"的锚点比
+      // 会把所有股票系统性判成"偏弱"。按报告期月份年化：Q1×4 / 中报×2 / Q3×4/3 / 年报×1。
+      let roe = f10 ? pv(f10.ROEJQ) : null, roeNote = '';
+      if (roe != null && f10 && f10.REPORT_DATE) {
+        const mm = String(f10.REPORT_DATE).slice(5, 7);
+        const mul = mm === '03' ? 4 : mm === '06' ? 2 : mm === '09' ? 4 / 3 : 1;
+        if (mul !== 1) { roeNote = `（${String(f10.REPORT_DATE).slice(0, 7)} 累计 ${roe}% 年化×${mul === 4 / 3 ? '1.33' : mul}）`; roe = +(roe * mul).toFixed(2); }
+        else roeNote = '（年报口径）';
+      }
+      diag.push('dc/估值 HTTP' + r1.status + ' + F10 HTTP' + r2.status
+        + (f10 ? ' 报告期=' + String(f10.REPORT_DATE || '').slice(0, 10) + ' ROEJQ=' + f10.ROEJQ + '→年化' + roe : '') + ' ' + macroClip(r2.text));
+      const out = {
+        secid: secucode, name: (v && v.SECURITY_NAME_ABBR) || (f10 && f10.SECURITY_NAME_ABBR) || '',
+        pe: v ? pv(v.PE_TTM) : null,
+        pb: v ? pv(v.PB_MRQ) : null,
+        roe, roeNote,
+        reportDate: f10 ? String(f10.REPORT_DATE || '').slice(0, 10) : '',
+        gross: f10 ? pv(f10.XSMLL) : null,
+        netMargin: (f10 && num(f10.TOTALOPERATEREVE) > 0) ? +(num(f10.PARENTNETPROFIT) / num(f10.TOTALOPERATEREVE) * 100).toFixed(2) : null,
+        debt: f10 ? pv(f10.ZCFZL) : null,
+        revYoy: f10 ? pv(f10.TOTALOPERATEREVETZ) : null,
+        profitYoy: f10 ? pv(f10.PARENTNETPROFITTZ) : null,
+        src: '东财数据中心', diag,
+      };
+      const got = ['pe', 'pb', 'roe', 'gross', 'debt', 'revYoy'].filter(k => out[k] != null).length;
+      if (got >= 2) { out.ok = true; return out; }
+    } catch (e) { diag.push('dc 异常:' + macroClip(e.message)); }
+  }
+  // ② 次源：push2 报价字段（目前本服务器不可达，保留以备恢复；美股只能走这条）
+  const secids = [];
   if (s) secids.push(s); else [105, 106, 107].forEach(m => secids.push(m + '.' + String(code).toUpperCase()));
   for (const secid of secids) {
     const r = await fetchRaw('/api/emquote?secid=' + encodeURIComponent(secid) + '&fields=' + FUND_FIELDS);
@@ -431,38 +473,10 @@ async function fetchFundamentals(code) {
       debt: pickScaled(d.f188, 0, 100),             // 资产负债率 %
       revYoy: pickScaled(d.f184, -100, 500),        // 营收同比 %
       profitYoy: pickScaled(d.f185, -500, 2000),    // 净利润同比 %
-      diag,
+      src: '东财报价', diag,
     };
     const got = ['pe', 'pb', 'roe', 'gross', 'debt', 'revYoy'].filter(k => out[k] != null).length;
     if (got >= 2) { out.ok = true; return out; }     // 至少两项有效才算取到
-  }
-  // 东财 push2 被封/失败时的兜底（仅 A股）：数据中心 估值分析(PE/PB) ＋ F10 财务主指标(ROE/毛利/负债/增速)
-  if (s) {
-    const c = String(code).trim();
-    const secucode = c + (s[0] === '1' ? '.SH' : '.SZ');
-    const pv = v => (v == null || !isFinite(parseFloat(v))) ? null : parseFloat(v);
-    try {
-      const r1 = await fetchRaw('/api/emmacro?reportName=RPT_VALUEANALYSIS_DET&columns=ALL&filter=' + encodeURIComponent('(SECURITY_CODE="' + c + '")') + '&pageSize=1&source=WEB&client=WEB');
-      const r2 = await fetchRaw('/api/emmacro?reportName=RPT_F10_FINANCE_MAINFINADATA&columns=ALL&filter=' + encodeURIComponent('(SECUCODE="' + secucode + '")') + '&pageSize=1&sortColumns=REPORT_DATE&sortTypes=-1&source=HSF10&client=PC');
-      diag.push('dc/估值+主指标 HTTP' + r1.status + '/' + r2.status + ' ' + macroClip(r2.text));
-      let v = null, f10 = null;
-      try { v = (JSON.parse(r1.text).result.data || [])[0] || null; } catch (e) {}
-      try { f10 = (JSON.parse(r2.text).result.data || [])[0] || null; } catch (e) {}
-      const out = {
-        secid: secucode, name: (v && v.SECURITY_NAME_ABBR) || (f10 && f10.SECURITY_NAME_ABBR) || '',
-        pe: v ? pv(v.PE_TTM) : null,
-        pb: v ? pv(v.PB_MRQ) : null,
-        roe: f10 ? pv(f10.ROEJQ) : null,
-        gross: f10 ? pv(f10.XSMLL) : null,
-        netMargin: (f10 && num(f10.TOTALOPERATEREVE) > 0) ? +(num(f10.PARENTNETPROFIT) / num(f10.TOTALOPERATEREVE) * 100).toFixed(2) : null,
-        debt: f10 ? pv(f10.ZCFZL) : null,
-        revYoy: f10 ? pv(f10.TOTALOPERATEREVETZ) : null,
-        profitYoy: f10 ? pv(f10.PARENTNETPROFITTZ) : null,
-        diag,
-      };
-      const got = ['pe', 'pb', 'roe', 'gross', 'debt', 'revYoy'].filter(k => out[k] != null).length;
-      if (got >= 2) { out.ok = true; return out; }
-    } catch (e) { diag.push('dc 异常:' + macroClip(e.message)); }
   }
   return { ok: false, diag };
 }
@@ -476,8 +490,8 @@ function fundScore(f) {
     if (v == null) { parts.push({ k, v: '数据不可得', p: null, max: maxPts }); return; }
     got += maxPts; score += pts; parts.push({ k, v: txt, p: pts, max: maxPts });
   };
-  add('ROE', f.roe, f.roe == null ? 0 : (f.roe > 20 ? 3 : f.roe >= 15 ? 2.5 : f.roe >= 8 ? 1.8 : f.roe >= 3 ? 0.8 : 0), 3,
-    f.roe == null ? '' : f.roe.toFixed(2) + '%' + (f.roe > 15 ? '（优秀）' : f.roe >= 8 ? '（中等）' : '（偏弱）'));
+  add('ROE(年化)', f.roe, f.roe == null ? 0 : (f.roe > 20 ? 3 : f.roe >= 15 ? 2.5 : f.roe >= 8 ? 1.8 : f.roe >= 3 ? 0.8 : 0), 3,
+    f.roe == null ? '' : f.roe.toFixed(2) + '%' + (f.roe > 15 ? '（优秀）' : f.roe >= 8 ? '（中等）' : '（偏弱）') + (f.roeNote || ''));
   add('营收同比', f.revYoy, f.revYoy == null ? 0 : (f.revYoy > 20 ? 2.5 : f.revYoy >= 10 ? 2 : f.revYoy >= 0 ? 1.2 : f.revYoy >= -10 ? 0.5 : 0), 2.5,
     f.revYoy == null ? '' : (f.revYoy >= 0 ? '+' : '') + f.revYoy.toFixed(1) + '%');
   add('净利同比', f.profitYoy, f.profitYoy == null ? 0 : (f.profitYoy > 20 ? 2 : f.profitYoy >= 0 ? 1.2 : f.profitYoy >= -20 ? 0.5 : 0), 2,
@@ -489,7 +503,8 @@ function fundScore(f) {
   if (!got) return { ok: false };
   // 按实际取到的项归一到 10 分制，避免"缺数据 = 低分"的系统性偏差
   const norm = Math.round(score / got * 10 * 10) / 10;
-  return { ok: true, score: norm, raw: score, gotMax: got, fullMax: max, parts, coverage: Math.round(got / max * 100) };
+  return { ok: true, score: norm, raw: score, gotMax: got, fullMax: max, parts,
+    coverage: Math.round(got / max * 100), src: f.src || '', reportDate: f.reportDate || '' };
 }
 // 个股主力资金（真实）：f62 今日主力净额、f267/f164 多日；口径不明的一律不用
 async function fetchStockFlow(code) {
@@ -4573,7 +4588,7 @@ VIEWS.thesis = function (app) {
       if (fs.ok) {
         const sc2 = scoreBox.querySelector('[data-sc="fund"]'); if (sc2) sc2.value = fs.score;
         sec.insertAdjacentHTML('beforeend', `<div class="alert blue" style="margin:8px 0"><span class="icon">${icon('calc')}</span><div>
-          <strong>基本面评分 ${fs.score} / 10</strong>（按锚点表机械打分，数据覆盖 ${fs.coverage}%）——已填入下方。${tbl(fs.parts)}
+          <strong>基本面评分 ${fs.score} / 10</strong>（按锚点表机械打分，数据覆盖 ${fs.coverage}%${fs.src ? '，源：' + escapeHtml(fs.src) : ''}${fs.reportDate ? '，报告期 ' + escapeHtml(fs.reportDate) : ''}）——已填入下方。${tbl(fs.parts)}
           <span class="inline-note">缺数据的项不摊分：按实际取到的项归一，避免"取不到 = 低分"的系统性偏差。<strong>估值只用绝对 PE/PB 粗判</strong>——历史分位需要长序列财报库，本工具没有，这一项权重最低(1分)，别当结论。</span></div></div>`);
       } else {
         sec.insertAdjacentHTML('beforeend', `<div class="alert amber" style="margin:8px 0"><span class="icon">${icon('warn')}</span><div>基本面数据未取到（该标的可能非A股或接口字段不同），已留空不猜。展开下方诊断可看原始返回。</div></div>`);
