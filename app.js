@@ -253,30 +253,63 @@ async function fetchUsKlinesEM(code, count = 160) {
   }
   throw new Error('美股日K获取失败（东财 105/106/107 均无该代码）');
 }
-// 基准指数日K序列：hs300 → 腾讯 fqkline(sh000300，经 /api/kline)；spx → 东财 push2his(secid=100.SPX，经 /api/uskline 透传)
+/* 基准指数库：每个基准配多个候选源（腾讯 fqkline / 东财 push2his），逐个尝试直到取到足够长的序列。
+   指数用 fqt=0（不复权；指数本无复权，个别源对 fqt=1 会返回空——原标普500 拉不到的已知成因之一）。
+   取不到时把每个候选源的原始返回收进 diag，供页面「基准诊断」展示并据此校准 secid。 */
+const BENCHMARKS = [
+  { key: 'hs300',  label: '沪深300',   color: '#e5484d', sources: [{ kind: 'tx', sym: 'sh000300' }, { kind: 'em', secid: '1.000300' }] },
+  { key: 'sh',     label: '上证指数',   color: '#d97706', sources: [{ kind: 'tx', sym: 'sh000001' }, { kind: 'em', secid: '1.000001' }] },
+  { key: 'csi500', label: '中证500',   color: '#0891b2', sources: [{ kind: 'tx', sym: 'sh000905' }, { kind: 'em', secid: '1.000905' }] },
+  { key: 'cyb',    label: '创业板指',   color: '#7c3aed', sources: [{ kind: 'tx', sym: 'sz399006' }, { kind: 'em', secid: '0.399006' }] },
+  { key: 'hsi',    label: '恒生指数',   color: '#059669', sources: [{ kind: 'em', secid: '100.HSI' }, { kind: 'tx', sym: 'hkHSI' }] },
+  { key: 'spx',    label: '标普500',   color: '#2563eb', sources: [{ kind: 'em', secid: '100.SPX' }, { kind: 'em', secid: '100.SPX', fqt: 1 }, { kind: 'em', secid: '100.GSPC' }] },
+  { key: 'ndx',    label: '纳斯达克100', color: '#db2777', sources: [{ kind: 'em', secid: '100.NDX' }, { kind: 'em', secid: '100.NDX', fqt: 1 }] },
+  { key: 'gold',   label: '黄金(ETF)',  color: '#ca8a04', sources: [{ kind: 'tx', sym: 'sh518880' }, { kind: 'em', secid: '1.518880' }] },
+];
+const BENCH_BY_KEY = {};
+BENCHMARKS.forEach(b => { BENCH_BY_KEY[b.key] = b; });
+
+async function fetchBenchSource(src, count) {
+  if (src.kind === 'tx') {
+    const r = await fetchRaw('/api/kline?param=' + encodeURIComponent(src.sym + ',day,,,' + count + ',qfq'));
+    let out = [];
+    try {
+      const node = JSON.parse(r.text).data[src.sym];
+      const arr = node && (node.qfqday || node.day);
+      if (Array.isArray(arr)) out = arr.map(x => ({ date: x[0], close: parseFloat(x[2]) })).filter(x => x.date && isFinite(x.close) && x.close > 0);
+    } catch (e) {}
+    return { series: out, raw: 'tx/' + src.sym + ' HTTP' + r.status + ' ' + out.length + '行 ' + macroClip(r.text) };
+  }
+  if (src.kind === 'em') {
+    // 日期用东八区口径拼（原 toISOString 走 UTC，跨时区会差一天）
+    const end = todayStr().replace(/-/g, '');
+    const d0 = new Date(todayStr() + 'T00:00:00'); d0.setDate(d0.getDate() - Math.ceil(count * 2.2));
+    const beg = `${d0.getFullYear()}${String(d0.getMonth() + 1).padStart(2, '0')}${String(d0.getDate()).padStart(2, '0')}`;
+    const r = await fetchRaw('/api/uskline?secid=' + encodeURIComponent(src.secid) + '&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f53&klt=101&fqt=' + (src.fqt != null ? src.fqt : 0) + '&beg=' + beg + '&end=' + end);
+    let out = [];
+    try {
+      const list = JSON.parse(r.text).data.klines;
+      if (Array.isArray(list)) out = list.map(x => { const p = String(x).split(','); return { date: p[0], close: parseFloat(p[1]) }; })
+        .filter(x => x.date && isFinite(x.close) && x.close > 0);
+    } catch (e) {}
+    return { series: out, raw: 'em/' + src.secid + '(fqt=' + (src.fqt != null ? src.fqt : 0) + ') HTTP' + r.status + ' ' + out.length + '行 ' + macroClip(r.text) };
+  }
+  return { series: [], raw: '未知源' };
+}
+// 返回 {series, diag:[原始返回]}；series 为空表示全部候选源都失败
 async function fetchBenchmarkSeries(key, count) {
   count = count || 400;
-  if (key === 'hs300') {
-    const res = await fetch('/api/kline?param=' + encodeURIComponent('sh000300,day,,,' + count + ',qfq'), { cache: 'no-store' });
-    if (!res.ok) throw new Error('沪深300 K线接口 ' + res.status);
-    const j = await res.json();
-    const node = j && j.data && j.data['sh000300'];
-    const arr = node && (node.qfqday || node.day);
-    if (!Array.isArray(arr) || !arr.length) throw new Error('沪深300 无K线数据');
-    return arr.map(r => ({ date: r[0], close: parseFloat(r[2]) })).filter(x => isFinite(x.close) && x.close > 0);
+  const b = BENCH_BY_KEY[key];
+  if (!b) return { series: [], diag: ['未知基准 ' + key] };
+  const diag = [];
+  for (const src of b.sources) {
+    let res;
+    try { res = await fetchBenchSource(src, count); }
+    catch (e) { diag.push((src.sym || src.secid) + ' 异常:' + macroClip(e.message)); continue; }
+    diag.push(res.raw);
+    if (res.series.length >= 5) return { series: res.series, diag };   // 至少5个交易日才算有效
   }
-  if (key === 'spx') {
-    const endD = new Date(), begD = new Date(endD.getTime() - Math.ceil(count * 2.2) * 864e5);
-    const ymd = d => d.toISOString().slice(0, 10).replace(/-/g, '');
-    const res = await fetch('/api/uskline?secid=100.SPX&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f53&klt=101&fqt=1&beg=' + ymd(begD) + '&end=' + ymd(endD), { cache: 'no-store' });
-    if (!res.ok) throw new Error('标普500 K线接口 ' + res.status);
-    const j = await res.json();
-    const list = j && j.data && j.data.klines;
-    if (!Array.isArray(list) || !list.length) throw new Error('标普500 无K线数据');
-    return list.map(line => { const p = String(line).split(','); return { date: p[0], close: parseFloat(p[1]) }; })
-      .filter(x => x.date && isFinite(x.close) && x.close > 0);
-  }
-  throw new Error('未知基准 ' + key);
+  return { series: [], diag };
 }
 // 组合自身的 TWR 净值指数（首个快照 = 100）：剔除出入金，与基准对比才公平
 function twrIndexSeries(snaps) {
@@ -945,6 +978,7 @@ function applyStateDefaults(s) {
   s.layerOverrides = s.layerOverrides || {};    // 再平衡分层手动改层 {code||name: layerKey}，覆盖自动识别
   s.thesisFlags = s.thesisFlags || {};          // 「逻辑已破」标记 {code||name: true}，卖出排序最高优先
   s.kellyEvals = s.kellyEvals || {};            // 凯利AI评估持久缓存 {codeKey: {win,up,down,date,factor,trend,...}}——刷新不丢，同参数同结果
+  s.settings.benchKeys = Array.isArray(s.settings.benchKeys) ? s.settings.benchKeys : [];   // 资产趋势选中的对比基准（多选）
   s.macro = Object.assign({ market: {}, ind: {}, updatedAt: null }, s.macro || {});
   s.macro.market = s.macro.market || {}; s.macro.ind = s.macro.ind || {};
   return s;
@@ -1868,6 +1902,15 @@ function buildLineChart(points, opts) {
   marker.setAttribute('r', 4.5);
   marker.style.display = 'none';
   svg.appendChild(guide); svg.appendChild(marker);
+  // 叠加序列各自的高亮点：多条基准同时对比时，悬停能看清每条线在该日的位置
+  const exMarkers = extras.map(e => {
+    const c = document.createElementNS(NS, 'circle');
+    c.setAttribute('r', 3.5);
+    c.setAttribute('fill', e.color || 'var(--muted)');
+    c.style.display = 'none';
+    svg.appendChild(c);
+    return c;
+  });
   const wrap = el('<div style="position:relative"></div>');
   wrap.appendChild(svg);
   const tip = el('<div class="chart-tip"></div>');
@@ -1883,6 +1926,11 @@ function buildLineChart(points, opts) {
     guide.style.display = '';
     marker.setAttribute('cx', X(i)); marker.setAttribute('cy', Y(points[i].value));
     marker.style.display = '';
+    exMarkers.forEach((c, k) => {
+      const p = extras[k].points[i];
+      if (p && isFinite(p.value)) { c.setAttribute('cx', X(i)); c.setAttribute('cy', Y(p.value)); c.style.display = ''; }
+      else c.style.display = 'none';
+    });
     tip.innerHTML = opts.tooltip(i, points);
     tip.style.display = 'block';
     const pxX = X(i) / w * r.width;
@@ -1892,6 +1940,7 @@ function buildLineChart(points, opts) {
   });
   svg.addEventListener('mouseleave', () => {
     guide.style.display = 'none'; marker.style.display = 'none'; tip.style.display = 'none';
+    exMarkers.forEach(c => { c.style.display = 'none'; });
   });
   return wrap;
 }
@@ -4361,7 +4410,9 @@ VIEWS.trends = function (app) {
     : num((s.byCat || {})[dim.slice(4)]);
   const dimShort = (dim) => (dims.find(d => d.key === dim) || dims[0]).short;
   let curDim = 'total', curGran = 'day';
-  let bench = { key: '', label: '', series: null };   // 基准对比（沪深300/标普500 日K，加载后缓存在会话内）
+  // 基准对比：可多选叠加。benchLoaded[key] = {label,color,series}；benchDiag[key] = 候选源原始返回
+  const benchLoaded = {}, benchDiag = {};
+  let benchKeys = ((STATE.settings || {}).benchKeys || []).filter(k => BENCH_BY_KEY[k]);
 
   const overviewBox = el('<div class="stat-grid" style="margin-bottom:16px"></div>');
   app.appendChild(overviewBox);
@@ -4371,11 +4422,6 @@ VIEWS.trends = function (app) {
     <div class="card-head-row">
       <h3 style="margin:0">${icon('chart')} <span id="chart-title">总资产</span>走势</h3>
       <div class="row" style="gap:8px;flex:0 0 auto;align-items:center;flex-wrap:wrap">
-        <select id="bench-sel" style="width:auto;min-width:110px">
-          <option value="">不对比基准</option>
-          <option value="hs300">对比 沪深300</option>
-          <option value="spx">对比 标普500</option>
-        </select>
         <select id="dim-sel" style="width:auto;min-width:120px">${dims.map(d => `<option value="${d.key}">${escapeHtml(d.label)}</option>`).join('')}</select>
         <div class="seg" id="gran-seg">
           <button class="seg-btn active" data-g="day">日</button>
@@ -4385,11 +4431,58 @@ VIEWS.trends = function (app) {
         </div>
       </div>
     </div>
+    <div class="row" id="bench-chips" style="gap:6px;flex-wrap:wrap;margin-top:10px"></div>
     <div id="trend-chart" style="margin-top:14px"></div>
     <div id="bench-legend" class="inline-note" style="margin-top:8px"></div>
-    <p class="inline-note" style="margin-top:10px">切换「维度」可分别看总资产或某个大类/类别（如权益、基金、黄金）随时间的走势。<strong>鼠标移到折线上</strong>可查看任一日期的数值，及较昨日 / 较上月 / 较期初累计的变化。基准对比在「日」粒度 +「总资产」维度下生效：组合按 TWR 指数化（剔除出入金），与基准同起点归一。</p>
+    <div id="bench-diag"></div>
+    <p class="inline-note" style="margin-top:10px">切换「维度」可分别看总资产或某个大类/类别（如权益、基金、黄金）随时间的走势。<strong>鼠标移到折线上</strong>可查看任一日期的数值，及较昨日 / 较上月 / 较期初累计的变化——<strong>多选基准时提示框会逐条列出每个基准</strong>。基准对比在「日」粒度 +「总资产」维度下生效：组合按 TWR 指数化（剔除出入金），与各基准同起点归一（起点=100）。</p>
   </div>`);
   app.appendChild(chartCard);
+
+  // —— 基准多选（点亮即叠加；结果与选择都持久化）——
+  const chipsBox = chartCard.querySelector('#bench-chips');
+  function drawBenchChips(busyKey) {
+    chipsBox.innerHTML = `<span class="inline-note" style="align-self:center">对比基准（可多选）</span>` + BENCHMARKS.map(b => {
+      const on = benchKeys.indexOf(b.key) >= 0;
+      const failed = on && benchLoaded[b.key] === null;
+      const busy = b.key === busyKey;
+      const style = on && !failed
+        ? `background:${b.color}22;color:${b.color};border:1px solid ${b.color}`
+        : failed ? 'background:rgba(255,59,48,.10);color:var(--red-ink);border:1px solid rgba(255,59,48,.4)'
+        : 'background:rgba(120,120,128,.10);color:var(--muted);border:1px solid rgba(120,120,128,.25)';
+      return `<button data-bk="${b.key}" style="${style};font:inherit;font-size:12.5px;font-weight:600;padding:4px 10px;border-radius:999px;cursor:pointer">${busy ? '…' : (on && !failed ? '━ ' : '')}${escapeHtml(b.label)}${failed ? ' ✕' : ''}</button>`;
+    }).join('');
+    chipsBox.querySelectorAll('[data-bk]').forEach(btn => btn.onclick = () => toggleBench(btn.dataset.bk));
+  }
+  async function toggleBench(key) {
+    const i = benchKeys.indexOf(key);
+    if (i >= 0) { benchKeys.splice(i, 1); delete benchLoaded[key]; delete benchDiag[key]; }
+    else {
+      benchKeys.push(key);
+      if (!benchLoaded[key]) {
+        drawBenchChips(key);
+        const b = BENCH_BY_KEY[key];
+        try {
+          const r = await fetchBenchmarkSeries(key);
+          benchDiag[key] = r.diag;
+          benchLoaded[key] = r.series.length ? { label: b.label, color: b.color, series: r.series } : null;
+        } catch (e) { benchDiag[key] = ['异常:' + e.message]; benchLoaded[key] = null; }
+      }
+    }
+    STATE.settings.benchKeys = benchKeys.slice(); saveState();
+    drawBenchChips(); redraw();
+  }
+  drawBenchChips();
+  // 复选状态持久化后重进页面：自动把已选基准重新加载
+  benchKeys.slice().forEach(async k => {
+    const b = BENCH_BY_KEY[k];
+    try {
+      const r = await fetchBenchmarkSeries(k);
+      benchDiag[k] = r.diag;
+      benchLoaded[k] = r.series.length ? { label: b.label, color: b.color, series: r.series } : null;
+    } catch (e) { benchDiag[k] = ['异常:' + e.message]; benchLoaded[k] = null; }
+    drawBenchChips(); redraw();
+  });
 
   // 出入金登记：修正「净值变化 ≠ 真实收益率」——转入转出会让趋势/归因失真，登记后 TWR 自动剔除
   const cfCard = el(`<div class="card" style="margin-top:16px">
@@ -4510,50 +4603,81 @@ VIEWS.trends = function (app) {
 
   function drawChart(gran, dim) {
     const legend = chartCard.querySelector('#bench-legend');
+    const diagBox = chartCard.querySelector('#bench-diag');
     const box = chartCard.querySelector('#trend-chart');
     box.innerHTML = '';
-    // 基准对比模式：日粒度 + 总资产 + 基准已加载 → 组合(TWR 指数化) vs 基准，同起点=100
-    if (bench.series && gran === 'day' && dim === 'total') {
+    // 失败基准的诊断（原始返回）——供校准 secid，成功的不占地方
+    const failed = benchKeys.filter(k => benchLoaded[k] === null);
+    diagBox.innerHTML = failed.length
+      ? `<details style="margin-top:8px"><summary style="cursor:pointer;font-size:12px;color:var(--red-ink)">${failed.length} 个基准拉取失败（${failed.map(k => escapeHtml(BENCH_BY_KEY[k].label)).join('、')}）— 点击看原始返回</summary>
+          <div class="table-scroll"><table class="stack-mobile"><thead><tr><th>基准</th><th>各候选源返回</th></tr></thead><tbody>
+          ${failed.map(k => `<tr><td style="white-space:nowrap">${escapeHtml(BENCH_BY_KEY[k].label)}</td><td style="font-size:11px;font-family:monospace;word-break:break-all">${escapeHtml((benchDiag[k] || []).join('  ‖  '))}</td></tr>`).join('')}
+          </tbody></table></div></details>`
+      : '';
+    const active = benchKeys.map(k => benchLoaded[k]).filter(Boolean);
+    // 基准对比模式：日粒度 + 总资产 + 至少一个基准已加载 → 组合(TWR 指数化) vs 各基准，同起点=100
+    if (active.length && gran === 'day' && dim === 'total') {
       const mine = twrIndexSeries(snaps).map(p => ({ label: p.date.slice(5), date: p.date, value: p.value }));
-      const ref = alignBenchmark(snaps, bench.series);
-      const mRet = mine[mine.length - 1].value - 100, bRet = ref[ref.length - 1].value - 100;
-      const ex = mRet - bRet;
-      legend.innerHTML = `<span style="color:var(--accent)">━</span> 组合(TWR) ${mRet >= 0 ? '+' : ''}${fmtPct(mRet, 2)}　` +
-        `<span style="color:var(--muted)">━</span> ${escapeHtml(bench.label)} ${bRet >= 0 ? '+' : ''}${fmtPct(bRet, 2)}　` +
-        `超额 <strong style="color:${ex >= 0 ? 'var(--green-ink)' : 'var(--red-ink)'}">${ex >= 0 ? '+' : ''}${fmtPct(ex, 2)}</strong>（起点=100）`;
-      box.appendChild(buildLineChart(mine, { extra: [{ name: bench.label, color: 'var(--muted)', points: ref }], tooltip: (i) => trendTip(i, mine, gran, true) }));
+      const refs = active.map(b => ({ name: b.label, color: b.color, points: alignBenchmark(snaps, b.series) }));
+      const mRet = mine[mine.length - 1].value - 100;
+      legend.innerHTML = `<span style="color:var(--accent)">━</span> <strong>组合(TWR) ${mRet >= 0 ? '+' : ''}${fmtPct(mRet, 2)}</strong>　` +
+        refs.map(r => {
+          const bRet = r.points[r.points.length - 1].value - 100, ex = mRet - bRet;
+          return `<span style="color:${r.color}">━</span> ${escapeHtml(r.name)} ${bRet >= 0 ? '+' : ''}${fmtPct(bRet, 2)}` +
+            `<span style="color:${ex >= 0 ? 'var(--green-ink)' : 'var(--red-ink)'}">（超额 ${ex >= 0 ? '+' : ''}${fmtPct(ex, 2)}）</span>`;
+        }).join('　') + '　<span style="color:var(--muted)">起点=100</span>';
+      box.appendChild(buildLineChart(mine, { extra: refs, tooltip: (i) => trendTip(i, mine, gran, true, refs) }));
       return;
     }
-    legend.textContent = bench.series ? '基准对比仅在「日」粒度 +「总资产」维度下显示。' : '';
+    legend.textContent = benchKeys.length ? '基准对比仅在「日」粒度 +「总资产」维度下显示。' : '';
     const pts = aggregate(gran, dim);
     box.appendChild(buildLineChart(pts, { tooltip: (i) => trendTip(i, pts, gran) }));
   }
 
   // 悬停提示：当日数值 ＋ 较昨日（日粒度）/较上一期 ＋ 较上月（日粒度，30 天前最近点）＋ 较期初累计
-  function trendTip(i, pts, gran, indexMode) {
+  // refs：叠加的基准序列，每条按同一口径逐条列出（当日点位 / 较前一日 / 累计），便于横向对比
+  function trendTip(i, pts, gran, indexMode, refs) {
+    // 某序列在第 i 点的三项对比（返回 HTML 行数组）
+    const cmpRows = (series, mode, prefix) => {
+      const p = series[i];
+      if (!p || !isFinite(p.value)) return [];
+      const rows = [];
+      const cmp = (label, ref) => {
+        if (!(ref > 0)) return;
+        const d = p.value - ref, pc = d / ref * 100;
+        const col = d >= 0 ? 'var(--green-ink)' : 'var(--red-ink)';
+        rows.push(`<div style="color:${col}">${prefix}${label} ${d >= 0 ? '+' : ''}${mode ? (+d).toFixed(2) + ' 点' : fmtMoney(d)}（${d >= 0 ? '+' : ''}${fmtPct(pc, 2)}）</div>`);
+      };
+      if (i > 0) cmp(gran === 'day' ? '较昨日' : '较上一期', series[i - 1].value);
+      if (gran === 'day' && p.date && i > 0) {
+        // 本地时区做日期减法（原 toISOString 走 UTC，跨时区会偏一天）
+        const d0 = new Date(p.date + 'T00:00:00'); d0.setDate(d0.getDate() - 30);
+        const cutoff = `${d0.getFullYear()}-${String(d0.getMonth() + 1).padStart(2, '0')}-${String(d0.getDate()).padStart(2, '0')}`;
+        for (let j = i - 1; j >= 0; j--) {
+          if ((series[j].date || '') <= cutoff) { cmp('较上月', series[j].value); break; }
+        }
+      }
+      if (i > 0) cmp('较期初累计', series[0].value);
+      return rows;
+    };
     const p = pts[i];
     // indexMode：TWR 指数序列（起点=100），显示"点数"而非人民币金额
     const fmtV = v => indexMode ? (+v).toFixed(2) + ' 点' : fmtMoney(v);
-    const head = `<div style="font-weight:600">${escapeHtml(p.date || p.label)}</div>`
-      + `<div style="margin-bottom:3px">${fmtV(p.value)}${indexMode ? '<span style="color:var(--muted);font-size:11px">（TWR指数·起点100）</span>' : ''}</div>`;
-    const rows = [];
-    const cmp = (label, ref) => {
-      if (!(ref > 0)) return;
-      const d = p.value - ref, pc = d / ref * 100;
-      const col = d >= 0 ? 'var(--green-ink)' : 'var(--red-ink)';
-      rows.push(`<div style="color:${col}">${label} ${d >= 0 ? '+' : ''}${indexMode ? (+d).toFixed(2) + ' 点' : fmtMoney(d)}（${d >= 0 ? '+' : ''}${fmtPct(pc, 2)}）</div>`);
-    };
-    if (i > 0) cmp(gran === 'day' ? '较昨日' : '较上一期', pts[i - 1].value);
-    if (gran === 'day' && p.date && i > 0) {
-      // 本地时区做日期减法（原 toISOString 走 UTC，跨时区会偏一天）
-      const d0 = new Date(p.date + 'T00:00:00'); d0.setDate(d0.getDate() - 30);
-      const cutoff = `${d0.getFullYear()}-${String(d0.getMonth() + 1).padStart(2, '0')}-${String(d0.getDate()).padStart(2, '0')}`;
-      for (let j = i - 1; j >= 0; j--) {
-        if ((pts[j].date || '') <= cutoff) { cmp('较上月', pts[j].value); break; }
-      }
-    }
-    if (i > 0) cmp('较期初累计', pts[0].value);
-    return head + (rows.join('') || '<div style="color:var(--muted)">首个数据点</div>');
+    let html = `<div style="font-weight:600">${escapeHtml(p.date || p.label)}</div>`;
+    const list = (refs && refs.length) ? refs : [];
+    // 主序列（组合）
+    html += `<div style="margin:2px 0 3px"><span style="color:var(--accent)">━</span> <strong>${list.length ? '组合(TWR) ' : ''}${fmtV(p.value)}</strong>${indexMode && !list.length ? '<span style="color:var(--muted);font-size:11px">（TWR指数·起点100）</span>' : ''}</div>`;
+    const mineRows = cmpRows(pts, indexMode, '');
+    html += mineRows.join('') || (list.length ? '' : '<div style="color:var(--muted)">首个数据点</div>');
+    // 各基准逐条
+    list.forEach(r => {
+      const rp = r.points[i];
+      if (!rp || !isFinite(rp.value)) return;
+      html += `<div style="margin:5px 0 2px;border-top:1px solid rgba(127,127,127,.25);padding-top:4px"><span style="color:${r.color}">━</span> <strong>${escapeHtml(r.name)} ${(+rp.value).toFixed(2)} 点</strong></div>`;
+      html += cmpRows(r.points, true, '').join('');
+    });
+    if (list.length) html += `<div style="color:var(--muted);font-size:11px;margin-top:4px">全部按起点=100 归一</div>`;
+    return html;
   }
 
   function drawTable(gran, dim) {
@@ -4609,22 +4733,6 @@ VIEWS.trends = function (app) {
   }
 
   redraw();
-  chartCard.querySelector('#bench-sel').onchange = async (e) => {
-    const key = e.target.value;
-    const legend = chartCard.querySelector('#bench-legend');
-    if (!key) { bench = { key: '', label: '', series: null }; redraw(); return; }
-    legend.textContent = '基准加载中…';
-    try {
-      const series = await fetchBenchmarkSeries(key);
-      bench = { key, label: key === 'hs300' ? '沪深300' : '标普500', series };
-    } catch (err) {
-      bench = { key: '', label: '', series: null };
-      e.target.value = '';
-      legend.textContent = '基准加载失败：' + err.message;
-      return;
-    }
-    redraw();
-  };
   chartCard.querySelector('#dim-sel').onchange = (e) => { curDim = e.target.value; redraw(); };
   chartCard.querySelectorAll('.seg-btn').forEach(b => {
     b.onclick = () => {
