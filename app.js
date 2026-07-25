@@ -5717,7 +5717,7 @@ async function autoPullMacro() {
       }
       attempts.push(note);
     }
-    if (v != null && isFinite(v)) { m.ind[a.key] = { value: +v.toFixed(2), date: todayStr() }; ok++; detail.push(a.label + '✓'); diag.push({ label: a.label, ok: true, raw: String(+v.toFixed(2)) }); }
+    if (v != null && isFinite(v)) { m.ind[a.key] = { value: +v.toFixed(2), date: todayStr() }; pushMacroHist(a.key, +v.toFixed(2)); ok++; detail.push(a.label + '✓'); diag.push({ label: a.label, ok: true, raw: String(+v.toFixed(2)) }); }
     else { fail++; detail.push(a.label + '✗'); diag.push({ label: a.label, ok: false, raw: attempts.join('  ‖  ') }); }
   }
   if (ok > 0) m.updatedAt = todayStr();               // 全失败不盖今天的章，避免掩盖失败
@@ -5725,38 +5725,216 @@ async function autoPullMacro() {
   return { ok, fail, detail, diag };
 }
 
+/* ---- 指标历史（每次拉取/手填都记一个点，用于迷你走势线与「较上次」）---- */
+function macroHistOf(key) {
+  const h = STATE.macro && STATE.macro.hist;
+  return (h && Array.isArray(h[key])) ? h[key] : [];
+}
+function pushMacroHist(key, v) {
+  if (v == null || !isFinite(v)) return;
+  const m = STATE.macro; m.hist = m.hist || {};
+  const arr = m.hist[key] = m.hist[key] || [];
+  const t = todayStr();
+  if (arr.length && arr[arr.length - 1].d === t) arr[arr.length - 1].v = v;   // 同日覆盖
+  else arr.push({ d: t, v });
+  if (arr.length > 180) arr.splice(0, arr.length - 180);
+}
+// 迷你走势线（最近30个点，无坐标轴，仅示形态）
+function sparklineHtml(key, w, h) {
+  w = w || 88; h = h || 22;
+  const pts = macroHistOf(key).slice(-30);
+  if (pts.length < 2) return '';
+  const vs = pts.map(p => p.v);
+  let mn = Math.min(...vs), mx = Math.max(...vs);
+  if (mn === mx) { const d = Math.abs(mn) * 0.02 || 1; mn -= d; mx += d; }
+  const poly = pts.map((p, i) => `${(i / (pts.length - 1) * (w - 2) + 1).toFixed(1)},${(1 + (h - 2) * (1 - (p.v - mn) / (mx - mn))).toFixed(1)}`).join(' ');
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" style="vertical-align:middle;flex:0 0 auto"><polyline points="${poly}" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+}
+// 「较上次」变化（与上一个记录点比；方向好坏因指标而异，用中性色+箭头）
+function histDeltaHtml(key, digits) {
+  const pts = macroHistOf(key);
+  if (pts.length < 2) return '';
+  const cur = pts[pts.length - 1], prev = pts[pts.length - 2];
+  const d = cur.v - prev.v;
+  if (!isFinite(d)) return '';
+  if (d === 0) return `<span class="inline-note">持平</span>`;
+  const dg = digits != null ? digits : (Math.abs(d) >= 10 ? 0 : 2);
+  return `<span class="inline-note" title="上次 ${escapeHtml(prev.d)}：${prev.v}" style="color:var(--ink-2)">${d > 0 ? '▲' : '▼'}${Math.abs(d).toFixed(dg)}</span>`;
+}
+
+/* ---- 刻度条：把「数字」变成「位置」。分区色带 + 当前值标记，不用记阈值 ---- */
+const ZONE_FILL = { green: 'rgba(52,199,89,.16)', amber: 'rgba(255,159,10,.20)', red: 'rgba(255,59,48,.16)', blue: 'rgba(10,132,255,.14)' };
+// zones: [到哪为止, 标签, 色]，最后一段用 Infinity；min/max 是画布范围
+const MACRO_ZONES = {
+  vix:      { min: 8, max: 40, zones: [[13, '自满', 'amber'], [20, '正常', 'green'], [25, '警惕', 'amber'], [Infinity, '恐慌', 'red']] },
+  dxy:      { min: 88, max: 118, zones: [[98, '弱美元', 'blue'], [105, '中性', 'green'], [Infinity, '强美元', 'amber']] },
+  fedUpper: { min: 0, max: 7, zones: [[2, '宽松', 'blue'], [4.5, '中性', 'green'], [Infinity, '限制性', 'amber']] },
+  ust10:    { min: 0, max: 7, zones: [[3, '温和', 'green'], [4.5, '偏高', 'amber'], [Infinity, '高压', 'red']] },
+  ust2:     { min: 0, max: 7, zones: [[3, '温和', 'green'], [4.5, '偏高', 'amber'], [Infinity, '高压', 'red']] },
+  cn10:     { min: 0.5, max: 4.5, zones: [[2, '低利率', 'blue'], [Infinity, '正常', 'green']] },
+  usCPI:    { min: -1, max: 9, zones: [[2, '低', 'green'], [3, '目标附近', 'green'], [Infinity, '偏高', 'amber']] },
+  usPCE:    { min: -1, max: 9, zones: [[2, '低', 'green'], [3, '目标附近', 'green'], [Infinity, '偏高', 'amber']] },
+  cnCPI:    { min: -2, max: 6, zones: [[0.5, '通缩压力', 'amber'], [3, '温和', 'green'], [Infinity, '偏热', 'amber']] },
+  cnPMI:    { min: 44, max: 56, zones: [[50, '收缩', 'amber'], [Infinity, '扩张', 'green']] },
+  usPMI:    { min: 44, max: 56, zones: [[50, '收缩', 'amber'], [Infinity, '扩张', 'green']] },
+  usUnemp:  { min: 2, max: 9, zones: [[4.5, '强劲', 'green'], [5.5, '正常', 'green'], [Infinity, '走弱', 'amber']] },
+};
+function scaleBarHtml(value, z) {
+  if (value == null || !isFinite(value) || !z) return '';
+  const span = z.max - z.min;
+  let prev = z.min, segs = '';
+  z.zones.forEach(([to, label, color]) => {
+    const end = Math.min(to === Infinity ? z.max : to, z.max);
+    const w = Math.max(0, (end - prev) / span * 100);
+    if (w > 0) segs += `<div style="width:${w.toFixed(1)}%;background:${ZONE_FILL[color]};display:flex;align-items:center;justify-content:center;font-size:9px;color:var(--muted);overflow:hidden;white-space:nowrap">${label}</div>`;
+    prev = Math.max(prev, end);
+  });
+  const pos = Math.max(1, Math.min(99, (value - z.min) / span * 100));
+  return `<div style="position:relative;height:18px;border-radius:4px;overflow:hidden;display:flex;min-width:130px;max-width:230px">${segs}
+    <div style="position:absolute;left:${pos.toFixed(1)}%;top:0;bottom:0;width:2px;background:var(--ink);transform:translateX(-1px)"></div></div>`;
+}
+
 // 确定性 regime 信号：读已填指标，输出对「你这种组合」的含义。无 AI、可复现、不臆造。
+// 返回 {t: red/amber/blue, tag: 徽章短语, msg: 展开详情}
 function macroSignals() {
   const g = (k) => { const v = STATE.macro && STATE.macro.ind && STATE.macro.ind[k]; const n = v ? num(v.value, NaN) : NaN; return isFinite(n) ? n : null; };
   const out = [];
   const y10 = g('ust10'), y2 = g('ust2');
   if (y10 != null && y2 != null) {
     const sp = y10 - y2;
-    if (sp < 0) out.push(['red', `美债收益率曲线倒挂（10Y ${y10}% < 2Y ${y2}%，利差 ${sp.toFixed(2)}%）：历史上领先经济衰退 6–18 个月，风险资产中期需谨慎，优先保本与分散、备足现金。`]);
-    else if (sp < 0.3) out.push(['amber', `美债利差偏平（10Y−2Y ${sp.toFixed(2)}%）：曲线接近倒挂，留意衰退前兆。`]);
+    if (sp < 0) out.push({ t: 'red', tag: '曲线倒挂', msg: `美债收益率曲线倒挂（10Y ${y10}% < 2Y ${y2}%，利差 ${sp.toFixed(2)}%）：历史上领先经济衰退 6–18 个月，风险资产中期需谨慎，优先保本与分散、备足现金。` });
+    else if (sp < 0.3) out.push({ t: 'amber', tag: '利差偏平', msg: `美债利差偏平（10Y−2Y ${sp.toFixed(2)}%）：曲线接近倒挂，留意衰退前兆。` });
   }
   const fed = g('fedUpper');
   if (fed != null) {
-    if (fed >= 4.5) out.push(['amber', `美联储高利率（${fed}%）：无息黄金与高估值成长股承压、美元偏强；你的美元存款/短债有票息优势，但人民币计价的海外收益会被汇率侵蚀。`]);
-    else if (fed <= 2) out.push(['blue', `低利率环境（${fed}%）：整体利好风险资产与黄金。`]);
+    if (fed >= 4.5) out.push({ t: 'amber', tag: '高利率', msg: `美联储高利率（${fed}%）：无息黄金与高估值成长股承压、美元偏强；你的美元存款/短债有票息优势，但人民币计价的海外收益会被汇率侵蚀。` });
+    else if (fed <= 2) out.push({ t: 'blue', tag: '低利率', msg: `低利率环境（${fed}%）：整体利好风险资产与黄金。` });
   }
   const dxy = g('dxy');
   if (dxy != null) {
-    if (dxy >= 105) out.push(['amber', `强美元（DXY ${dxy}）：压制黄金/新兴市场/大宗；你的美元资产受益，但人民币口径的海外收益被汇率吃掉——注意你的美元敞口。`]);
-    else if (dxy <= 98) out.push(['blue', `弱美元（DXY ${dxy}）：利好黄金、新兴市场与非美资产。`]);
+    if (dxy >= 105) out.push({ t: 'amber', tag: '强美元', msg: `强美元（DXY ${dxy}）：压制黄金/新兴市场/大宗；你的美元资产受益，但人民币口径的海外收益被汇率吃掉——注意你的美元敞口。` });
+    else if (dxy <= 98) out.push({ t: 'blue', tag: '弱美元', msg: `弱美元（DXY ${dxy}）：利好黄金、新兴市场与非美资产。` });
   }
   const vix = g('vix');
   if (vix != null) {
-    if (vix >= 25) out.push(['red', `市场恐慌（VIX ${vix}）：波动放大，最容易情绪化操作——正是「铁律校验/止损防御」该发挥作用的时候，别追跌杀跌。`]);
-    else if (vix <= 13) out.push(['amber', `波动极低（VIX ${vix}）：市场自满，警惕尾部风险与拥挤交易，别在低波中过度加杠杆/加仓。`]);
+    if (vix >= 25) out.push({ t: 'red', tag: 'VIX恐慌', msg: `市场恐慌（VIX ${vix}）：波动放大，最容易情绪化操作——正是「铁律校验/止损防御」该发挥作用的时候，别追跌杀跌。` });
+    else if (vix <= 13) out.push({ t: 'amber', tag: '低波自满', msg: `波动极低（VIX ${vix}）：市场自满，警惕尾部风险与拥挤交易，别在低波中过度加杠杆/加仓。` });
   }
   const cpiCN = g('cnCPI');
-  if (cpiCN != null && cpiCN < 0.5) out.push(['amber', `中国 CPI 偏低（${cpiCN}%）：通缩压力、实际利率偏高，压制顺周期、利好债与红利；也倒逼政策进一步宽松。`]);
+  if (cpiCN != null && cpiCN < 0.5) out.push({ t: 'amber', tag: '中国通缩压力', msg: `中国 CPI 偏低（${cpiCN}%）：通缩压力、实际利率偏高，压制顺周期、利好债与红利；也倒逼政策进一步宽松。` });
   const cpiUS = g('usCPI');
-  if (cpiUS != null && cpiUS >= 3) out.push(['amber', `美国通胀仍偏高（CPI ${cpiUS}%）：美联储降息受限，短期压制估值与黄金。`]);
+  if (cpiUS != null && cpiUS >= 3) out.push({ t: 'amber', tag: '美通胀偏高', msg: `美国通胀仍偏高（CPI ${cpiUS}%）：美联储降息受限，短期压制估值与黄金。` });
   const pmiCN = g('cnPMI');
-  if (pmiCN != null) { if (pmiCN < 50) out.push(['amber', `中国制造业PMI ${pmiCN}<50（收缩）：顺周期/工业链需求偏弱。`]); else if (pmiCN >= 50.5) out.push(['blue', `中国制造业PMI ${pmiCN}>50（扩张）：利好周期与顺周期 A股。`]); }
-  if (!out.length) out.push(['blue', '已填写的指标未触发明显信号；补全更多指标（尤其美债10Y/2Y、美联储利率、DXY、VIX）可得到更完整的组合含义解读。']);
+  if (pmiCN != null) {
+    if (pmiCN < 50) out.push({ t: 'amber', tag: '中国PMI收缩', msg: `中国制造业PMI ${pmiCN}<50（收缩）：顺周期/工业链需求偏弱。` });
+    else if (pmiCN >= 50.5) out.push({ t: 'blue', tag: '中国PMI扩张', msg: `中国制造业PMI ${pmiCN}>50（扩张）：利好周期与顺周期 A股。` });
+  }
+  return out;
+}
+
+/* -------------------------------------------------------------------------
+   大宗商品（金/银/铜/油/锂）：腾讯外盘 hf_ 系列为主、东财期货报价备用。
+   对你组合：黄金资产+紫金矿业(金铜锂三重敞口) → 商品价格是直接的利润驱动。
+   铜金比 = LME铜($/吨) ÷ COMEX金($/盎司)：上行=增长预期(利铜)，下行=避险(利金)。
+   ------------------------------------------------------------------------- */
+const CMDTY_LIST = [
+  { key: 'gold',   name: '黄金 COMEX',  unit: '美元/盎司', digits: 1, range: [1000, 10000],  sources: [{ kind: 'thf', sym: 'hf_GC' }, { kind: 'emq', secid: '101.GC00Y' }] },
+  { key: 'copper', name: '铜 LME',      unit: '美元/吨',   digits: 0, range: [3000, 20000],  sources: [{ kind: 'thf', sym: 'hf_CAD' }, { kind: 'emq', secid: '120.CAD' }] },
+  { key: 'silver', name: '白银 COMEX',  unit: '美元/盎司', digits: 2, range: [5, 200],       sources: [{ kind: 'thf', sym: 'hf_SI' }, { kind: 'emq', secid: '101.SI00Y' }] },
+  { key: 'oil',    name: '原油 WTI',    unit: '美元/桶',   digits: 1, range: [10, 300],      sources: [{ kind: 'thf', sym: 'hf_CL' }, { kind: 'emq', secid: '102.CL00Y' }] },
+  { key: 'lith',   name: '碳酸锂 GFEX', unit: '元/吨',     digits: 0, range: [20000, 500000], sources: [{ kind: 'emq', secid: '225.lcm' }, { kind: 'emq', secid: '225.LC0' }] },
+];
+async function fetchCmdtySource(src) {
+  try {
+    if (src.kind === 'thf') {
+      // 腾讯外盘 hf_：逗号分隔，f[0]=现价；昨结通常在 f[7]（真机字段可能有别，诊断可校准）
+      const r = await fetchRaw('/api/quote?code=' + encodeURIComponent(src.sym));
+      const mm = r.text.match(/"([^"]*)"/);
+      const f = mm ? mm[1].split(',') : [];
+      const price = parseFloat(f[0]);
+      const prev = parseFloat(f[7]);
+      let chg = null;
+      if (price > 0 && prev > 0 && Math.abs(price - prev) / prev < 0.15) chg = (price - prev) / prev * 100;
+      return { price: price > 0 ? price : null, chg, raw: 'tx/' + src.sym + ' HTTP' + r.status + ' ' + macroClip(r.text) };
+    }
+    if (src.kind === 'emq') {
+      const r = await fetchRaw('/api/emquote?secid=' + encodeURIComponent(src.secid) + '&fields=f43,f59,f60');
+      let price = null, chg = null;
+      try {
+        const d = JSON.parse(r.text).data;
+        if (d && isFinite(d.f43)) {
+          const dv = Math.pow(10, d.f59 || 0);
+          price = d.f43 / dv;
+          if (isFinite(d.f60) && d.f60 > 0) { const p0 = d.f60 / dv; if (Math.abs(price - p0) / p0 < 0.15) chg = (price - p0) / p0 * 100; }
+        }
+      } catch (e) {}
+      return { price, chg, raw: 'emq/' + src.secid + ' HTTP' + r.status + ' ' + macroClip(r.text) };
+    }
+  } catch (e) { return { price: null, chg: null, raw: (src.kind || '?') + ' 异常:' + macroClip(e.message) }; }
+  return { price: null, chg: null, raw: '未知源' };
+}
+async function autoPullCmdty() {
+  const m = STATE.macro; const diag = [];
+  const items = (m.cmdty && m.cmdty.items) || {};
+  for (const c of CMDTY_LIST) {
+    let got = null; const attempts = [];
+    for (const src of c.sources) {
+      const res = await fetchCmdtySource(src);
+      let note = res.raw;
+      if (res.price != null && res.price >= c.range[0] && res.price <= c.range[1]) { attempts.push(note); got = res; break; }
+      if (res.price != null) note += ' ⚠取到 ' + res.price + ' 超区间[' + c.range + ']判无效';
+      attempts.push(note);
+    }
+    if (got) {
+      items[c.key] = { price: +got.price.toFixed(c.digits + 1), chg: got.chg != null ? +got.chg.toFixed(2) : null, date: todayStr() };
+      pushMacroHist('c_' + c.key, items[c.key].price);
+      diag.push({ label: c.name, ok: true, raw: items[c.key].price + ' ' + c.unit + (got.chg != null ? ' (' + (got.chg >= 0 ? '+' : '') + got.chg.toFixed(2) + '%)' : '') });
+    } else diag.push({ label: c.name, ok: false, raw: attempts.join('  ‖  ') });
+  }
+  if (items.copper && items.gold && items.gold.price > 0) {
+    items.cuau = { price: +(items.copper.price / items.gold.price).toFixed(2), chg: null, date: todayStr() };
+    pushMacroHist('c_cuau', items.cuau.price);
+  }
+  m.cmdty = { date: todayStr(), items, diag };
+  saveState();
+  return m.cmdty;
+}
+// 黄金/紫金相关敞口（商品价格 → 你的钱）
+function goldCopperExposure() {
+  const fx = currentFx();
+  let gold = 0, zijin = 0;
+  (STATE.assets || []).forEach(a => {
+    const n = String(a.name || ''), code = String(a.code || '');
+    if (/紫金/.test(n) || /^(sh)?601899$/i.test(code) || /^(hk)?0?2899$/i.test(code)) { zijin += assetCny(a, fx); return; }
+    if (a.category === '黄金' || /黄金|gold/i.test(n)) gold += assetCny(a, fx);
+  });
+  return { gold, zijin };
+}
+function cmdtySignals() {
+  const out = [];
+  const c = STATE.macro && STATE.macro.cmdty;
+  if (!c || !c.items) return out;
+  const it = c.items, exp = goldCopperExposure();
+  const g = it.gold;
+  if (g && g.chg != null && Math.abs(g.chg) >= 1.5 && exp.gold + exp.zijin > 0) {
+    out.push({
+      t: g.chg > 0 ? 'blue' : 'amber', tag: '金价' + (g.chg > 0 ? '大涨' : '大跌'),
+      msg: `金价当日 ${g.chg > 0 ? '+' : ''}${g.chg.toFixed(1)}%（${g.price} 美元/盎司）：你的黄金相关敞口约 ${fmtMoney(exp.gold + exp.zijin)}（实物金/黄金基金 ${fmtMoney(exp.gold)}${exp.zijin > 0 ? ' + 紫金矿业 ' + fmtMoney(exp.zijin) : ''}）。矿业股利润对金价是放大器——紫金的波动通常大于金价本身。`,
+    });
+  }
+  const hist = macroHistOf('c_cuau');
+  if (hist.length >= 5) {
+    const bi = Math.max(0, hist.length - 21);
+    const cur = hist[hist.length - 1].v, base = hist[bi].v;
+    if (base > 0) {
+      const d = (cur - base) / base * 100;
+      if (d >= 5) out.push({ t: 'blue', tag: '铜金比↑', msg: `铜金比 ${cur.toFixed(2)}（较 ${hist[bi].d} +${d.toFixed(0)}%）：铜强于金 = 增长预期占上风，利好紫金的铜业务与顺周期资产。` });
+      else if (d <= -5) out.push({ t: 'amber', tag: '铜金比↓', msg: `铜金比 ${cur.toFixed(2)}（较 ${hist[bi].d} ${d.toFixed(0)}%）：避险主导、需求走弱——金价撑利润、铜业务承压，顺周期仓位谨慎。` });
+    }
+  }
+  if (it.lith && it.lith.chg != null && Math.abs(it.lith.chg) >= 3 && exp.zijin > 0) {
+    out.push({ t: it.lith.chg > 0 ? 'blue' : 'amber', tag: '碳酸锂异动', msg: `碳酸锂当日 ${it.lith.chg > 0 ? '+' : ''}${it.lith.chg.toFixed(1)}%（${it.lith.price} 元/吨）：紫金锂板块 2026–2028 放量，锂价决定这部分增量的兑现度。` });
+  }
   return out;
 }
 
@@ -5875,15 +6053,89 @@ VIEWS.macro = function (app) {
   app.appendChild(el(`
     <div class="view-head">
       <h2>市场指标 · 影响组合的关键变量</h2>
-      <p>把影响你组合的宏观变量集中放这里随时参考。<strong>市场温度</strong>自动刷新；<strong>利率/通胀/债市</strong>按官方发布节奏你手动更新一次即可长期留存。下方<strong>信号解读</strong>是对「你这种人民币本位、A股+美股+黄金+美元资产」组合的确定性提示（不预测、不调用 AI）。</p>
+      <p>顶部<strong>信号徽章</strong> 5 秒扫完当前状态，点开看详情；<strong>大宗商品</strong>（金/铜/锂）直接联动你的黄金+紫金持仓；指标值都画在<strong>分区刻度条</strong>上——看位置不用记阈值，走势线显示最近变化。利率/通胀等按官方发布节奏手动更新一次即可长期留存（说明文字已折叠，点「说明」展开）。</p>
     </div>
   `));
 
-  // —— 信号解读（放最上面，一眼看规则）——
-  const sigCard = el('<div class="card"><h3>' + icon('gauge') + ' 当前 regime 信号解读</h3></div>');
-  macroSignals().forEach(([type, msg]) => sigCard.appendChild(el(`<div class="alert ${type}"><span class="icon">${type === 'red' ? icon('danger') : type === 'amber' ? icon('warn') : icon('info')}</span><div>${msg}</div></div>`)));
-  sigCard.appendChild(el(`<p class="inline-note">信号由你填入的指标按固定规则触发，透明、可复现；填得越全越准。</p>`));
+  // —— 信号一览（徽章一排 = 5 秒扫完；点开才看详情）——
+  const sigCard = el('<div class="card"><h3>' + icon('gauge') + ' 信号一览</h3></div>');
+  const sigs = macroSignals().concat(cmdtySignals());
+  const chipStyle = {
+    red:   'background:rgba(255,59,48,.12);color:var(--red-ink);border:1px solid rgba(255,59,48,.35)',
+    amber: 'background:rgba(255,159,10,.14);color:var(--amber-ink);border:1px solid rgba(255,159,10,.35)',
+    blue:  'background:rgba(10,132,255,.10);color:var(--accent-ink);border:1px solid rgba(10,132,255,.30)',
+    green: 'background:rgba(52,199,89,.12);color:var(--green-ink);border:1px solid rgba(52,199,89,.35)',
+  };
+  const chipBase = 'font:inherit;font-size:12.5px;font-weight:600;padding:4px 10px;border-radius:999px;cursor:pointer';
+  if (sigs.length) {
+    const chipsRow = el('<div class="row" style="gap:6px;flex-wrap:wrap"></div>');
+    const detailBox = el('<div></div>');
+    sigs.forEach((s, i) => {
+      const mark = s.t === 'red' ? '⛔' : s.t === 'amber' ? '⚠' : 'ℹ';
+      const chip = el(`<button data-sig="${i}" style="${chipStyle[s.t]};${chipBase}">${mark} ${escapeHtml(s.tag)}</button>`);
+      chipsRow.appendChild(chip);
+      const d = el(`<div class="alert ${s.t}" style="display:none;margin-top:8px"><span class="icon">${s.t === 'red' ? icon('danger') : s.t === 'amber' ? icon('warn') : icon('info')}</span><div>${s.msg}</div></div>`);
+      detailBox.appendChild(d);
+      chip.onclick = () => { d.style.display = d.style.display === 'none' ? '' : 'none'; };
+    });
+    sigCard.appendChild(chipsRow);
+    sigCard.appendChild(detailBox);
+    sigCard.appendChild(el(`<p class="inline-note" style="margin-top:8px">点徽章看详情。信号按固定规则从真实数据触发，透明、可复现；指标填得越全越准。</p>`));
+  } else {
+    sigCard.appendChild(el(`<div class="row" style="gap:6px"><span style="${chipStyle.green};${chipBase};cursor:default">✓ 无预警</span></div>
+      <p class="inline-note" style="margin-top:8px">当前已填指标均未触发预警信号。补全美债10Y/2Y、美联储利率、DXY、VIX 等可获得更完整的判断。</p>`));
+  }
   app.appendChild(sigCard);
+
+  // —— 大宗商品（金·铜·锂 — 紫金/黄金持仓联动）——
+  const cmCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('coins')} 大宗商品（金 · 铜 · 锂）</h3>
+    <p class="hint">你持有黄金资产 + 紫金矿业（金+铜+锂三重敞口），商品价格就是这部分持仓的利润驱动。<strong>铜金比</strong>（LME铜÷COMEX金）：上行=增长预期占上风(利铜/顺周期)，下行=避险主导(利金)。碳酸锂为试验源，以下方诊断为准。</p></div>`);
+  const cmBar = el(`<div class="row" style="gap:8px;flex-wrap:wrap"><button class="btn" id="cm-go" style="flex:0 0 auto">${icon('refresh')} 拉取商品价格</button><span id="cm-note" class="inline-note" style="align-self:center">${m.cmdty && m.cmdty.date ? '上次更新 ' + escapeHtml(m.cmdty.date) : '点击拉取 金/银/铜/油/锂'}</span></div>`);
+  cmCard.appendChild(cmBar);
+  const cmOut = el('<div></div>');
+  cmCard.appendChild(cmOut);
+  app.appendChild(cmCard);
+  const renderCmdty = (c) => {
+    if (!c || !c.items || !Object.keys(c.items).length) { cmOut.innerHTML = ''; return; }
+    const tiles = [];
+    CMDTY_LIST.forEach(cd => {
+      const d = c.items[cd.key];
+      if (!d) return;
+      const chg = d.chg != null && isFinite(d.chg) ? d.chg : null;
+      tiles.push(`<div class="stat"><div class="label">${escapeHtml(cd.name)}</div>
+        <div class="value" style="font-size:20px;color:${chg == null ? 'inherit' : (chg >= 0 ? 'var(--green-ink)' : 'var(--red-ink)')}">${(+d.price).toLocaleString(undefined, { maximumFractionDigits: cd.digits })}</div>
+        <div class="sub">${chg != null ? (chg >= 0 ? '+' : '') + chg.toFixed(2) + '% · ' : ''}${escapeHtml(cd.unit)}</div>
+        <div>${sparklineHtml('c_' + cd.key)} ${histDeltaHtml('c_' + cd.key)}</div></div>`);
+    });
+    if (c.items.cuau) {
+      tiles.push(`<div class="stat"><div class="label">铜金比（增长/避险温度计）</div>
+        <div class="value" style="font-size:20px">${(+c.items.cuau.price).toFixed(2)}</div>
+        <div class="sub">↑增长预期(利铜) · ↓避险(利金)</div>
+        <div>${sparklineHtml('c_cuau')} ${histDeltaHtml('c_cuau')}</div></div>`);
+    }
+    let html = tiles.length ? `<div class="stat-grid" style="margin-top:12px">${tiles.join('')}</div>` : '';
+    if (c.diag && c.diag.length) {
+      const okN = c.diag.filter(d => d.ok).length;
+      html += `<details style="margin-top:10px"><summary style="cursor:pointer;font-size:12px;color:var(--muted)">拉取诊断（成功 ${okN} / 失败 ${c.diag.length - okN}）— 点击展开</summary>
+        <div class="table-scroll"><table class="stack-mobile"><thead><tr><th>品种</th><th>结果</th><th>原始返回 / 值</th></tr></thead><tbody>
+        ${c.diag.map(d => `<tr><td style="white-space:nowrap">${escapeHtml(d.label)}</td><td>${d.ok ? '<span class="pill green">成功</span>' : '<span class="pill red">失败</span>'}</td><td style="font-size:11px;font-family:monospace;word-break:break-all">${escapeHtml(d.raw)}</td></tr>`).join('')}
+        </tbody></table></div></details>`;
+    }
+    cmOut.innerHTML = html;
+  };
+  renderCmdty(m.cmdty);
+  cmBar.querySelector('#cm-go').onclick = async () => {
+    const btn = cmBar.querySelector('#cm-go'), note = cmBar.querySelector('#cm-note');
+    btn.disabled = true; note.innerHTML = icon('refresh', 'spin') + ' 拉取中（约 3–10 秒）…';
+    try {
+      const c = await autoPullCmdty();
+      const okN = c.diag.filter(d => d.ok).length;
+      note.innerHTML = `${icon(okN ? 'check' : 'warn')} 拉取：成功 ${okN} / 失败 ${c.diag.length - okN} 项 · ${escapeHtml(c.date)}${okN < c.diag.length ? '（失败项见诊断，可截图发我校准）' : ''}`;
+      render();   // 重绘：商品瓦片 + 信号徽章（金价异动/铜金比）
+    } catch (e) {
+      note.innerHTML = `${icon('warn')} 拉取失败：${escapeHtml(e.message)}`;
+    } finally { btn.disabled = false; }
+  };
 
   // —— 市场温度（自动）——
   const mkCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('chart')} 市场温度（可自动刷新）</h3></div>`);
@@ -6002,31 +6254,41 @@ VIEWS.macro = function (app) {
     app.appendChild(dcard);
   }
 
-  // —— 手动关键指标 ——
+  // —— 手动关键指标（看板化：值 → 刻度条上的位置 + 走势，长说明折叠进「说明」）——
   MACRO_GROUPS.forEach(grp => {
     const card = el(`<div class="card" style="margin-top:16px"><h3>${escapeHtml(grp.title)}</h3></div>`);
     const scroll = el('<div class="table-scroll"></div>');
     const rows = grp.items.map(it => {
       const cur = (m.ind[it.key] || {});
+      const val = cur.value != null ? num(cur.value, NaN) : NaN;
+      const zone = MACRO_ZONES[it.key];
+      const bar = isFinite(val) && zone ? scaleBarHtml(val, zone) : '<span class="inline-note">—</span>';
+      const spark = sparklineHtml(it.key);
+      const trend = spark ? spark + ' ' + histDeltaHtml(it.key) : '<span class="inline-note">—</span>';
       return `<tr>
-        <td style="white-space:nowrap"><strong>${escapeHtml(it.name)}</strong>${it.unit ? ' <span style="color:var(--muted)">(' + it.unit + ')</span>' : ''}</td>
-        <td class="num"><input data-mk="${it.key}" value="${cur.value != null ? escapeHtml(String(cur.value)) : ''}" placeholder="填入最新值" style="max-width:120px"/></td>
+        <td><strong>${escapeHtml(it.name)}</strong>${it.unit ? ' <span style="color:var(--muted)">(' + it.unit + ')</span>' : ''}
+          <details style="margin-top:2px"><summary style="cursor:pointer;font-size:11px;color:var(--muted);list-style:revert">说明 / 对你的影响</summary>
+            <div style="font-size:12px;line-height:1.5;margin-top:4px;max-width:420px"><strong>含义</strong>：${escapeHtml(it.meaning)}<br><strong style="color:var(--accent-ink)">对你组合</strong>：${escapeHtml(it.impact)}<br><strong style="color:var(--amber-ink)">关注</strong>：${escapeHtml(it.watch)} · <a href="${it.src}" target="_blank" rel="noopener" style="color:var(--accent-ink)">官方来源↗</a></div>
+          </details></td>
+        <td class="num"><input data-mk="${it.key}" value="${cur.value != null ? escapeHtml(String(cur.value)) : ''}" placeholder="填入最新值" style="max-width:110px"/></td>
+        <td>${bar}</td>
+        <td style="white-space:nowrap">${trend}</td>
         <td class="num" style="color:var(--muted);font-size:12px">${cur.date ? escapeHtml(cur.date) : '—'}</td>
-        <td style="font-size:12px;line-height:1.5"><strong>含义</strong>：${escapeHtml(it.meaning)}<br><strong style="color:var(--accent-ink)">对你组合</strong>：${escapeHtml(it.impact)}<br><strong style="color:var(--amber-ink)">关注</strong>：${escapeHtml(it.watch)} · <a href="${it.src}" target="_blank" rel="noopener" style="color:var(--accent-ink)">官方来源↗</a></td>
       </tr>`;
     }).join('');
-    scroll.appendChild(el(`<table class="stack-mobile"><thead><tr><th>指标</th><th class="num">当前值</th><th class="num">更新日期</th><th>说明 / 对你的影响 / 关注信号</th></tr></thead><tbody>${rows}</tbody></table>`));
+    scroll.appendChild(el(`<table class="stack-mobile"><thead><tr><th>指标</th><th class="num">当前值</th><th>位置（分区刻度）</th><th>走势 / 较上次</th><th class="num">更新</th></tr></thead><tbody>${rows}</tbody></table>`));
     card.appendChild(scroll);
     app.appendChild(card);
     scroll.querySelectorAll('[data-mk]').forEach(inp => inp.onchange = () => {
       const k = inp.dataset.mk, v = inp.value.trim();
-      if (v === '') delete m.ind[k]; else m.ind[k] = { value: v, date: todayStr() };
-      saveState(); render();   // 重绘以刷新信号解读
+      if (v === '') delete m.ind[k];
+      else { m.ind[k] = { value: v, date: todayStr() }; const nv = num(v, NaN); if (isFinite(nv)) pushMacroHist(k, nv); }
+      saveState(); render();   // 重绘以刷新信号徽章/刻度条/走势
     });
   });
 
   app.appendChild(el(`<div class="card" style="margin-top:16px"><div class="alert blue"><span class="icon">${icon('info')}</span><div>
-    <strong>数据从哪来？</strong>市场行情/美元指数/VIX/美债走<strong>新浪</strong>，中国 CPI/PMI/LPR 走<strong>东方财富</strong>，美国 CPI 走东财、美国失业率/联邦利率/核心PCE/PMI 走<strong>金十数据</strong>（均免 key、境内可达，akshare 同款）——点「自动拉取宏观」一键填入。<br><strong>为什么不让 AI 自动"分析"宏观？</strong>因为模型没有实时数据、有训练截止，直接问它"当前美联储/CPI"会自信地编造过时或错误数字——对认真投资是负资产。所以这里是<strong>拉真实数据 → 工具按固定规则解读</strong>，透明可复现。<br><span style="color:var(--muted)">注：自动拉取的部分符号需真机核对，失败项会显示明细并保留手填；把失败项发我，我按你 ECS 的实际返回校准。</span></div></div></div>`));
+    <strong>数据从哪来？</strong>指数行情/VIX/外盘商品(金银铜油)走<strong>腾讯</strong>，美元指数/碳酸锂走<strong>东财报价</strong>，中国 CPI/PMI/LPR 走<strong>东财数据中心</strong>，美国失业率/联邦利率/核心PCE/PMI 走<strong>金十数据</strong>（均免 key、境内可达）——点「自动拉取宏观」「拉取商品价格」一键填入。<br><strong>为什么不让 AI 自动"分析"宏观？</strong>因为模型没有实时数据、有训练截止，直接问它"当前美联储/CPI"会自信地编造过时或错误数字——对认真投资是负资产。所以这里是<strong>拉真实数据 → 工具按固定规则解读</strong>，透明可复现。<br><span style="color:var(--muted)">注：自动拉取的部分符号需真机核对，失败项会显示明细并保留手填；把失败项发我，我按你 ECS 的实际返回校准。</span></div></div></div>`));
 };
 
 /* =========================================================================
