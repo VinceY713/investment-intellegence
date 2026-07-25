@@ -4666,9 +4666,13 @@ VIEWS.thesis = function (app) {
           try {
             const sys = '你是公告分类器。用户给你一批【已检索到的真实公告标题】，只需逐条判断其对股价的性质与影响程度。'
               + '硬性要求：(1) 只能依据给出的标题判断，禁止补充任何标题之外的信息或事件；(2) 不预测涨跌、不给买卖评级、不给目标价；'
-              + '(3) 无法判断的标为 neutral。严格返回 JSON：{"items":[{"i":序号,"s":"good|bad|neutral","w":1到3的影响程度}],"summary":"一句话概括这批公告的性质"}';
+              + '(3) <重要>只返回明确利好(good)或利空(bad)的条目，中性/例行公告一律【不要输出】（未列出即视为中性），这样输出更短；'
+              + '(4) 只输出 JSON 本身，不要任何解释文字或代码围栏。'
+              + '严格返回：{"items":[{"i":序号,"s":"good|bad","w":1到3的影响程度}],"summary":"一句话概括这批公告的性质"}';
             const user = ann.list.map((x, i) => `${i}. [${x.date}] ${x.title}`).join('\n');
-            const r = await aiChatJSON(sys, user, { temperature: 0.1, seed: 11 });
+            // 给足起始预算（旧的 900 会被推理过程吃光或把数组截断，正是"要试很多次"的原因）；
+            // aiChatJSON 内部还会在不足时自动加倍重试
+            const r = await aiChatJSON(sys, user, { temperature: 0.1, seed: 11, maxTokens: 2000 });
             const items = Array.isArray(r.items) ? r.items : [];
             let g = 0, bd = 0;
             items.forEach(it => { const w = Math.max(1, Math.min(3, num(it.w, 1))); if (it.s === 'good') g += w; else if (it.s === 'bad') bd += w; });
@@ -4800,7 +4804,7 @@ VIEWS.thesis = function (app) {
         + facts.join('\n\n')
         + (bull ? '\n\n【用户已写的看多逻辑】' + bull + '\n请以用户这条为准写 bull（可据数据润色，但不得改变其核心主张），并针对它写最强反驳。'
                 : '\n\n用户尚未写看多逻辑，请据上述真实数据起草一版。');
-      const r = await aiChatJSON(sys, user, { temperature: 0.2, seed: 7 });
+      const r = await aiChatJSON(sys, user, { temperature: 0.2, seed: 7, maxTokens: 1600 });
       const dBull = String(r.bull || '').trim();
       const bear = String(r.bear || '').trim();
       const fals = Array.isArray(r.falsify) ? r.falsify.map(x => String(x).trim()).filter(Boolean) : [];
@@ -5175,28 +5179,86 @@ function mdLite(t) {
     .replace(/\n/g, '<br>');
 }
 
-// 通用：调 DeepSeek 并要求返回 JSON（容忍 ```json 包裹等杂质，取第一个 {...} 解析）
+/* 宽容 JSON 解析：模型输出可能被 max_tokens 截断在数组中间（典型报错
+   "Expected ',' or ']' after array element"），或裹着 ```json 围栏、带前后说明文字。
+   策略：剥围栏 → 直接解析 → 取到最后一个 '}' 再解析 → 逐步回退到最后一个完整元素并按括号栈补齐。
+   截断修复只丢弃尾部不完整的那一条，前面已解析出的条目照常可用。 */
+function parseLooseJSON(text) {
+  let s = String(text == null ? '' : text).trim();
+  s = s.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+  const i = s.indexOf('{');
+  if (i < 0) throw new Error('AI 未返回 JSON');
+  s = s.slice(i);
+  try { return JSON.parse(s); } catch (e) {}
+  const j = s.lastIndexOf('}');
+  if (j > 0) { try { return JSON.parse(s.slice(0, j + 1)); } catch (e) {} }
+  // 截断修复：两轮。第一轮只在【已闭合的结构】边界('}' / ']')处切，保证丢掉的是整条不完整元素、
+  // 不会留下 {"i":2} 这种半截对象；第一轮无解才放宽到字符串/数字结尾。
+  const tryCut = (endsOk) => {
+    for (let end = s.length; end > 1; end--) {
+      if (!endsOk(s[end - 1])) continue;
+      const cand = s.slice(0, end);
+      let inStr = false, esc = false; const st = [];
+      for (let k = 0; k < cand.length; k++) {
+        const ch = cand[k];
+        if (esc) { esc = false; continue; }
+        if (ch === '\\') { if (inStr) esc = true; continue; }
+        if (ch === '"') { inStr = !inStr; continue; }
+        if (inStr) continue;
+        if (ch === '{' || ch === '[') st.push(ch);
+        else if (ch === '}' || ch === ']') st.pop();
+      }
+      if (inStr || !st.length) continue;
+      let fix = cand;
+      for (let k = st.length - 1; k >= 0; k--) fix += (st[k] === '{' ? '}' : ']');
+      try { return JSON.parse(fix); } catch (e) {}
+    }
+    return null;
+  };
+  const a1 = tryCut(c => c === '}' || c === ']');
+  if (a1) return a1;
+  const a2 = tryCut(c => c === '"' || (c >= '0' && c <= '9'));
+  if (a2) return a2;
+  throw new Error('AI 返回的 JSON 不完整且无法修复');
+}
+// 通用：调 DeepSeek 并要求返回 JSON（容忍 ```json 包裹、前后说明、以及被截断的输出）
 async function aiChatJSON(sys, user, opts) {
   opts = opts || {};
-  const body = {
-    model: AI_MODEL, stream: false,
-    temperature: opts.temperature != null ? opts.temperature : 0.15,
-    max_tokens: 900,
-    messages: [{ role: 'system', content: sys }, { role: 'user', content: user }],
-  };
-  if (opts.seed != null) body.seed = opts.seed;   // 固定种子 → 同输入尽量同输出（降低波动）
-  const res = await fetch(AI_ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) { const t = await res.text(); throw new Error('接口返回 ' + res.status + '：' + t.slice(0, 160)); }
-  const data = await res.json();
-  const content = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
-  if (!content) throw new Error('AI 返回为空');
-  const m = String(content).match(/\{[\s\S]*\}/);
-  if (!m) throw new Error('AI 未返回有效 JSON');
-  return JSON.parse(m[0]);
+  // DeepSeek 这类推理模型会先输出思考过程再给正文：max_tokens 给少了，
+  // 预算被思考吃光 → message.content 为空（界面上就是"AI 返回为空"）；
+  // 给得不够多则正文写到一半被砍 → JSON 截断在数组中间。
+  // 故：内部自动重试，逐次加倍预算；正文为空时兜底读 reasoning_content（模型常把 JSON 先写在那里）。
+  let mt = opts.maxTokens || 1200;
+  let lastErr = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const body = {
+      model: AI_MODEL, stream: false,
+      temperature: opts.temperature != null ? opts.temperature : 0.15,
+      max_tokens: mt,
+      messages: [{ role: 'system', content: sys }, { role: 'user', content: user }],
+    };
+    if (opts.seed != null) body.seed = opts.seed;   // 固定种子 → 同输入尽量同输出（降低波动）
+    const res = await fetch(AI_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) { const t = await res.text(); throw new Error('接口返回 ' + res.status + '：' + t.slice(0, 160)); }
+    const data = await res.json();
+    const c0 = data && data.choices && data.choices[0];
+    const msg = c0 && c0.message;
+    let content = (msg && msg.content) || '';
+    if (!String(content).trim() && msg && msg.reasoning_content) content = msg.reasoning_content;
+    if (String(content).trim()) {
+      try { return parseLooseJSON(content); }
+      catch (e) { lastErr = new Error(e.message + (c0 && c0.finish_reason ? '（finish_reason=' + c0.finish_reason + '）' : '')); }
+    } else {
+      lastErr = new Error('AI 返回为空' + (c0 && c0.finish_reason ? '（finish_reason=' + c0.finish_reason + '，多为 max_tokens 被思考过程耗尽）' : ''));
+    }
+    if (mt >= 4000) break;
+    mt = Math.min(mt * 2, 4000);                    // 多半是预算不够：加倍再试
+  }
+  throw lastErr || new Error('AI 调用失败');
 }
 
 const AI_REVIEW_CACHE = {};   // 会话内缓存：同一摘要复用，保证同日同组合点评一致（可复现）
