@@ -240,6 +240,27 @@ jobs:
                     add_header Cache-Control "no-store";
                 }
 
+                # 东财个股公告代理：/api/emann?stock_list=002518&page_size=30&... → 公告列表 JSON
+                # 用于「决策卡 → 消息面评分」：拉真实公告标题+日期，AI 只对已检索到的标题做分类，
+                # 绝不让模型凭记忆生成事件（模型有训练截止日，问它"最近有什么消息"必然虚构）。
+                location = /api/emann {
+                    proxy_pass https://np-anotice-stock.eastmoney.com/api/security/ann$is_args$args;
+                    proxy_http_version 1.1;
+                    proxy_set_header Connection "";
+                    proxy_set_header Host np-anotice-stock.eastmoney.com;
+                    proxy_set_header Referer https://data.eastmoney.com/;
+                    proxy_set_header User-Agent "Mozilla/5.0";
+                    proxy_set_header Accept "*/*";
+                    proxy_ssl_server_name on;
+                    proxy_ssl_name np-anotice-stock.eastmoney.com;
+                    proxy_ssl_protocols TLSv1.2 TLSv1.3;
+                    resolver 119.29.29.29 223.5.5.5 valid=300s ipv6=off;
+                    resolver_timeout 5s;
+                    proxy_connect_timeout 10s;
+                    proxy_read_timeout 15s;
+                    add_header Cache-Control "no-store";
+                }
+
                 # 东方财富宏观数据代理：/api/emmacro?reportName=RPT_ECONOMY_CPI&... → 数据中心 JSON
                 # 免 key、HTTP/1.1 可代理；用于中国 CPI/PMI/LPR 等已发布宏观数据自动拉取
                 location = /api/emmacro {

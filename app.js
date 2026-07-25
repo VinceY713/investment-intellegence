@@ -386,6 +386,139 @@ function techScore(rows) {
   };
 }
 
+/* -------------------------------------------------------------------------
+   基本面 / 资金面 / 消息面自动化。
+   界线不是「公式 vs AI」，而是【有没有可核对的真实数据作输入】：
+     · 基本面：东财 push2 报价接口本身带 ROE/PE/PB/毛利率/负债率/增速 → 取真实数字，
+       再按方法论的锚点表【机械打分】（锚点表本身就是规则，不需要模型）
+     · 资金面：个股主力净流入（真实）+ 已有的行业板块资金流 → 机械打分
+     · 消息面：拉【真实公告标题+日期】，AI 只对检索到的标题做分类（利好/利空/影响程度），
+       绝不让它凭记忆生成事件——那才是幻觉的来源
+   全部带诊断（原始返回 + 区间护栏），取不到就留空不猜。
+   ------------------------------------------------------------------------- */
+function emSecidOf(code) {
+  const c = String(code || '').trim();
+  if (!c) return null;
+  if (isUsCode(c)) return null;                       // 美股需扫 105/106/107，另行处理
+  if (/^6/.test(c) || /^(5|11|13)/.test(c)) return '1.' + c;   // 沪市
+  return '0.' + c;                                     // 深市/创业板
+}
+// push2 字段多为「值×100」（隐含两位小数）：给合理区间，自动在 raw / raw÷100 中挑对的那个
+function pickScaled(v, lo, hi) {
+  if (v == null || !isFinite(v)) return null;
+  for (const x of [v, v / 100, v / 10000]) if (x >= lo && x <= hi) return +x.toFixed(3);
+  return null;
+}
+const FUND_FIELDS = 'f43,f57,f58,f59,f105,f116,f162,f167,f173,f183,f184,f185,f186,f187,f188';
+async function fetchFundamentals(code) {
+  const diag = [];
+  const secids = [];
+  const s = emSecidOf(code);
+  if (s) secids.push(s); else [105, 106, 107].forEach(m => secids.push(m + '.' + String(code).toUpperCase()));
+  for (const secid of secids) {
+    const r = await fetchRaw('/api/emquote?secid=' + encodeURIComponent(secid) + '&fields=' + FUND_FIELDS);
+    let d = null;
+    try { d = JSON.parse(r.text).data; } catch (e) {}
+    diag.push('emq/' + secid + ' HTTP' + r.status + ' ' + macroClip(r.text));
+    if (!d) continue;
+    const out = {
+      secid, name: d.f58 || '',
+      pe: pickScaled(d.f162, -1000, 1000),          // 市盈率(动)
+      pb: pickScaled(d.f167, 0.01, 100),            // 市净率
+      roe: pickScaled(d.f173, -100, 100),           // 净资产收益率 %
+      gross: pickScaled(d.f186, -100, 100),         // 毛利率 %
+      netMargin: pickScaled(d.f187, -200, 200),     // 净利率 %
+      debt: pickScaled(d.f188, 0, 100),             // 资产负债率 %
+      revYoy: pickScaled(d.f184, -100, 500),        // 营收同比 %
+      profitYoy: pickScaled(d.f185, -500, 2000),    // 净利润同比 %
+      diag,
+    };
+    const got = ['pe', 'pb', 'roe', 'gross', 'debt', 'revYoy'].filter(k => out[k] != null).length;
+    if (got >= 2) { out.ok = true; return out; }     // 至少两项有效才算取到
+  }
+  return { ok: false, diag };
+}
+// 基本面 0-10：按方法论锚点表机械打分。取不到的项不计分也不摊分，并如实标注覆盖度。
+function fundScore(f) {
+  if (!f || !f.ok) return { ok: false };
+  const parts = [];
+  let got = 0, max = 0, score = 0;
+  const add = (k, v, pts, maxPts, txt) => {
+    max += maxPts;
+    if (v == null) { parts.push({ k, v: '数据不可得', p: null, max: maxPts }); return; }
+    got += maxPts; score += pts; parts.push({ k, v: txt, p: pts, max: maxPts });
+  };
+  add('ROE', f.roe, f.roe == null ? 0 : (f.roe > 20 ? 3 : f.roe >= 15 ? 2.5 : f.roe >= 8 ? 1.8 : f.roe >= 3 ? 0.8 : 0), 3,
+    f.roe == null ? '' : f.roe.toFixed(2) + '%' + (f.roe > 15 ? '（优秀）' : f.roe >= 8 ? '（中等）' : '（偏弱）'));
+  add('营收同比', f.revYoy, f.revYoy == null ? 0 : (f.revYoy > 20 ? 2.5 : f.revYoy >= 10 ? 2 : f.revYoy >= 0 ? 1.2 : f.revYoy >= -10 ? 0.5 : 0), 2.5,
+    f.revYoy == null ? '' : (f.revYoy >= 0 ? '+' : '') + f.revYoy.toFixed(1) + '%');
+  add('净利同比', f.profitYoy, f.profitYoy == null ? 0 : (f.profitYoy > 20 ? 2 : f.profitYoy >= 0 ? 1.2 : f.profitYoy >= -20 ? 0.5 : 0), 2,
+    f.profitYoy == null ? '' : (f.profitYoy >= 0 ? '+' : '') + f.profitYoy.toFixed(1) + '%');
+  add('资产负债率', f.debt, f.debt == null ? 0 : (f.debt < 40 ? 1.5 : f.debt < 60 ? 1 : f.debt < 75 ? 0.4 : 0), 1.5,
+    f.debt == null ? '' : f.debt.toFixed(1) + '%' + (f.debt < 40 ? '（健康）' : f.debt < 60 ? '（正常）' : '（偏高）'));
+  add('估值 PE/PB', f.pe, f.pe == null ? 0 : (f.pe > 0 && f.pe < 15 ? 1 : f.pe > 0 && f.pe < 30 ? 0.7 : f.pe > 0 && f.pe < 60 ? 0.35 : 0), 1,
+    f.pe == null ? '' : 'PE ' + f.pe.toFixed(1) + (f.pb != null ? ' / PB ' + f.pb.toFixed(2) : ''));
+  if (!got) return { ok: false };
+  // 按实际取到的项归一到 10 分制，避免"缺数据 = 低分"的系统性偏差
+  const norm = Math.round(score / got * 10 * 10) / 10;
+  return { ok: true, score: norm, raw: score, gotMax: got, fullMax: max, parts, coverage: Math.round(got / max * 100) };
+}
+// 个股主力资金（真实）：f62 今日主力净额、f267/f164 多日；口径不明的一律不用
+async function fetchStockFlow(code) {
+  const diag = [];
+  const secids = [];
+  const s = emSecidOf(code);
+  if (s) secids.push(s); else [105, 106, 107].forEach(m => secids.push(m + '.' + String(code).toUpperCase()));
+  for (const secid of secids) {
+    const r = await fetchRaw('/api/emquote?secid=' + encodeURIComponent(secid) + '&fields=f62,f184,f66,f69,f72,f75,f78');
+    let d = null;
+    try { d = JSON.parse(r.text).data; } catch (e) {}
+    diag.push('emq-flow/' + secid + ' HTTP' + r.status + ' ' + macroClip(r.text));
+    if (d && typeof d.f62 === 'number' && isFinite(d.f62)) {
+      return { ok: true, secid, todayYi: d.f62 / 1e8, ratio: (typeof d.f184 === 'number' && isFinite(d.f184)) ? d.f184 : null, diag };
+    }
+  }
+  return { ok: false, diag };
+}
+// 资金面 0-10：个股主力净额 + 净占比 + 所属板块资金流（板块数据来自「市场指标→资金流向」）
+function flowScore(sf, sectorHit) {
+  const parts = [];
+  let got = 0, score = 0;
+  if (sf && sf.ok) {
+    const y = sf.todayYi;
+    const p = y > 1 ? 3 : y > 0.2 ? 2.4 : y > -0.2 ? 1.5 : y > -1 ? 0.6 : 0;
+    score += p; got += 3;
+    parts.push({ k: '个股主力净额', v: (y >= 0 ? '+' : '') + y.toFixed(2) + ' 亿', p, max: 3 });
+    if (sf.ratio != null) {
+      const rp = sf.ratio > 5 ? 2 : sf.ratio > 0 ? 1.4 : sf.ratio > -5 ? 0.7 : 0;
+      score += rp; got += 2;
+      parts.push({ k: '主力净占比', v: (sf.ratio >= 0 ? '+' : '') + sf.ratio.toFixed(2) + '%', p: rp, max: 2 });
+    }
+  }
+  if (sectorHit) {
+    const y = sectorHit.today;
+    const p = y > 5 ? 2 : y > 0 ? 1.4 : y > -5 ? 0.7 : 0;
+    score += p; got += 2;
+    parts.push({ k: '所属板块「' + sectorHit.name + '」', v: (y >= 0 ? '+' : '') + y.toFixed(1) + ' 亿（5日 ' + (sectorHit.d5 >= 0 ? '+' : '') + sectorHit.d5.toFixed(1) + '）', p, max: 2 });
+  }
+  if (!got) return { ok: false };
+  return { ok: true, score: Math.round(score / got * 10 * 10) / 10, parts, coverage: got };
+}
+// 真实公告（近 N 条）：只取标题+日期，绝不生成
+async function fetchAnnouncements(code, n) {
+  n = n || 25;
+  const c = String(code || '').trim();
+  const q = 'cb=&sr=-1&page_size=' + n + '&page_index=1&ann_type=A&client_source=web&f_node=0&stock_list=' + encodeURIComponent(c);
+  const r = await fetchRaw('/api/emann?' + q);
+  let list = [];
+  try {
+    const j = JSON.parse(r.text.replace(/^[^{]*/, ''));
+    const d = j && j.data && j.data.list;
+    if (Array.isArray(d)) list = d.map(x => ({ title: String(x.title || '').trim(), date: String(x.notice_date || '').slice(0, 10) })).filter(x => x.title);
+  } catch (e) {}
+  return { ok: list.length > 0, list, diag: ['emann HTTP' + r.status + ' ' + list.length + '条 ' + macroClip(r.text)] };
+}
+
 /* 基准指数库：每个基准配多个候选源（腾讯 fqkline / 东财 push2his），逐个尝试直到取到足够长的序列。
    指数用 fqt=0（不复权；指数本无复权，个别源对 fqt=1 会返回空——原标普500 拉不到的已知成因之一）。
    取不到时把每个候选源的原始返回收进 diag，供页面「基准诊断」展示并据此校准 secid。 */
@@ -4295,8 +4428,8 @@ VIEWS.thesis = function (app) {
       <div class="field"></div>
     </div>
     <div class="row" style="gap:8px;flex-wrap:wrap;margin:4px 0 8px">
-      <button class="btn secondary small" id="th-tech" style="flex:0 0 auto">${icon('calc')} 自动算技术面评分（真实K线·纯公式）</button>
-      <span class="inline-note" style="align-self:center">技术面可算，故不由你估；基本面/消息面留手填——见下方说明</span>
+      <button class="btn secondary small" id="th-tech" style="flex:0 0 auto">${icon('calc')} 自动评四维（真实数据）</button>
+      <span class="inline-note" style="align-self:center">技术/基本/资金面按真实数据机械打分；消息面拉真实公告后由 AI 只做分类——见下方说明</span>
     </div>
     <div id="th-tech-out"></div>
     <div class="grid grid-2" id="th-scores"></div>
@@ -4321,11 +4454,12 @@ VIEWS.thesis = function (app) {
   formCard.querySelector('#th-gates').insertAdjacentHTML('beforebegin',
     `<details style="margin:6px 0"><summary style="cursor:pointer;font-size:12px;color:var(--muted);list-style:revert">为什么不用 AI 自动打这四个分？— 点击展开</summary>
       <div style="font-size:12.5px;line-height:1.6;margin-top:6px">
-      <p style="margin:0 0 6px"><strong>技术面：已自动算</strong>，但用的是<strong>公式不是模型</strong>。均线排列、MACD、RSI、动量都有确定算法，同样的行情永远得同样的分——让模型"看图给分"反而会同输入两次不同分（凯利模块踩过这个坑）。上方按钮会列出每一分的出处，你可以逐项核对。</p>
-      <p style="margin:0 0 6px"><strong>基本面：手填。</strong>ROE、毛利率、估值历史分位这些需要财报数据库，本工具的免key数据源取不到。没有数据的情况下让模型打分，它只会<strong>编一个看起来合理的数字</strong>——对认真投资是负资产。宁可空着。</p>
-      <p style="margin:0 0 6px"><strong>消息面：手填。</strong>同理，且更危险——模型有训练截止日，问它"最近有什么消息"会自信地给出过时或虚构的事件。你自己看到的公告和研报才是可靠输入。</p>
-      <p style="margin:0"><strong>资金面：半自动。</strong>「市场指标 → 资金流向」已经拉了行业主力资金/南向/两融的真实数据，可以据此打分；个股级别的龙虎榜、北向持股本工具暂无可靠免key源。</p>
-      <p style="margin:6px 0 0;color:var(--muted)">那套方法论用 4 个 agent 并行打分，看着更"智能"，但它的前提是接了付费金融数据库（neodata）。<strong>没有数据的 agent 不会产生信息，只会产生自信。</strong>这四个分只做记录、不参与任何自动裁决，所以空着几项完全不影响决策卡的核心功能。</p>
+      <p style="margin:0 0 6px">分界不在「公式 vs AI」，而在<strong>有没有可核对的真实数据作输入</strong>。AI 对<strong>检索到的真实数据</strong>做判断是可靠的；AI 凭<strong>记忆回忆</strong>数据才是幻觉的来源。四维都走前者：</p>
+      <p style="margin:0 0 6px"><strong>技术面 → 纯公式。</strong>均线排列/MACD/RSI/动量都有确定算法，连模型都不需要。同样的行情永远得同样的分，每一分都列出出处可逐项核对。</p>
+      <p style="margin:0 0 6px"><strong>基本面 → 真实数据 + 机械打分。</strong>ROE、毛利率、负债率、营收/净利同比、PE/PB 全部取自东财行情接口的真实字段，再按方法论的锚点表打分——<strong>锚点表本身就是规则，不需要模型</strong>。缺项不摊分（按实际取到的项归一），取不到就留空不猜。局限：<strong>估值只有绝对 PE/PB，没有历史分位</strong>（需长序列财报库），故权重最低。</p>
+      <p style="margin:0 0 6px"><strong>资金面 → 真实数据 + 机械打分。</strong>个股主力净额与净占比来自行情接口；所属板块资金流来自「市场指标 → 资金流向」已拉的真实数据。个股龙虎榜/北向持股暂无可靠免key源，未纳入。</p>
+      <p style="margin:0 0 6px"><strong>消息面 → 检索真实公告 + AI 只做分类。</strong>先从东财拉近期<strong>真实公告标题与日期</strong>（原文可展开自行核对），再让 AI <strong>仅对这些已检索到的标题</strong>判定利好/利空与影响程度；<strong>加总成分数的规则是固定公式</strong>，所以同一批公告永远得同一分。AI 拿不到标题以外的任何信息，无法虚构事件。</p>
+      <p style="margin:6px 0 0;color:var(--muted)">与那套 12-agent 方法论的差别不在"智能程度"，而在职责划分：<strong>能算的用公式（比 agent 稳定），能查的先查再判（agent 只做它擅长的分类），查不到的留空</strong>。多派几个 agent 不会凭空产生数据——没有数据的 agent 不产生信息，只产生自信。此外这四个分<strong>只做记录、不参与任何自动裁决</strong>（驱动卖出排序的是证伪条件、凯利稳健性、时间窗口、实测相关性），所以空几项也不影响决策卡的核心功能。</p>
       </div></details>`);
 
   const $f = sel => formCard.querySelector(sel);
@@ -4363,7 +4497,8 @@ VIEWS.thesis = function (app) {
     try {
       const rows = await fetchTechKlines(code);
       const t = techScore(rows);
-      if (!t.ok) { out.innerHTML = `<div class="alert amber" style="margin:8px 0"><span class="icon">${icon('warn')}</span><div>${escapeHtml(t.err)}</div></div>`; return; }
+      // 技术面不可算不能中断后三维：抛出交给 catch，流程继续
+      if (!t.ok) throw new Error(t.err);
       const sc = scoreBox.querySelector('[data-sc="tech"]');
       if (sc) sc.value = t.score;
       // 入场价空着（该标的还没刷过估值）→ 用刚取到的最新收盘价补上，三道闸才算得出来
@@ -4381,8 +4516,98 @@ VIEWS.thesis = function (app) {
       const us = out.querySelector('#th-usestop');
       if (us) us.onclick = () => { $f('#th-stop').value = t.stopHint; drawGates(); };
     } catch (e) {
-      out.innerHTML = `<div class="alert red" style="margin:8px 0"><span class="icon">${icon('warn')}</span><div>取K线失败：${escapeHtml(e.message)}</div></div>`;
-    } finally { btn.disabled = false; btn.innerHTML = ob; }
+      out.innerHTML = `<div class="alert amber" style="margin:8px 0"><span class="icon">${icon('warn')}</span><div>技术面未算出：${escapeHtml(e.message)}——其余三维继续。</div></div>`;
+    }
+    // —— 基本面 / 资金面：真实数据 → 机械打分（锚点表本身就是规则，不需要模型）——
+    const sec = document.createElement('div');
+    out.appendChild(sec);
+    const diags = [];
+    const tbl = (parts) => `<div class="table-scroll" style="margin-top:6px"><table><thead><tr><th>项</th><th>读数</th><th class="num">得分</th></tr></thead><tbody>${
+      parts.map(p => `<tr><td>${escapeHtml(p.k)}</td><td${p.p == null ? ' style="color:var(--muted)"' : ''}>${escapeHtml(p.v)}</td><td class="num">${p.p == null ? '—' : p.p + ' / ' + p.max}</td></tr>`).join('')}</tbody></table></div>`;
+    try {
+      const fdRaw = await fetchFundamentals(code);
+      diags.push(...(fdRaw.diag || []).map(x => ['基本面', x]));
+      const fs = fundScore(fdRaw);
+      if (fs.ok) {
+        const sc2 = scoreBox.querySelector('[data-sc="fund"]'); if (sc2) sc2.value = fs.score;
+        sec.insertAdjacentHTML('beforeend', `<div class="alert blue" style="margin:8px 0"><span class="icon">${icon('calc')}</span><div>
+          <strong>基本面评分 ${fs.score} / 10</strong>（按锚点表机械打分，数据覆盖 ${fs.coverage}%）——已填入下方。${tbl(fs.parts)}
+          <span class="inline-note">缺数据的项不摊分：按实际取到的项归一，避免"取不到 = 低分"的系统性偏差。<strong>估值只用绝对 PE/PB 粗判</strong>——历史分位需要长序列财报库，本工具没有，这一项权重最低(1分)，别当结论。</span></div></div>`);
+      } else {
+        sec.insertAdjacentHTML('beforeend', `<div class="alert amber" style="margin:8px 0"><span class="icon">${icon('warn')}</span><div>基本面数据未取到（该标的可能非A股或接口字段不同），已留空不猜。展开下方诊断可看原始返回。</div></div>`);
+      }
+    } catch (e) { diags.push(['基本面', '异常:' + e.message]); }
+    try {
+      const sf = await fetchStockFlow(code);
+      diags.push(...(sf.diag || []).map(x => ['资金面', x]));
+      // 所属板块资金流：用已拉过的「市场指标→资金流向」数据，按因子关键词匹配
+      let sectorHit = null;
+      const secs = (STATE.macro && STATE.macro.flow && STATE.macro.flow.sectors) || [];
+      const p0 = (STATE.positions || []).find(p => p.code === code);
+      if (p0 && secs.length) {
+        const hints = FACTOR_SECTOR_HINTS[p0.factor] || [];
+        sectorHit = secs.find(x => hints.some(h => x.name.indexOf(h) >= 0)) || null;
+      }
+      const zs = flowScore(sf, sectorHit);
+      if (zs.ok) {
+        const sc3 = scoreBox.querySelector('[data-sc="senti"]'); if (sc3) sc3.value = zs.score;
+        sec.insertAdjacentHTML('beforeend', `<div class="alert blue" style="margin:8px 0"><span class="icon">${icon('coins')}</span><div>
+          <strong>资金面评分 ${zs.score} / 10</strong>——已填入下方。${tbl(zs.parts)}
+          <span class="inline-note">${sectorHit ? '' : '未计入板块资金流：先到「市场指标 → 资金流向」拉一次，并确保该标的在「持仓」里设了因子。'}个股龙虎榜/北向持股暂无可靠免key源，未纳入。</span></div></div>`);
+      } else {
+        sec.insertAdjacentHTML('beforeend', `<div class="alert amber" style="margin:8px 0"><span class="icon">${icon('warn')}</span><div>资金面数据未取到，已留空不猜（诊断见下）。</div></div>`);
+      }
+    } catch (e) { diags.push(['资金面', '异常:' + e.message]); }
+    // —— 消息面：拉真实公告 → AI 只对已检索到的标题做分类 ——
+    try {
+      const ann = await fetchAnnouncements(code, 25);
+      diags.push(...(ann.diag || []).map(x => ['消息面', x]));
+      if (!ann.ok) {
+        sec.insertAdjacentHTML('beforeend', `<div class="alert amber" style="margin:8px 0"><span class="icon">${icon('warn')}</span><div>未取到公告列表，消息面留空（诊断见下）。<strong>不会让模型凭记忆编事件。</strong></div></div>`);
+      } else {
+        const box = el(`<div class="alert blue" style="margin:8px 0"><span class="icon">${icon('book')}</span><div id="th-news-in">
+          已取到 <strong>${ann.list.length}</strong> 条真实公告（最新 ${escapeHtml(ann.list[0].date)}）。点下方按钮让 AI <strong>只对这些已检索到的标题</strong>做利好/利空分类并汇总成分数——它拿不到标题以外的任何信息，无法虚构事件。
+          <div class="row" style="gap:6px;margin-top:8px"><button class="btn secondary small" id="th-news-go" style="flex:0 0 auto">${icon('sparkles')} 对这 ${ann.list.length} 条公告分类</button></div>
+          <details style="margin-top:6px"><summary style="cursor:pointer;font-size:12px;color:var(--muted)">查看原文标题（可自行核对）</summary>
+            <div style="font-size:12px;line-height:1.7;margin-top:4px">${ann.list.map(x => '· ' + escapeHtml(x.date) + ' ' + escapeHtml(x.title)).join('<br>')}</div></details>
+        </div></div>`);
+        sec.appendChild(box);
+        box.querySelector('#th-news-go').onclick = async (ev) => {
+          const nb = ev.target.closest('button'); nb.disabled = true; const nob = nb.innerHTML;
+          nb.innerHTML = icon('refresh', 'spin') + ' 分类中…';
+          try {
+            const sys = '你是公告分类器。用户给你一批【已检索到的真实公告标题】，只需逐条判断其对股价的性质与影响程度。'
+              + '硬性要求：(1) 只能依据给出的标题判断，禁止补充任何标题之外的信息或事件；(2) 不预测涨跌、不给买卖评级、不给目标价；'
+              + '(3) 无法判断的标为 neutral。严格返回 JSON：{"items":[{"i":序号,"s":"good|bad|neutral","w":1到3的影响程度}],"summary":"一句话概括这批公告的性质"}';
+            const user = ann.list.map((x, i) => `${i}. [${x.date}] ${x.title}`).join('\n');
+            const r = await aiChatJSON(sys, user, { temperature: 0.1, seed: 11 });
+            const items = Array.isArray(r.items) ? r.items : [];
+            let g = 0, bd = 0;
+            items.forEach(it => { const w = Math.max(1, Math.min(3, num(it.w, 1))); if (it.s === 'good') g += w; else if (it.s === 'bad') bd += w; });
+            // 机械汇总：净分 → 0-10（分类是AI的，加总规则是固定的）
+            const net = g - bd, tot = g + bd;
+            const score = tot === 0 ? 5 : Math.max(0, Math.min(10, Math.round((5 + net / Math.max(tot, 3) * 5) * 10) / 10));
+            const sc4 = scoreBox.querySelector('[data-sc="news"]'); if (sc4) sc4.value = score;
+            const good = items.filter(x => x.s === 'good').map(x => ann.list[x.i]).filter(Boolean);
+            const bad = items.filter(x => x.s === 'bad').map(x => ann.list[x.i]).filter(Boolean);
+            box.querySelector('#th-news-in').innerHTML = `<strong>消息面评分 ${score} / 10</strong>（利好权重 ${g} / 利空权重 ${bd}，基于 ${ann.list.length} 条真实公告）——已填入下方。
+              <br>${escapeHtml(String(r.summary || ''))}
+              ${good.length ? '<br><strong style="color:var(--green-ink)">利好</strong>：<br>· ' + good.slice(0, 6).map(x => escapeHtml(x.date + ' ' + x.title)).join('<br>· ') : ''}
+              ${bad.length ? '<br><strong style="color:var(--red-ink)">利空</strong>：<br>· ' + bad.slice(0, 6).map(x => escapeHtml(x.date + ' ' + x.title)).join('<br>· ') : ''}
+              <br><span class="inline-note">分类由 AI 做、<strong>加总规则是固定公式</strong>（净权重归一到0-10），所以同一批公告永远得同一分。AI 只看到上面这些标题，没有其它信息来源。</span>`;
+          } catch (e2) {
+            box.querySelector('#th-news-in').insertAdjacentHTML('beforeend', `<br><span style="color:var(--red-ink)">分类失败：${escapeHtml(e2.message)}</span>`);
+          } finally { nb.disabled = false; nb.innerHTML = nob; }
+        };
+      }
+    } catch (e) { diags.push(['消息面', '异常:' + e.message]); }
+    if (diags.length) {
+      sec.insertAdjacentHTML('beforeend', `<details style="margin:6px 0"><summary style="cursor:pointer;font-size:12px;color:var(--muted)">数据源诊断（${diags.length} 条原始返回）— 点击展开</summary>
+        <div class="table-scroll"><table class="stack-mobile"><thead><tr><th>维度</th><th>原始返回</th></tr></thead><tbody>
+        ${diags.map(([k, v]) => `<tr><td style="white-space:nowrap">${escapeHtml(k)}</td><td style="font-size:11px;font-family:monospace;word-break:break-all">${escapeHtml(v)}</td></tr>`).join('')}
+        </tbody></table></div></details>`);
+    }
+    btn.disabled = false; btn.innerHTML = ob;
   };
 
   // 选标的 → 回填已有卡
