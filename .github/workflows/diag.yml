@@ -81,6 +81,33 @@ jobs:
             probe "kline sz$STOCK" "/api/kline?param=sz$STOCK,day,,,5,qfq" 300
             probe "fundhist 020602" "/api/fundhist?fundCode=020602&pageIndex=1&pageSize=2" 400
 
+            echo "########## 8b. 【根因判定】绕过 nginx 直连 push2：区分「IP被封」还是「nginx不支持HTTP/2上游」"
+            for U in "https://push2.eastmoney.com/api/qt/stock/get?secid=0.002518&fields=f43,f58,f162,f167,f173" \
+                     "https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=105.AAPL&fields1=f1,f2&fields2=f51,f53&klt=101&fqt=1&beg=20250101&end=20260731"; do
+              echo "--- URL: ${U%%\?*}"
+              echo -n "    http1.1 : "; curl -s -m 15 --http1.1 -o /tmp/a1 -w "%{http_code} %{size_download}B" -A "Mozilla/5.0" -e "https://quote.eastmoney.com/" "$U" 2>&1; echo " | $(head -c 120 /tmp/a1 2>/dev/null)"
+              echo -n "    http2   : "; curl -s -m 15 --http2 -o /tmp/a2 -w "%{http_code} %{size_download}B" -A "Mozilla/5.0" -e "https://quote.eastmoney.com/" "$U" 2>&1; echo " | $(head -c 120 /tmp/a2 2>/dev/null)"
+            done
+            echo ""
+
+            echo "########## 8c. 美股个股能否走腾讯 newfqkline（uskline 已死，找替代）"
+            probe "usidxkline usAAPL" "/api/usidxkline?param=usAAPL,day,,,20,qfq" 300
+            probe "usidxkline usTCOM" "/api/usidxkline?param=usTCOM,day,,,20,qfq" 300
+
+            echo "########## 8d. 广期所补 trade_type 参数（上轮只回「总计」空行）"
+            for D in $(date -d '1 day ago' +%Y%m%d) $(date -d '2 days ago' +%Y%m%d); do
+              echo "--- gfex 直连 $D"
+              curl -s -m 15 -X POST "https://www.gfex.com.cn/u/interfaceCommon/getFutureDailyQuotes" \
+                -H "Content-Type: application/x-www-form-urlencoded" -A "Mozilla/5.0" \
+                --data "trade_date=$D&trade_type=0" 2>&1 | head -c 400; echo ""
+            done
+            echo ""
+
+            echo "########## 8e. F10 主指标完整字段名（确认 ROE/毛利率/负债率 的键）"
+            curl -s -m 20 -u "$AUTH" "http://127.0.0.1/api/emmacro?reportName=RPT_F10_FINANCE_MAINFINADATA&columns=ALL&filter=%28SECUCODE%3D%22${STOCK}.SZ%22%29&pageSize=1&sortColumns=REPORT_DATE&sortTypes=-1&source=HSF10&client=PC" 2>/dev/null \
+              | tr ',' '\n' | grep -Ei '"(ROE|MLL|XSMLL|ZCFZL|MLR|TOTALOPERATEREVE|PARENTNETPROFIT|WEIGHTAVG|JROA)[A-Z]*"' | head -30
+            echo ""
+
             echo "########## 9. nginx 错误日志（尾部 40 行）"
             sudo tail -n 40 /var/log/nginx/error.log 2>/dev/null || tail -n 40 /var/log/nginx/error.log 2>/dev/null || echo "(读不到 error.log)"
             echo ""
