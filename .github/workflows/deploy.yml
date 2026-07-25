@@ -308,6 +308,8 @@ jobs:
                     proxy_set_header Host www.gfex.com.cn;
                     proxy_set_header Content-Type "application/x-www-form-urlencoded";
                     proxy_set_header User-Agent "Mozilla/5.0";
+                    # 必须清掉浏览器的 Referer：广期所 WAF 防盗链，带外站 Referer 一律 403
+                    proxy_set_header Referer "http://www.gfex.com.cn/";
                     resolver 119.29.29.29 223.5.5.5 valid=300s ipv6=off;
                     resolver_timeout 5s;
                     proxy_connect_timeout 10s;
