@@ -436,6 +436,34 @@ async function fetchFundamentals(code) {
     const got = ['pe', 'pb', 'roe', 'gross', 'debt', 'revYoy'].filter(k => out[k] != null).length;
     if (got >= 2) { out.ok = true; return out; }     // 至少两项有效才算取到
   }
+  // 东财 push2 被封/失败时的兜底（仅 A股）：数据中心 估值分析(PE/PB) ＋ F10 财务主指标(ROE/毛利/负债/增速)
+  if (s) {
+    const c = String(code).trim();
+    const secucode = c + (s[0] === '1' ? '.SH' : '.SZ');
+    const pv = v => (v == null || !isFinite(parseFloat(v))) ? null : parseFloat(v);
+    try {
+      const r1 = await fetchRaw('/api/emmacro?reportName=RPT_VALUEANALYSIS_DET&columns=ALL&filter=' + encodeURIComponent('(SECURITY_CODE="' + c + '")') + '&pageSize=1&source=WEB&client=WEB');
+      const r2 = await fetchRaw('/api/emmacro?reportName=RPT_F10_FINANCE_MAINFINADATA&columns=ALL&filter=' + encodeURIComponent('(SECUCODE="' + secucode + '")') + '&pageSize=1&sortColumns=REPORT_DATE&sortTypes=-1&source=HSF10&client=PC');
+      diag.push('dc/估值+主指标 HTTP' + r1.status + '/' + r2.status + ' ' + macroClip(r2.text));
+      let v = null, f10 = null;
+      try { v = (JSON.parse(r1.text).result.data || [])[0] || null; } catch (e) {}
+      try { f10 = (JSON.parse(r2.text).result.data || [])[0] || null; } catch (e) {}
+      const out = {
+        secid: secucode, name: (v && v.SECURITY_NAME_ABBR) || (f10 && f10.SECURITY_NAME_ABBR) || '',
+        pe: v ? pv(v.PE_TTM) : null,
+        pb: v ? pv(v.PB_MRQ) : null,
+        roe: f10 ? pv(f10.ROEJQ) : null,
+        gross: f10 ? pv(f10.XSMLL) : null,
+        netMargin: (f10 && num(f10.TOTALOPERATEREVE) > 0) ? +(num(f10.PARENTNETPROFIT) / num(f10.TOTALOPERATEREVE) * 100).toFixed(2) : null,
+        debt: f10 ? pv(f10.ZCFZL) : null,
+        revYoy: f10 ? pv(f10.TOTALOPERATEREVETZ) : null,
+        profitYoy: f10 ? pv(f10.PARENTNETPROFITTZ) : null,
+        diag,
+      };
+      const got = ['pe', 'pb', 'roe', 'gross', 'debt', 'revYoy'].filter(k => out[k] != null).length;
+      if (got >= 2) { out.ok = true; return out; }
+    } catch (e) { diag.push('dc 异常:' + macroClip(e.message)); }
+  }
   return { ok: false, diag };
 }
 // 基本面 0-10：按方法论锚点表机械打分。取不到的项不计分也不摊分，并如实标注覆盖度。
@@ -6824,7 +6852,7 @@ const CMDTY_LIST = [
   { key: 'silver', name: '白银 COMEX',  unit: '美元/盎司', digits: 2, range: [5, 200],       sources: [{ kind: 'thf', sym: 'hf_SI' }, { kind: 'emq', secid: '101.SI00Y' }] },
   { key: 'oil',    name: '原油 WTI',    unit: '美元/桶',   digits: 1, range: [10, 300],      sources: [{ kind: 'thf', sym: 'hf_CL' }, { kind: 'emq', secid: '102.CL00Y' }] },
   // 东财 push2 stock/get 对广期所 secid 返回 502（真机确认），首选改走已验证可达的 push2 clist（/api/emflow 同通道）
-  { key: 'lith',   name: '碳酸锂 GFEX', unit: '元/吨',     digits: 0, range: [20000, 500000], sources: [{ kind: 'clist', fs: 'm:225', re: /^lcm$|碳酸锂主/ }, { kind: 'emq', secid: '225.lcm' }] },
+  { key: 'lith',   name: '碳酸锂 GFEX', unit: '元/吨',     digits: 0, range: [20000, 500000], sources: [{ kind: 'gfex' }, { kind: 'clist', fs: 'm:225', re: /^lcm$|碳酸锂主/ }, { kind: 'emq', secid: '225.lcm' }] },
 ];
 async function fetchCmdtySource(src) {
   try {
@@ -6851,6 +6879,25 @@ async function fetchCmdtySource(src) {
         }
       } catch (e) {}
       return { price, chg, raw: 'emq/' + src.secid + ' HTTP' + r.status + ' ' + macroClip(r.text) };
+    }
+    if (src.kind === 'gfex') {
+      // 广期所官方日行情（POST 表单，经 /api/gfex 代理）：碳酸锂取 varietyOrder==='lc' 行。
+      // 涨跌% = (收盘 − 昨结) ÷ 昨结。周末/节假日无数据 → 自动回退最近 7 天内有数的一天。
+      for (let back = 0; back < 7; back++) {
+        const d = new Date(todayStr() + 'T00:00:00'); d.setDate(d.getDate() - back);
+        const ymd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+        const r = await fetchRaw('/api/gfex?trade_date=' + ymd);
+        try {
+          const rows = JSON.parse(r.text).data;
+          const hit = Array.isArray(rows) && rows.find(x => x.varietyOrder === 'lc' || /碳酸锂/.test(x.variety || ''));
+          if (hit && isFinite(num(hit.close)) && num(hit.close) > 0) {
+            const price = num(hit.close);
+            const chg = num(hit.lastClear) > 0 ? +(((price - num(hit.lastClear)) / num(hit.lastClear)) * 100).toFixed(2) : null;
+            return { price, chg, raw: 'gfex/' + ymd + ' HTTP' + r.status + ' ' + macroClip(r.text) };
+          }
+        } catch (e) {}
+      }
+      return { price: null, chg: null, raw: 'gfex 近 7 天无数据' };
     }
     if (src.kind === 'clist') {
       // push2 clist（与资金流同通道）：fs 指定市场（m:225=广期所），按 f12 代码/f14 名称匹配主力合约
@@ -7290,7 +7337,7 @@ VIEWS.macro = function (app) {
   });
 
   app.appendChild(el(`<div class="card" style="margin-top:16px"><div class="alert blue"><span class="icon">${icon('info')}</span><div>
-    <strong>数据从哪来？</strong>指数行情/VIX/外盘商品(金银铜油)走<strong>腾讯</strong>，美元指数/碳酸锂走<strong>东财报价</strong>，中国 CPI/PMI/LPR 走<strong>东财数据中心</strong>，美国失业率/联邦利率/核心PCE/PMI 走<strong>金十数据</strong>（均免 key、境内可达）——点「自动拉取宏观」「拉取商品价格」一键填入。<br><strong>为什么不让 AI 自动"分析"宏观？</strong>因为模型没有实时数据、有训练截止，直接问它"当前美联储/CPI"会自信地编造过时或错误数字——对认真投资是负资产。所以这里是<strong>拉真实数据 → 工具按固定规则解读</strong>，透明可复现。<br><span style="color:var(--muted)">注：自动拉取的部分符号需真机核对，失败项会显示明细并保留手填；把失败项发我，我按你 ECS 的实际返回校准。</span></div></div></div>`));
+    <strong>数据从哪来？</strong>指数行情/VIX/外盘商品(金银铜油)走<strong>腾讯</strong>，美元指数走<strong>东财报价</strong>，碳酸锂走<strong>广期所官方</strong>，中国 CPI/PMI/LPR 走<strong>东财数据中心</strong>，美国失业率/联邦利率/核心PCE/PMI 走<strong>金十数据</strong>（均免 key、境内可达）——点「自动拉取宏观」「拉取商品价格」一键填入。<br><strong>为什么不让 AI 自动"分析"宏观？</strong>因为模型没有实时数据、有训练截止，直接问它"当前美联储/CPI"会自信地编造过时或错误数字——对认真投资是负资产。所以这里是<strong>拉真实数据 → 工具按固定规则解读</strong>，透明可复现。<br><span style="color:var(--muted)">注：自动拉取的部分符号需真机核对，失败项会显示明细并保留手填；把失败项发我，我按你 ECS 的实际返回校准。</span></div></div></div>`));
 };
 
 /* =========================================================================
