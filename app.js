@@ -498,8 +498,14 @@ function fundScore(f) {
     f.profitYoy == null ? '' : (f.profitYoy >= 0 ? '+' : '') + f.profitYoy.toFixed(1) + '%');
   add('资产负债率', f.debt, f.debt == null ? 0 : (f.debt < 40 ? 1.5 : f.debt < 60 ? 1 : f.debt < 75 ? 0.4 : 0), 1.5,
     f.debt == null ? '' : f.debt.toFixed(1) + '%' + (f.debt < 40 ? '（健康）' : f.debt < 60 ? '（正常）' : '（偏高）'));
-  add('估值 PE/PB', f.pe, f.pe == null ? 0 : (f.pe > 0 && f.pe < 15 ? 1 : f.pe > 0 && f.pe < 30 ? 0.7 : f.pe > 0 && f.pe < 60 ? 0.35 : 0), 1,
-    f.pe == null ? '' : 'PE ' + f.pe.toFixed(1) + (f.pb != null ? ' / PB ' + f.pb.toFixed(2) : ''));
+  // 估值：PE 缺失（如亏损公司常无 PE_TTM）时用 PB 兜底，否则整项被跳过、PB 白取了
+  const valHas = (f.pe != null || f.pb != null) ? 1 : null;
+  const valPts = f.pe != null
+    ? (f.pe > 0 && f.pe < 15 ? 1 : f.pe > 0 && f.pe < 30 ? 0.7 : f.pe > 0 && f.pe < 60 ? 0.35 : 0)
+    : (f.pb != null ? (f.pb < 1.5 ? 1 : f.pb < 3 ? 0.7 : f.pb < 6 ? 0.35 : 0) : 0);
+  add('估值 PE/PB', valHas, valPts, 1,
+    [f.pe != null ? 'PE ' + f.pe.toFixed(1) : '', f.pb != null ? 'PB ' + f.pb.toFixed(2) : ''].filter(Boolean).join(' / ')
+    + '（仅绝对值，无历史分位/行业对比，权重最低）');
   if (!got) return { ok: false };
   // 按实际取到的项归一到 10 分制，避免"缺数据 = 低分"的系统性偏差
   const norm = Math.round(score / got * 10 * 10) / 10;
@@ -586,6 +592,76 @@ async function fetchAnnouncements(code, n) {
     if (Array.isArray(d)) list = d.map(x => ({ title: String(x.title || '').trim(), date: String(x.notice_date || '').slice(0, 10) })).filter(x => x.title);
   } catch (e) {}
   return { ok: list.length > 0, list, diag: ['emann HTTP' + r.status + ' ' + list.length + '条 ' + macroClip(r.text)] };
+}
+
+/* -------------------------------------------------------------------------
+   相对强弱（行业/大盘维度）——补上「只看个股财务与资金、看不见它在赛道里的位置」的空缺。
+   口径：个股相对基准的超额收益（RS = 个股涨幅 − 基准涨幅），A股比沪深300、美股比标普500。
+   为什么用它代表「行业趋势/板块潜力」：板块景气最终会体现在【相对大盘的持续超额】上；
+   而个股主力资金/板块资金流的数据源已从本服务器不可达（push2 被封），RS 是纯 K 线可算、
+   可复现、不依赖任何被封接口的替代口径。
+   同时给出「RS 动能」：近 20 日 RS 是在改善还是恶化——景气拐点往往先反映在这里。
+   局限（如实标注）：这是【相对强弱】不是【行业基本面景气度】。它能告诉你市场当前怎么定价这条赛道，
+   不能告诉你赛道本身的产能/需求/政策周期——后者仍需你在看多逻辑里自己论证。
+   ------------------------------------------------------------------------- */
+async function fetchRsBenchmark(isUs) {
+  // A股→沪深300（腾讯 fqkline，已验证可用）；美股→标普500（腾讯 newfqkline usINX）
+  if (isUs) {
+    const r = await fetchRaw('/api/usidxkline?param=' + encodeURIComponent('usINX,day,,,250,qfq'));
+    const node = JSON.parse(r.text).data.usINX;
+    const arr = node && (node.qfqday || node.day);
+    return { name: '标普500', series: (arr || []).map(x => ({ date: x[0], close: parseFloat(x[2]) })).filter(x => x.date && x.close > 0) };
+  }
+  const r = await fetchRaw('/api/kline?param=' + encodeURIComponent('sh000300,day,,,250,qfq'));
+  const node = JSON.parse(r.text).data['sh000300'];
+  const arr = node && (node.qfqday || node.day);
+  return { name: '沪深300', series: (arr || []).map(x => ({ date: x[0], close: parseFloat(x[2]) })).filter(x => x.date && x.close > 0) };
+}
+// 按日期对齐两条序列 → 取共同交易日的收盘
+function alignPair(a, b) {
+  const mb = new Map(b.map(x => [x.date, x.close]));
+  const out = [];
+  a.forEach(x => { const y = mb.get(x.date); if (y > 0 && x.close > 0) out.push({ date: x.date, s: x.close, b: y }); });
+  return out;
+}
+function retPct(arr, key, back) {
+  const i = arr.length - 1, j = i - back;
+  if (j < 0 || !(arr[j][key] > 0)) return null;
+  return (arr[i][key] / arr[j][key] - 1) * 100;
+}
+// 0-10 相对强弱评分 + 明细
+function rsScore(stockSeries, benchSeries, benchName) {
+  const p = alignPair(stockSeries, benchSeries);
+  if (p.length < 65) return { ok: false, err: '与基准的共同交易日不足 65 天（' + p.length + '）' };
+  const parts = []; let score = 0;
+  const mk = (back, label, maxPts) => {
+    const rs = retPct(p, 's', back), rb = retPct(p, 'b', back);
+    if (rs == null || rb == null) return null;
+    const d = rs - rb;
+    const pts = d > 15 ? maxPts : d > 5 ? maxPts * 0.75 : d > -5 ? maxPts * 0.5 : d > -15 ? maxPts * 0.2 : 0;
+    parts.push({ k: label, v: `个股 ${rs >= 0 ? '+' : ''}${rs.toFixed(1)}% vs ${benchName} ${rb >= 0 ? '+' : ''}${rb.toFixed(1)}% → 超额 ${d >= 0 ? '+' : ''}${d.toFixed(1)}%`
+      + (d > 15 ? '（大幅领先）' : d > 5 ? '（领先）' : d > -5 ? '（同步）' : d > -15 ? '（落后）' : '（严重落后）'), p: +pts.toFixed(2), max: maxPts });
+    score += pts;
+    return d;
+  };
+  const d60 = mk(60, '60日相对强弱', 4);
+  const d120 = p.length > 121 ? mk(120, '120日相对强弱', 3) : null;
+  // RS 动能：当前 60 日超额 vs 20 日前的 60 日超额——景气拐点常先反映在这里
+  let maxMom = 3, momPts = 0, momTxt = '样本不足';
+  if (p.length > 81) {
+    const cur = (retPct(p, 's', 60) - retPct(p, 'b', 60));
+    const prevArr = p.slice(0, p.length - 20);
+    const prev = (retPct(prevArr, 's', 60) - retPct(prevArr, 'b', 60));
+    if (isFinite(cur) && isFinite(prev)) {
+      const dm = cur - prev;
+      momPts = dm > 8 ? 3 : dm > 2 ? 2.2 : dm > -2 ? 1.5 : dm > -8 ? 0.6 : 0;
+      momTxt = `超额较 20 日前 ${dm >= 0 ? '+' : ''}${dm.toFixed(1)}pp` + (dm > 2 ? '（相对走强中）' : dm < -2 ? '（相对走弱中）' : '（持平）');
+    }
+  }
+  score += momPts;
+  parts.push({ k: 'RS 动能(20日变化)', v: momTxt, p: +momPts.toFixed(2), max: maxMom });
+  const gotMax = 4 + (d120 != null ? 3 : 0) + maxMom;
+  return { ok: true, score: Math.round(score / gotMax * 10 * 10) / 10, parts, benchName, days: p.length, d60, d120 };
 }
 
 /* 基准指数库：每个基准配多个候选源（腾讯 fqkline / 东财 push2his），逐个尝试直到取到足够长的序列。
@@ -3549,19 +3625,24 @@ function thesisOf(x) { const k = thesisKeyOf(x); return k ? (STATE.theses || {})
 function thesisFalsified(t) { return !!(t && Array.isArray(t.falsify) && t.falsify.some(f => f && f.hit)); }
 // 逻辑兑现窗口是否已过期（时间止损）：建卡日 + months 个月 < 今天
 function thesisExpired(t) {
-  if (!t || !(num(t.months) > 0) || !t.date) return false;
-  const d = new Date(t.date + 'T00:00:00');
-  if (isNaN(d.getTime())) return false;
-  d.setMonth(d.getMonth() + Math.round(num(t.months)));
-  const due = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  return todayStr() > due;
+  const due = thesisDueDate(t);
+  return !!due && todayStr() > due;
+}
+// 加月份（月末对齐）：JS 的 setMonth 会溢出——1/31 加 1 个月得 3/3。
+// 这里超出目标月天数时夹到该月最后一天，1/31+1月 = 2/28（或闰年 2/29）。
+function addMonthsClamped(dateStr, months) {
+  const d = new Date(dateStr + 'T00:00:00');
+  if (isNaN(d.getTime())) return '';
+  const y = d.getFullYear(), m = d.getMonth(), day = d.getDate();
+  const tm = m + Math.round(months);
+  const ty = y + Math.floor(tm / 12), tmm = ((tm % 12) + 12) % 12;
+  const last = new Date(ty, tmm + 1, 0).getDate();
+  const td = Math.min(day, last);
+  return `${ty}-${String(tmm + 1).padStart(2, '0')}-${String(td).padStart(2, '0')}`;
 }
 function thesisDueDate(t) {
   if (!t || !(num(t.months) > 0) || !t.date) return '';
-  const d = new Date(t.date + 'T00:00:00');
-  if (isNaN(d.getTime())) return '';
-  d.setMonth(d.getMonth() + Math.round(num(t.months)));
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return addMonthsClamped(t.date, num(t.months));
 }
 // 价格触发：目标价/止损价是否已触及（用资产最新价，无价则不判）
 function thesisPriceHit(t, px) {
@@ -4446,9 +4527,10 @@ VIEWS.planner = function (app) {
    ========================================================================= */
 const SCORE_ANCHORS = {
   tech: ['技术面', '8-10 多头排列+站上均线+量价配合｜5-7 均线纠缠/指标中性｜0-4 空头排列+破位+量价背离'],
-  fund: ['基本面', '8-10 ROE>15%+估值低于历史30%分位+增速>20%｜5-7 ROE 8-15%+估值中位｜0-4 ROE<8%+估值高于70%分位+负增长'],
+  fund: ['基本面', '8-10 ROE(年化)>15%+增速>20%+低负债｜5-7 ROE 8-15%+增速个位数｜0-4 ROE<8%+负增长+高负债。注：估值只用绝对 PE/PB（无历史分位/行业对比的数据源），故权重仅 1/10'],
   news: ['消息面', '8-10 重大利好催化+政策支持+无负面｜5-7 消息平淡无重大事件｜0-4 重大利空/政策打压/负面舆情'],
   senti: ['资金面', '8-10 主力持续净流入+机构上调评级｜5-7 资金流向不明+评级稳定｜0-4 主力持续流出+机构下调'],
+  rs: ['行业/相对强弱', '相对基准(A股比沪深300/美股比标普500)的超额收益：8-10 60日与120日均大幅领先且仍在走强｜5-7 与大盘同步｜0-4 持续跑输且相对走弱。注：这是市场对赛道的定价，不等于行业基本面景气度'],
 };
 VIEWS.thesis = function (app) {
   app.appendChild(el(`
@@ -4551,7 +4633,7 @@ VIEWS.thesis = function (app) {
 
   // 四维评分（只记录，不做加权裁决——加权打分是假精确）
   const scoreBox = formCard.querySelector('#th-scores');
-  const SCORE_HOW = { tech: '点上方按钮自动算', fund: '手填（见下方说明）', news: '手填（见下方说明）', senti: '手填 · 可参考「市场指标→资金流向」' };
+  const SCORE_HOW = { tech: '自动算', fund: '自动算', news: '拉真实公告后 AI 分类', senti: '自动算', rs: '自动算' };
   scoreBox.innerHTML = Object.keys(SCORE_ANCHORS).map(k => {
     const [label, anchor] = SCORE_ANCHORS[k];
     return `<div class="field"><label>${label}评分 0–10 <span class="inline-note" title="${escapeHtml(anchor)}">（锚点↗悬停 · ${SCORE_HOW[k]}）</span></label>
@@ -4570,11 +4652,25 @@ VIEWS.thesis = function (app) {
 
   const $f = sel => formCard.querySelector(sel);
   // 「自动评四维」拉到的真实数据暂存于此，供 AI 起草时作为唯一事实来源（不给它别的信息）
-  let lastData = { tech: null, fund: null, ann: null, code: '', name: '' };
+  let lastData = { tech: null, fund: null, ann: null, rs: null, code: '', name: '' };
   // 三道闸预览：入场/止损变动时实时算
+  // 第三道闸：该标的所属层级在当前再平衡预设下还剩多少空间（超配则为 0，不该再加）
+  function layerRoomOf(a) {
+    if (!a) return null;
+    try {
+      const st = currentLayerState();
+      const preset = getRebalPreset((STATE.settings || {}).rebalPreset || '3y15');
+      const L = layerOf(a);
+      const tgt = preset.t[L];
+      if (tgt == null || !(st.total > 0)) return null;
+      return { room: Math.max(0, (tgt - (st.pct[L] || 0)) / 100 * st.total), layer: LAYER_NAME[L] || L, tgt, cur: st.pct[L] || 0, preset: preset.label };
+    } catch (e) { return null; }
+  }
   function drawGates() {
     const entry = num($f('#th-entry').value), stop = num($f('#th-stop').value);
-    const g = sizingGates(entry, stop, total, null);
+    const a0 = cands.find(x => thesisKeyOf(x) === $f('#th-pick').value);
+    const lr = layerRoomOf(a0);
+    const g = sizingGates(entry, stop, total, lr ? lr.room : null);
     const box = $f('#th-gates');
     if (!(g.byRisk > 0)) {
       box.innerHTML = `<p class="inline-note">${!(total > 0) ? '总资产为 0，无法反推仓位（先到「投资组合」录入资产）。'
@@ -4584,10 +4680,11 @@ VIEWS.thesis = function (app) {
     const bindName = { risk: '风险预算', layer: '分层剩余', cap: '单标的上限' }[g.binding] || '';
     box.innerHTML = `<div class="alert blue" style="margin-top:6px"><span class="icon">${icon('calc')}</span><div>
       <strong>加仓三道闸</strong>：止损幅度 ${g.stopPct.toFixed(1)}%，按单笔风险 ${g.riskPct}% 反推
-      → 风险预算上限 <strong>${fmtMoney(g.byRisk)}</strong>（占总资产 ${(g.byRisk / total * 100).toFixed(1)}%）；
-      单标的集中度上限 ${g.cap}% = ${fmtMoney(g.byCap)}。
-      <strong>取小：${fmtMoney(g.final)}</strong>（受「${bindName}」约束）。
-      <br><span style="color:var(--amber-ink)">注意：A股跌停/美股跳空时止损不在设定价成交，"最多亏 ${g.riskPct}%" 不是保证——这是上限不是承诺。再平衡页的分层剩余空间是第三道闸，实际买入还要与之取小。</span></div></div>`;
+      → ① 风险预算上限 <strong>${fmtMoney(g.byRisk)}</strong>（占总资产 ${(g.byRisk / total * 100).toFixed(1)}%）；
+      ② 单标的集中度上限 ${g.cap}% = ${fmtMoney(g.byCap)}；
+      ③ ${lr ? `分层剩余（${escapeHtml(lr.layer)} 目标 ${lr.tgt}% / 当前 ${lr.cur.toFixed(1)}%，按「${escapeHtml(lr.preset)}」）= <strong>${fmtMoney(lr.room)}</strong>${lr.room <= 0 ? '（该层已超配，按纪律不该再加）' : ''}` : '分层剩余（取不到分层数据，本次未参与取小）'}。
+      <br><strong>三者取小：${fmtMoney(g.final)}</strong>（受「${bindName}」约束）。
+      <br><span style="color:var(--amber-ink)">注意：A股跌停/美股跳空时止损不在设定价成交，"最多亏 ${g.riskPct}%" 不是保证——这是上限不是承诺。</span></div></div>`;
   }
   ['#th-entry', '#th-stop'].forEach(s => { $f(s).oninput = drawGates; });
   drawGates();
@@ -4602,6 +4699,7 @@ VIEWS.thesis = function (app) {
     if (!code) { out.innerHTML = '<p class="inline-note">该标的无代码，无法取K线。</p>'; return; }
     btn.disabled = true; const ob = btn.innerHTML; btn.innerHTML = icon('refresh', 'spin') + ' 计算中…';
     out.innerHTML = '<div class="inline-note">正在拉取日K并计算…</div>';
+    let diagsRs = '';
     try {
       const rows = await fetchTechKlines(code);
       const t = techScore(rows);
@@ -4628,6 +4726,23 @@ VIEWS.thesis = function (app) {
         <span class="inline-note">口径固定：同样的行情永远得同样的分，可复现、可核对——这是公式不是模型判断。技术面只说明「现在的位置」，不预测涨跌。</span></div></div>`;
       const us = out.querySelector('#th-usestop');
       if (us) us.onclick = () => { $f('#th-stop').value = t.stopHint; drawGates(); };
+      // —— 行业/相对强弱：个股 vs 基准的超额收益（纯 K 线，不依赖任何被封接口）——
+      try {
+        const bm = await fetchRsBenchmark(isUsCode(code));
+        const rs = rsScore(rows, bm.series, bm.name);
+        lastData.rs = rs.ok ? rs : null;
+        if (rs.ok) {
+          const scR = scoreBox.querySelector('[data-sc="rs"]'); if (scR) scR.value = rs.score;
+          out.insertAdjacentHTML('beforeend', `<div class="alert blue" style="margin:8px 0"><span class="icon">${icon('trend')}</span><div>
+            <strong>行业/相对强弱 ${rs.score} / 10</strong>（对比 ${escapeHtml(rs.benchName)}，共同交易日 ${rs.days} 天）——已填入下方。
+            <div class="table-scroll" style="margin-top:6px"><table><thead><tr><th>项</th><th>读数</th><th class="num">得分</th></tr></thead><tbody>
+            ${rs.parts.map(p => `<tr><td>${escapeHtml(p.k)}</td><td>${escapeHtml(p.v)}</td><td class="num">${p.p} / ${p.max}</td></tr>`).join('')}</tbody></table></div>
+            <span class="inline-note">这一维回答「它在赛道里跑得怎么样」：板块景气最终体现为<strong>相对大盘的持续超额</strong>。
+            但它是<strong>市场对赛道的定价，不等于行业基本面景气度</strong>——产能/需求/政策周期仍需你在看多逻辑里自己论证。</span></div></div>`);
+        } else {
+          out.insertAdjacentHTML('beforeend', `<div class="alert amber" style="margin:8px 0"><span class="icon">${icon('warn')}</span><div>相对强弱未算出：${escapeHtml(rs.err)}</div></div>`);
+        }
+      } catch (e2) { diagsRs = '相对强弱基准拉取失败：' + e2.message; }
     } catch (e) {
       out.innerHTML = `<div class="alert amber" style="margin:8px 0"><span class="icon">${icon('warn')}</span><div>技术面未算出：${escapeHtml(e.message)}——其余三维继续。</div></div>`;
     }
@@ -4635,6 +4750,7 @@ VIEWS.thesis = function (app) {
     const sec = document.createElement('div');
     out.appendChild(sec);
     const diags = [];
+    if (diagsRs) diags.push(['相对强弱', diagsRs]);
     const tbl = (parts) => `<div class="table-scroll" style="margin-top:6px"><table><thead><tr><th>项</th><th>读数</th><th class="num">得分</th></tr></thead><tbody>${
       parts.map(p => `<tr><td>${escapeHtml(p.k)}</td><td${p.p == null ? ' style="color:var(--muted)"' : ''}>${escapeHtml(p.v)}</td><td class="num">${p.p == null ? '—' : p.p + ' / ' + p.max}</td></tr>`).join('')}</tbody></table></div>`;
     try {
@@ -4806,7 +4922,7 @@ VIEWS.thesis = function (app) {
     out.innerHTML = '<div class="inline-note">正在起草（约 10–30 秒）…</div>';
     try {
       // 还没点过「自动评四维」就先补拉一次，保证 AI 拿到的是真实数据而不是空手推理
-      if (lastData.code !== code) lastData = { tech: null, fund: null, ann: null, code, name: (a && a.name) || '' };
+      if (lastData.code !== code) lastData = { tech: null, fund: null, ann: null, rs: null, code, name: (a && a.name) || '' };
       if (!lastData.fund && code) { try { const f0 = await fetchFundamentals(code); if (f0.ok) lastData.fund = f0; } catch (e) {} }
       if (!lastData.ann && code) { try { const a0 = await fetchAnnouncements(code, 20); if (a0.ok) lastData.ann = a0.list; } catch (e) {} }
       if (!lastData.tech && code) { try { const t0 = techScore(await fetchTechKlines(code)); if (t0.ok) lastData.tech = t0; } catch (e) {} }
@@ -4821,6 +4937,8 @@ VIEWS.thesis = function (app) {
       ].filter(Boolean).join('，'));
       if (T) facts.push('【技术面·真实读数】' + T.date + ' 收盘 ' + T.px + '，评分 ' + T.score + '/10；'
         + T.parts.map(p => p.k + '：' + p.v).join('；') + '；近60日区间 ' + T.low60.toFixed(2) + '–' + T.high60.toFixed(2));
+      const R = lastData.rs;
+      if (R && R.ok) facts.push('【行业/相对强弱·真实读数】对比 ' + R.benchName + '，评分 ' + R.score + '/10；' + R.parts.map(p => p.k + '：' + p.v).join('；'));
       if (A && A.length) facts.push('【近期公告·真实标题】\n' + A.slice(0, 15).map(x => '· ' + x.date + ' ' + x.title).join('\n'));
       if (!facts.length) facts.push('（未取到任何真实数据，请在结论中明确说明"数据不足"，不要编造数字）');
 
@@ -4842,7 +4960,7 @@ VIEWS.thesis = function (app) {
       const bear = String(r.bear || '').trim();
       const fals = Array.isArray(r.falsify) ? r.falsify.map(x => String(x).trim()).filter(Boolean) : [];
       const risks = Array.isArray(r.risks) ? r.risks.map(x => String(x).trim()).filter(Boolean) : [];
-      const used = [F ? '基本面' : '', T ? '技术面' : '', (A && A.length) ? '公告 ' + A.length + ' 条' : ''].filter(Boolean).join(' + ') || '无真实数据';
+      const used = [F ? '基本面' : '', T ? '技术面' : '', (R && R.ok) ? '相对强弱' : '', (A && A.length) ? '公告 ' + A.length + ' 条' : ''].filter(Boolean).join(' + ') || '无真实数据';
       out.innerHTML = '<div class="alert amber" style="margin-top:10px"><span class="icon">' + icon('warn') + '</span><div>'
         + '<span class="inline-note">事实来源：' + escapeHtml(used) + '（AI 只看得到这些，没有其它信息渠道）</span>'
         + (dBull ? '<br><strong style="color:var(--green-ink)">多</strong>：' + escapeHtml(dBull) : '')
