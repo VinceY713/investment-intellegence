@@ -977,6 +977,7 @@ function applyStateDefaults(s) {
   s.targetAlloc = s.targetAlloc || null;        // 再平衡目标配置 {buckets:{...}, threshold}，null=未设置
   s.layerOverrides = s.layerOverrides || {};    // 再平衡分层手动改层 {code||name: layerKey}，覆盖自动识别
   s.thesisFlags = s.thesisFlags || {};          // 「逻辑已破」标记 {code||name: true}，卖出排序最高优先
+  s.theses = s.theses || {};                    // 个股决策卡 {code||name: {bull,bear,falsify[],entry,target,stop,months,scores,conf,date}}
   s.kellyEvals = s.kellyEvals || {};            // 凯利AI评估持久缓存 {codeKey: {win,up,down,date,factor,trend,...}}——刷新不丢，同参数同结果
   s.settings.benchKeys = Array.isArray(s.settings.benchKeys) ? s.settings.benchKeys : [];   // 资产趋势选中的对比基准（多选）
   s.macro = Object.assign({ market: {}, ind: {}, updatedAt: null }, s.macro || {});
@@ -3149,6 +3150,69 @@ const REBAL_PRESETS = [
 ];
 // 资产 → 战略层；手动改层（STATE.layerOverrides）优先于名称/类别自动识别
 function layerKeyOfAsset(a) { return String(a.code || a.name || '').trim(); }
+
+/* =========================================================================
+   个股决策卡（Thesis Card）——买入前把「为什么买」和「什么情况证明我错了」写下来。
+   设计取舍：只做【结构化记录 + 客观触发判定】，不做 AI 加权裁决、不产出买卖评级
+   （多空辩论式的 0-10 加权打分是假精确，同输入两次结果就能不一样——凯利已验证过）。
+   三处接线：① 证伪条件勾中 → 再平衡卖出排序判「逻辑已破」（最高优先）
+            ② 逻辑窗口到期 → 时间止损，进卖出排序加权
+            ③ 触及目标价/止损价/到期 → 一键记入「复盘校准」，回填后校准你的胜率
+   ========================================================================= */
+function thesisKeyOf(x) { return String((x && (x.code || x.name)) || '').trim(); }
+function thesisOf(x) { const k = thesisKeyOf(x); return k ? (STATE.theses || {})[k] : null; }
+// 证伪条件是否已触发（任一勾中）
+function thesisFalsified(t) { return !!(t && Array.isArray(t.falsify) && t.falsify.some(f => f && f.hit)); }
+// 逻辑兑现窗口是否已过期（时间止损）：建卡日 + months 个月 < 今天
+function thesisExpired(t) {
+  if (!t || !(num(t.months) > 0) || !t.date) return false;
+  const d = new Date(t.date + 'T00:00:00');
+  if (isNaN(d.getTime())) return false;
+  d.setMonth(d.getMonth() + Math.round(num(t.months)));
+  const due = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return todayStr() > due;
+}
+function thesisDueDate(t) {
+  if (!t || !(num(t.months) > 0) || !t.date) return '';
+  const d = new Date(t.date + 'T00:00:00');
+  if (isNaN(d.getTime())) return '';
+  d.setMonth(d.getMonth() + Math.round(num(t.months)));
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+// 价格触发：目标价/止损价是否已触及（用资产最新价，无价则不判）
+function thesisPriceHit(t, px) {
+  const out = { target: false, stop: false };
+  if (!t || !(px > 0)) return out;
+  if (num(t.target) > 0 && px >= num(t.target)) out.target = true;
+  if (num(t.stop) > 0 && px <= num(t.stop)) out.stop = true;
+  return out;
+}
+// 决策卡综合状态（供各处统一取用）
+function thesisStatus(x, px) {
+  const t = thesisOf(x);
+  if (!t) return { has: false, broken: false, expired: false, target: false, stop: false, t: null };
+  const hit = thesisPriceHit(t, px != null ? px : num(x && x.lastPx));
+  return { has: true, t, broken: thesisFalsified(t), expired: thesisExpired(t), target: hit.target, stop: hit.stop };
+}
+/* 加仓三道闸：风险预算 / 分层剩余 / 单标的集中度，取最小值。
+   风险预算法（Van Tharp 2% 规则）的正确形式极简：仓位% = 单笔风险% ÷ 止损幅度%
+   （常见资料把公式写错成再除以入场价，量纲就不对——这里按正确式实现）。
+   注意：跳空/跌停时止损不在设定价成交，"最多亏 X%" 不是保证，故只作上限之一。 */
+function sizingGates(entry, stop, total, layerRoomCny) {
+  const s = STATE.settings || {};
+  const riskPct = num(s.perTradeRisk, 2) || 2;
+  const cap = num(s.singleCap, 10) || 10;
+  const out = { riskPct, stopPct: null, byRisk: null, byLayer: layerRoomCny != null ? Math.max(0, layerRoomCny) : null, byCap: total > 0 ? total * cap / 100 : null, cap };
+  if (entry > 0 && stop > 0 && stop < entry) {
+    out.stopPct = (entry - stop) / entry * 100;
+    if (total > 0) out.byRisk = total * (riskPct / 100) / (out.stopPct / 100);   // = 总资产 × 风险% ÷ 止损幅度%
+  }
+  const cands = [out.byRisk, out.byLayer, out.byCap].filter(v => v != null && isFinite(v));
+  out.final = cands.length ? Math.min.apply(null, cands) : null;
+  out.binding = out.final == null ? null
+    : (out.final === out.byRisk ? 'risk' : out.final === out.byLayer ? 'layer' : 'cap');
+  return out;
+}
 function layerOf(a) {
   const ov = STATE && STATE.layerOverrides && STATE.layerOverrides[layerKeyOfAsset(a)];
   if (ov && LAYER_NAME[ov]) return ov;
@@ -3993,6 +4057,279 @@ VIEWS.planner = function (app) {
    视图：复盘校准 —— 记录每次判断的胜率/空间，事后回填结果，
    用 Brier 分数 + 校准曲线校准你（与 AI）的判断力。这是「长出投资大脑」的核心闭环。
    ========================================================================= */
+/* =========================================================================
+   视图：个股决策卡 —— 买入前写下「为什么买 / 什么情况证明我错了」
+   ========================================================================= */
+const SCORE_ANCHORS = {
+  tech: ['技术面', '8-10 多头排列+站上均线+量价配合｜5-7 均线纠缠/指标中性｜0-4 空头排列+破位+量价背离'],
+  fund: ['基本面', '8-10 ROE>15%+估值低于历史30%分位+增速>20%｜5-7 ROE 8-15%+估值中位｜0-4 ROE<8%+估值高于70%分位+负增长'],
+  news: ['消息面', '8-10 重大利好催化+政策支持+无负面｜5-7 消息平淡无重大事件｜0-4 重大利空/政策打压/负面舆情'],
+  senti: ['资金面', '8-10 主力持续净流入+机构上调评级｜5-7 资金流向不明+评级稳定｜0-4 主力持续流出+机构下调'],
+};
+VIEWS.thesis = function (app) {
+  app.appendChild(el(`
+    <div class="view-head">
+      <h2>决策卡 · 为什么买 / 何时认错</h2>
+      <p>买入前把 <strong>看多逻辑</strong>、<strong>最强反方论证</strong>、<strong>证伪条件</strong> 写下来——这是整个工具里唯一能防止「事后编理由」的东西。证伪条件勾中会自动把该标的提到<strong>再平衡卖出队首</strong>；逻辑窗口到期触发<strong>时间止损</strong>；触及目标价/止损价可一键记入<strong>复盘校准</strong>，回填后校准你的真实胜率。</p>
+    </div>
+  `));
+
+  const fx = currentFx();
+  const total = portfolioTotal();
+  const theses = STATE.theses = STATE.theses || {};
+  // 候选标的：股票类资产（决策卡是给「主动选择的标的」用的，宽基/理财不需要）
+  const cands = (STATE.assets || []).filter(a => a.category === 'A股股票' || a.category === '美股股票' || (a.category === '基金' && /主题|行业|科技|医药|军工|消费|芯片|新能源/.test(a.name || '')));
+
+  // —— 待办：需要你处理的卡片（证伪触发 / 到期 / 触价）——
+  const alerts = [];
+  cands.forEach(a => {
+    const st = thesisStatus(a, num(a.lastPx));
+    if (!st.has) return;
+    if (st.broken) alerts.push(['red', a, '证伪条件已触发', '你当初写下的"什么情况证明我错了"已经发生——按纪律这应该是卖出队首，不是重新找理由。']);
+    else if (st.expired) alerts.push(['amber', a, '逻辑窗口已过期', `建卡 ${st.t.date} + ${num(st.t.months)} 个月的兑现窗口已过（${thesisDueDate(st.t)}），逻辑未兑现＝资金在付机会成本，考虑时间止损。`]);
+    if (st.target) alerts.push(['green', a, '已触及目标价', `现价 ${num(a.lastPx)} ≥ 目标价 ${num(st.t.target)}——记一笔「兑现」到复盘校准，并决定是止盈还是上调目标（上调需要新证据）。`]);
+    if (st.stop) alerts.push(['red', a, '已触及止损价', `现价 ${num(a.lastPx)} ≤ 止损价 ${num(st.t.stop)}——止损是买入时就定好的，执行它。`]);
+  });
+  if (alerts.length) {
+    const aCard = el(`<div class="card"><h3>${icon('warn')} 需要处理（${alerts.length}）</h3></div>`);
+    alerts.forEach(([t, a, title, msg]) => {
+      const row = el(`<div class="alert ${t}"><span class="icon">${t === 'red' ? icon('danger') : t === 'green' ? icon('check') : icon('warn')}</span>
+        <div><strong>${escapeHtml(a.name)} · ${title}</strong><br>${escapeHtml(msg)}
+        <div class="row" style="gap:6px;margin-top:6px"><button class="btn secondary small" data-rec="${escapeHtml(thesisKeyOf(a))}" style="flex:0 0 auto">${icon('clipboard')} 记入复盘校准</button></div></div></div>`);
+      aCard.appendChild(row);
+    });
+    aCard.querySelectorAll('[data-rec]').forEach(b => b.onclick = () => {
+      const k = b.dataset.rec, t = theses[k];
+      if (!t) return;
+      const a = cands.find(x => thesisKeyOf(x) === k);
+      const px = num(a && a.lastPx), entry = num(t.entry);
+      const realized = entry > 0 && px > 0 ? (px - entry) / entry * 100 : null;
+      // 预测胜率取信心水平的中值映射；上下空间取目标/止损相对入场的幅度
+      const pMap = { '高': 70, '中': 55, '低': 45 };
+      STATE.forecasts = STATE.forecasts || [];
+      STATE.forecasts.push({
+        id: uid(), date: todayStr(), name: t.name || k, code: t.code || '',
+        p: pMap[t.conf] || 55,
+        up: entry > 0 && num(t.target) > 0 ? +((num(t.target) - entry) / entry * 100).toFixed(1) : 0,
+        down: entry > 0 && num(t.stop) > 0 ? +((entry - num(t.stop)) / entry * 100).toFixed(1) : 0,
+        ev: 0, f: 0, source: '决策卡',
+        outcome: '', realizedPct: realized != null ? +realized.toFixed(1) : null,
+      });
+      logOp('决策卡记入复盘校准：' + (t.name || k));
+      saveState();
+      alert('已记入「复盘校准」。到那一页把结果标为「兑现/落空」，样本攒够就能看到你的真实胜率 vs 自以为的胜率。');
+      render();
+    });
+    app.appendChild(aCard);
+  }
+
+  // —— 新建 / 编辑决策卡 ——
+  const formCard = el(`<div class="card" style="margin-top:16px">
+    <h3>${icon('clipboard')} 新建 / 编辑决策卡</h3>
+    <p class="hint">空头论证是<strong>必填</strong>——写不出反方理由，说明你还没想清楚就要下注。证伪条件请写<strong>可观测的客观事件</strong>（如"Q3 毛利率跌破 30%""金价跌破 3000 且持续一个月"），而不是"跌了很多"。</p>
+    <div class="grid grid-2">
+      <div class="field"><label>标的</label><select id="th-pick">
+        <option value="">— 选择持仓 —</option>
+        ${cands.map(a => `<option value="${escapeHtml(thesisKeyOf(a))}">${escapeHtml(a.name)}${a.code ? '（' + escapeHtml(a.code) + '）' : ''}${theses[thesisKeyOf(a)] ? ' ✓已有卡' : ''}</option>`).join('')}
+      </select></div>
+      <div class="field"><label>信心水平</label><select id="th-conf"><option>中</option><option>高</option><option>低</option></select></div>
+    </div>
+    <div class="field"><label>看多逻辑（一句话说清你为什么买）<span class="req">*</span></label><input id="th-bull" placeholder="如：金铜双引擎+锂2026放量，矿业股利润对金价有杠杆"/></div>
+    <div class="field"><label>最强反方论证（必填，你自己写或用下方 AI 生成后修改）<span class="req">*</span></label><input id="th-bear" placeholder="如：利润高度依赖金铜锂价格，商品同步下跌时营收利润显著缩水"/></div>
+    <div class="field"><label>证伪条件（每行一条，2–3 条；发生任一条即认错）<span class="req">*</span></label>
+      <textarea id="th-fals" rows="3" placeholder="金价跌破 3000 美元且持续 1 个月&#10;巨龙铜矿二期投产进度延后 2 个季度以上&#10;单季扣非净利同比转负"></textarea></div>
+    <div class="grid grid-3">
+      <div class="field"><label>入场价</label><input id="th-entry" type="number" step="0.01"/></div>
+      <div class="field"><label>目标价</label><input id="th-target" type="number" step="0.01"/></div>
+      <div class="field"><label>止损价</label><input id="th-stop" type="number" step="0.01"/></div>
+    </div>
+    <div class="grid grid-3">
+      <div class="field"><label>逻辑兑现窗口（月）</label><input id="th-months" type="number" step="1" value="12"/></div>
+      <div class="field"><label>建卡日期</label><input id="th-date" type="date" value="${todayStr()}"/></div>
+      <div class="field"></div>
+    </div>
+    <div class="grid grid-2" id="th-scores"></div>
+    <div id="th-gates"></div>
+    <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px">
+      <button class="btn" id="th-save" style="flex:0 0 auto">${icon('check')} 保存决策卡</button>
+      <button class="btn secondary" id="th-ai" style="flex:0 0 auto">${icon('sparkles')} AI 帮我写反方论证</button>
+      <button class="btn danger" id="th-del" style="flex:0 0 auto;display:none">${icon('trash')} 删除此卡</button>
+    </div>
+    <div id="th-ai-out"></div>
+  </div>`);
+  app.appendChild(formCard);
+
+  // 四维评分（只记录，不做加权裁决——加权打分是假精确）
+  const scoreBox = formCard.querySelector('#th-scores');
+  scoreBox.innerHTML = Object.keys(SCORE_ANCHORS).map(k => {
+    const [label, anchor] = SCORE_ANCHORS[k];
+    return `<div class="field"><label>${label}评分 0–10 <span class="inline-note" title="${escapeHtml(anchor)}">（锚点↗悬停）</span></label>
+      <input data-sc="${k}" type="number" min="0" max="10" step="1" placeholder="未评"/></div>`;
+  }).join('');
+
+  const $f = sel => formCard.querySelector(sel);
+  // 三道闸预览：入场/止损变动时实时算
+  function drawGates() {
+    const entry = num($f('#th-entry').value), stop = num($f('#th-stop').value);
+    const g = sizingGates(entry, stop, total, null);
+    const box = $f('#th-gates');
+    if (!(g.byRisk > 0)) {
+      box.innerHTML = `<p class="inline-note">填入<strong>入场价</strong>与<strong>止损价</strong>（止损&lt;入场）即可算出「这笔最多能买多少」。</p>`;
+      return;
+    }
+    const bindName = { risk: '风险预算', layer: '分层剩余', cap: '单标的上限' }[g.binding] || '';
+    box.innerHTML = `<div class="alert blue" style="margin-top:6px"><span class="icon">${icon('calc')}</span><div>
+      <strong>加仓三道闸</strong>：止损幅度 ${g.stopPct.toFixed(1)}%，按单笔风险 ${g.riskPct}% 反推
+      → 风险预算上限 <strong>${fmtMoney(g.byRisk)}</strong>（占总资产 ${(g.byRisk / total * 100).toFixed(1)}%）；
+      单标的集中度上限 ${g.cap}% = ${fmtMoney(g.byCap)}。
+      <strong>取小：${fmtMoney(g.final)}</strong>（受「${bindName}」约束）。
+      <br><span style="color:var(--amber-ink)">注意：A股跌停/美股跳空时止损不在设定价成交，"最多亏 ${g.riskPct}%" 不是保证——这是上限不是承诺。再平衡页的分层剩余空间是第三道闸，实际买入还要与之取小。</span></div></div>`;
+  }
+  ['#th-entry', '#th-stop'].forEach(s => { $f(s).oninput = drawGates; });
+  drawGates();
+
+  // 选标的 → 回填已有卡
+  function loadThesis(k) {
+    const t = theses[k];
+    $f('#th-del').style.display = t ? '' : 'none';
+    const a = cands.find(x => thesisKeyOf(x) === k);
+    if (!t) {
+      ['#th-bull', '#th-bear', '#th-fals', '#th-target', '#th-stop'].forEach(s => { $f(s).value = ''; });
+      $f('#th-entry').value = a && num(a.lastPx) > 0 ? num(a.lastPx) : '';
+      $f('#th-months').value = 12; $f('#th-date').value = todayStr(); $f('#th-conf').value = '中';
+      scoreBox.querySelectorAll('[data-sc]').forEach(i => { i.value = ''; });
+      drawGates(); return;
+    }
+    $f('#th-bull').value = t.bull || ''; $f('#th-bear').value = t.bear || '';
+    $f('#th-fals').value = (t.falsify || []).map(f => f.t).join('\n');
+    $f('#th-entry').value = t.entry != null ? t.entry : ''; $f('#th-target').value = t.target != null ? t.target : '';
+    $f('#th-stop').value = t.stop != null ? t.stop : ''; $f('#th-months').value = t.months != null ? t.months : 12;
+    $f('#th-date').value = t.date || todayStr(); $f('#th-conf').value = t.conf || '中';
+    scoreBox.querySelectorAll('[data-sc]').forEach(i => { i.value = (t.scores || {})[i.dataset.sc] != null ? t.scores[i.dataset.sc] : ''; });
+    drawGates();
+  }
+  $f('#th-pick').onchange = e => loadThesis(e.target.value);
+
+  $f('#th-save').onclick = () => {
+    const k = $f('#th-pick').value;
+    if (!k) { alert('请先选择标的'); return; }
+    const bull = $f('#th-bull').value.trim(), bear = $f('#th-bear').value.trim();
+    const falsLines = $f('#th-fals').value.split('\n').map(x => x.trim()).filter(Boolean);
+    if (!bull) { alert('请填写看多逻辑'); return; }
+    if (!bear) { alert('空头论证是必填项——写不出反方理由，说明还没想清楚就要下注。可以点「AI 帮我写反方论证」再自行修改。'); return; }
+    if (!falsLines.length) { alert('请至少写 1 条证伪条件（可观测的客观事件）'); return; }
+    const a = cands.find(x => thesisKeyOf(x) === k);
+    const old = theses[k];
+    // 保留已勾中的证伪状态（按文本匹配），编辑不清空历史触发
+    const oldHit = {};
+    (old && old.falsify || []).forEach(f => { if (f && f.hit) oldHit[f.t] = true; });
+    const scores = {};
+    scoreBox.querySelectorAll('[data-sc]').forEach(i => { const v = i.value.trim(); if (v !== '') scores[i.dataset.sc] = Math.max(0, Math.min(10, num(v))); });
+    logOp((old ? '编辑' : '新建') + '决策卡：' + ((a && a.name) || k));
+    theses[k] = {
+      key: k, name: (a && a.name) || (old && old.name) || k, code: (a && a.code) || '',
+      bull, bear,
+      falsify: falsLines.map(t => ({ t, hit: !!oldHit[t] })),
+      entry: num($f('#th-entry').value) || null, target: num($f('#th-target').value) || null,
+      stop: num($f('#th-stop').value) || null, months: num($f('#th-months').value) || null,
+      scores, conf: $f('#th-conf').value, date: $f('#th-date').value || todayStr(),
+      aiBear: old && old.aiBear || null,
+    };
+    saveState(); render();
+  };
+  $f('#th-del').onclick = () => {
+    const k = $f('#th-pick').value;
+    if (!k || !theses[k]) return;
+    if (!confirm('删除这张决策卡？（证伪条件的触发状态也会一并清除；可在「修改日志」还原）')) return;
+    logOp('删除决策卡：' + (theses[k].name || k));
+    delete theses[k]; saveState(); render();
+  };
+
+  // AI 魔鬼代言人：只出反方论证 + 证伪条件建议，明确不给买卖评级
+  $f('#th-ai').onclick = async () => {
+    const k = $f('#th-pick').value, bull = $f('#th-bull').value.trim();
+    if (!k) { alert('请先选择标的'); return; }
+    if (!bull) { alert('请先写下你的看多逻辑，AI 才能针对性反驳'); return; }
+    const a = cands.find(x => thesisKeyOf(x) === k);
+    const btn = $f('#th-ai'), out = $f('#th-ai-out');
+    btn.disabled = true; const old = btn.innerHTML; btn.innerHTML = icon('refresh', 'spin') + ' 生成中…';
+    out.innerHTML = '<div class="inline-note">正在请求反方论证（约 10–30 秒）…</div>';
+    try {
+      const sys = '你是一位专业的空头研究员（devil\'s advocate）。用户给出他的看多逻辑，你的任务是尽最大努力反驳它，并给出可观测的证伪条件。'
+        + '硬性要求：(1) 绝对不要给出买入/卖出/持有评级，不要给目标价，不要预测涨跌——那不是你的任务；'
+        + '(2) 证伪条件必须是客观可验证的事件（财务指标阈值、项目进度、价格持续时间等），不能是"股价下跌"这类同义反复；'
+        + '(3) 只依据公开常识与用户提供的信息推理，不得编造具体财务数字，不确定就说"需核实"；'
+        + '(4) 用中文。严格返回 JSON：{"bear":"一句话最强空头论证","risks":["下行风险1","下行风险2","下行风险3"],"falsify":["证伪条件1","证伪条件2","证伪条件3"]}';
+      const user = `标的：${(a && a.name) || k}${a && a.code ? '（' + a.code + '）' : ''}\n用户的看多逻辑：${bull}\n请针对性反驳。`;
+      const r = await aiChatJSON(sys, user, { temperature: 0.2, seed: 7 });
+      const bear = String(r.bear || '').trim();
+      const fals = Array.isArray(r.falsify) ? r.falsify.map(x => String(x).trim()).filter(Boolean) : [];
+      const risks = Array.isArray(r.risks) ? r.risks.map(x => String(x).trim()).filter(Boolean) : [];
+      out.innerHTML = `<div class="alert amber" style="margin-top:10px"><span class="icon">${icon('warn')}</span><div>
+        <strong>反方论证</strong>：${escapeHtml(bear)}
+        ${risks.length ? '<br><strong>下行风险</strong>：<br>· ' + risks.map(escapeHtml).join('<br>· ') : ''}
+        ${fals.length ? '<br><strong>建议的证伪条件</strong>：<br>· ' + fals.map(escapeHtml).join('<br>· ') : ''}
+        <div class="row" style="gap:6px;margin-top:8px"><button class="btn secondary small" id="th-ai-apply" style="flex:0 0 auto">填入上方表单（可自行修改）</button></div>
+        <span class="inline-note">AI 生成仅供参考、不构成投资建议——<strong>请按你自己的理解改写后再保存</strong>，照抄等于把判断外包。</span></div></div>`;
+      const ap = out.querySelector('#th-ai-apply');
+      if (ap) ap.onclick = () => {
+        if (bear) $f('#th-bear').value = bear;
+        if (fals.length && !$f('#th-fals').value.trim()) $f('#th-fals').value = fals.join('\n');
+      };
+    } catch (e) {
+      out.innerHTML = `<div class="alert red" style="margin-top:10px"><span class="icon">${icon('warn')}</span><div>生成失败：${escapeHtml(e.message)}——可自己填写反方论证。</div></div>`;
+    } finally { btn.disabled = false; btn.innerHTML = old; }
+  };
+
+  // —— 已有决策卡列表（含证伪勾选）——
+  const keys = Object.keys(theses);
+  const listCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('list')} 我的决策卡（${keys.length}）</h3>
+    <p class="hint">勾中任一<strong>证伪条件</strong> = 你亲自确认逻辑已破，该标的会自动排到再平衡卖出队首。这是给未来的你留的证据，别事后改条件。</p></div>`);
+  if (!keys.length) {
+    listCard.appendChild(el(`<div class="empty"><div class="big">${icon('clipboard')}</div><p>还没有决策卡。选一个持仓，先给最看重的 2–3 只建卡。</p></div>`));
+  } else {
+    keys.forEach(k => {
+      const t = theses[k];
+      const a = cands.find(x => thesisKeyOf(x) === k);
+      const px = num(a && a.lastPx);
+      const st = thesisStatus(a || { code: t.code, name: t.name }, px);
+      const badges = [];
+      if (st.broken) badges.push('<span class="pill red">证伪已触发</span>');
+      if (st.expired) badges.push(`<span class="pill amber">窗口过期</span>`);
+      if (st.target) badges.push('<span class="pill green">达目标价</span>');
+      if (st.stop) badges.push('<span class="pill red">破止损价</span>');
+      const sc = t.scores || {};
+      const scTxt = Object.keys(SCORE_ANCHORS).filter(x => sc[x] != null).map(x => `${SCORE_ANCHORS[x][0]} ${sc[x]}`).join(' · ');
+      const box = el(`<div style="border-top:1px solid rgba(127,127,127,.2);padding:10px 0">
+        <div class="row" style="gap:8px;align-items:baseline;flex-wrap:wrap">
+          <strong>${escapeHtml(t.name || k)}</strong>${t.code ? `<span class="inline-note">${escapeHtml(t.code)}</span>` : ''}
+          <span class="pill">信心 ${escapeHtml(t.conf || '中')}</span>${badges.join(' ')}
+        </div>
+        <div style="font-size:13px;line-height:1.6;margin-top:4px">
+          <strong style="color:var(--green-ink)">多</strong>：${escapeHtml(t.bull || '')}<br>
+          <strong style="color:var(--red-ink)">空</strong>：${escapeHtml(t.bear || '')}</div>
+        <div class="inline-note" style="margin-top:4px">
+          入场 ${t.entry != null ? t.entry : '—'} · 目标 ${t.target != null ? t.target : '—'} · 止损 ${t.stop != null ? t.stop : '—'}
+          ${px > 0 ? ' · 现价 ' + px : ''} · 窗口 ${t.months != null ? t.months + '个月（至 ' + thesisDueDate(t) + '）' : '—'} · 建卡 ${escapeHtml(t.date || '')}
+          ${scTxt ? ' · ' + escapeHtml(scTxt) : ''}</div>
+        <div style="margin-top:6px">${(t.falsify || []).map((f, idx) => `<label style="display:block;font-size:12.5px;cursor:pointer;padding:2px 0">
+          <input type="checkbox" data-fk="${escapeHtml(k)}" data-fi="${idx}" ${f.hit ? 'checked' : ''} style="width:auto;margin-right:6px"/>
+          <span style="${f.hit ? 'color:var(--red-ink);font-weight:600' : ''}">${escapeHtml(f.t)}</span></label>`).join('')}</div>
+      </div>`);
+      listCard.appendChild(box);
+    });
+    listCard.querySelectorAll('[data-fk]').forEach(cb => cb.onchange = () => {
+      const t = theses[cb.dataset.fk];
+      if (!t || !t.falsify || !t.falsify[cb.dataset.fi]) return;
+      if (cb.checked && !confirm(`确认「${t.falsify[cb.dataset.fi].t}」已经发生？\n\n勾中 = 你亲自判定逻辑已破，该标的会被提到再平衡卖出队首。`)) { cb.checked = false; return; }
+      logOp('决策卡证伪条件' + (cb.checked ? '勾中' : '取消') + '：' + (t.name || cb.dataset.fk));
+      t.falsify[cb.dataset.fi].hit = cb.checked;
+      saveState(); render();
+    });
+  }
+  app.appendChild(listCard);
+};
+
 VIEWS.calibration = function (app) {
   app.appendChild(el(`
     <div class="view-head">
@@ -4870,14 +5207,20 @@ VIEWS.rebalance = function (app) {
   };
   const scoreSell = (x) => {                                // 返回 {score, chips[]} 分数越大越先卖
     const key = layerKeyOfAsset(x.a);
-    const broken = !!STATE.thesisFlags[key];
+    // 「逻辑已破」= 手工标记 或 决策卡的证伪条件被勾中（后者有据可查，优于凭记忆）
+    const ts = thesisStatus(x.a, num(x.a.lastPx));
+    const broken = !!STATE.thesisFlags[key] || ts.broken;
     const rho = x.a.code ? avgRhoOf(x.a.code) : null;
     const p = x.a.code ? posOf(x.a.code) : null;
     const w = total > 0 ? x.v / total * 100 : 0;
     const ddC = p ? w * num(p.maxDrop) / 100 : w * (LAYER_DD[layerOf(x.a)] || 0) / 100;  // 回撤贡献pp
     const kv = kellyVerdictOf(x.a);
     const chips = [];
-    if (broken) chips.push('<span class="pill red">逻辑已破·优先卖</span>');
+    if (broken) chips.push(ts.broken
+      ? `<span class="pill red">证伪条件已触发·优先卖</span>`
+      : '<span class="pill red">逻辑已破·优先卖</span>');
+    if (ts.expired && !broken) chips.push(`<span class="pill amber">逻辑窗口已过期(${escapeHtml(thesisDueDate(ts.t))})·时间止损</span>`);
+    if (ts.has && ts.target && !broken) chips.push('<span class="pill green">已达目标价·可兑现</span>');
     if (kv) {
       if (kv.verdict === 'neg') chips.push(`<span class="pill red">凯利稳健为负 EV${kv.evPct.toFixed(1)}%·提前卖</span>`);
       else if (kv.verdict === 'pos') chips.push(`<span class="pill green">凯利稳健为正·层内后卖</span>`);
@@ -4890,12 +5233,14 @@ VIEWS.rebalance = function (app) {
     // 打分层级：人的判断(破)1e9 ≫ 凯利稳健为负+3000 > 冗余 0..1000 > 回撤贡献×10 > 市值兜底；
     // 凯利稳健为正 −600（有优势的注不该被机械再平衡先砍）；不稳健 0（噪声不进排序）
     const kAdj = kv ? (kv.verdict === 'neg' ? 3000 : kv.verdict === 'pos' ? -600 : 0) : 0;
-    const score = (broken ? 1e9 : 0) + kAdj + (rho != null ? rho * 1000 : 0) + ddC * 10 + x.v / 1e7;
+    // 时间止损 +2000：排在凯利稳健为负之下、冗余度之上——逻辑没兑现的钱在占着弹性仓的机会成本
+    const tAdj = (ts.expired && !broken ? 2000 : 0) + (ts.target && !broken ? 500 : 0);
+    const score = (broken ? 1e9 : 0) + kAdj + tAdj + (rho != null ? rho * 1000 : 0) + ddC * 10 + x.v / 1e7;
     return { score, chips, broken, rho, ddC };
   };
 
   const execCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('list')} 调仓执行清单（漂移带 ±${DRIFT}pp）</h3>
-    <p class="hint">卖出排序：<strong>逻辑已破（你的判断）&gt; 凯利稳健为负（①的评估，胜率±5不翻号才算数）&gt; 冗余度（实测ρ̄）&gt; 回撤贡献 &gt; 市值</strong>——每卖1元让组合改善最多；凯利稳健为<strong>正</strong>的层内后卖（有优势的注不先砍），凯利<strong>不稳健</strong>的一律忽略不进排序。${cc && cc.date ? `冗余数据取自 ${escapeHtml(cc.date)} 拉的真实相关性${cc.date !== todayStr() ? '（较旧，建议到「股票体检」重拉一次）' : ''}` : '<span style="color:var(--amber-ink)">尚未拉过真实相关性——先到「股票体检」拉一次，冗余排序才生效</span>'}。点标的旁「标记逻辑已破」可把它提到卖出队首。</p></div>`);
+    <p class="hint">卖出排序：<strong>逻辑已破/证伪触发（你的判断或决策卡）&gt; 凯利稳健为负（①的评估，胜率±5不翻号才算数）&gt; 逻辑窗口过期（时间止损）&gt; 冗余度（实测ρ̄）&gt; 回撤贡献 &gt; 市值</strong>——每卖1元让组合改善最多；凯利稳健为<strong>正</strong>的层内后卖（有优势的注不先砍），凯利<strong>不稳健</strong>的一律忽略不进排序。${cc && cc.date ? `冗余数据取自 ${escapeHtml(cc.date)} 拉的真实相关性${cc.date !== todayStr() ? '（较旧，建议到「股票体检」重拉一次）' : ''}` : '<span style="color:var(--amber-ink)">尚未拉过真实相关性——先到「股票体检」拉一次，冗余排序才生效</span>'}。点标的旁「标记逻辑已破」可把它提到卖出队首。</p></div>`);
   if (!overL.length && !underL.length) {
     execCard.appendChild(el(`<div class="alert green"><span class="icon">${icon('check')}</span><div>各层偏离都在 ±${DRIFT}pp 内，<strong>无需调仓</strong>。再平衡不是频繁操作——偏离超线再动，每季度看一次即可。</div></div>`));
   } else {
@@ -6625,6 +6970,14 @@ VIEWS.help = function (app) {
   G('globe', '市场指标 · 宏观变量看板', [
     ['怎么用', '<p>集中跟踪影响组合的宏观变量：利率 / 通胀 / 汇率 / 恐慌指数。大部分<strong>自动拉取</strong>（美元指数、VIX、中国 CPI/PMI/LPR、美国 CPI/失业率/核心PCE/PMI、美联储利率）；拉不到的（FOMC 倾向、社融、美债/中债收益率）每项旁边有来源链接，<strong>每月手动更新一次</strong>即可。</p>'],
     ['怎么用出价值', '<p>别把看板当新闻看。每项都写了「对你组合的影响」——比如美元资产占你组合约 1/4，美元指数走弱 5%，人民币计价账面就少吃约 5%。看指标时问一句：<strong>我哪个持仓对它最敏感？</strong>答不上来的指标，对你就是噪音。</p>'],
+  ]);
+
+  G('clipboard', '决策卡 · 为什么买 / 何时认错', [
+    ['怎么用', '<p>买入前（或现在补上）给最看重的 2–3 只个股建卡：<strong>一句话看多逻辑</strong> + <strong>最强反方论证（必填）</strong> + <strong>2–3 条证伪条件</strong>（可观测的客观事件，如"单季扣非同比转负"，不能写"跌了很多"），再填入场/目标/止损价与<strong>逻辑兑现窗口</strong>。日后条件发生就勾中——那一刻不是重新找理由的时候。</p>'],
+    ['三处自动接线', '<p>① 勾中任一证伪条件 → 该标的在<strong>再平衡</strong>里自动排到卖出队首（权重最高）；② 逻辑窗口到期未兑现 → 触发<strong>时间止损</strong>，在卖出排序里加权（排在凯利稳健为负之下、冗余度之上）；③ 触及目标价/止损价/到期 → 一键记入<strong>复盘校准</strong>，回填结果后计入你的真实胜率。</p>'],
+    ['加仓三道闸', '<p>填了入场价与止损价就会算出这笔<strong>最多能买多少</strong>：<code class="formula">仓位% = 单笔风险% ÷ 止损幅度%</code>（Van Tharp 风险预算法），再与<strong>单标的集中度上限</strong>、<strong>该层剩余空间</strong>取最小值。注意止损很紧时这个公式会授权很大的仓位——所以它是三道闸之一，不是仓位决定器。A股跌停/美股跳空时止损不在设定价成交，"最多亏 2%" 是上限不是保证。</p>'],
+    ['为什么不做 AI 多空辩论打分', '<p>让模型给自己的论证打 0–10 分再加权，看着量化实则不稳定——同一输入两次结果就能不同（凯利模块已验证过这个问题）。所以这里只用 AI 干它真正擅长且低风险的事：<strong>帮你想反面</strong>（生成反方论证与证伪条件建议），<strong>明确不输出买卖评级、不给目标价</strong>。生成结果请按自己的理解改写后再存——照抄等于把判断外包。</p>'],
+    ['理论', '<p><strong>事前承诺（Pre-commitment）+ 可证伪性（Popper）</strong>：投资中最贵的错误不是买错，而是买错之后不断为它编新理由。把证伪条件写在买入之前、由当时清醒的你定义，等于给未来情绪化的你留下一份约束——这是本工具「把人性约束固化成代码」的核心一例。</p>'],
   ]);
 
   G('check', '复盘校准 · 判断力体检', [
