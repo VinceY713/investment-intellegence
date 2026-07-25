@@ -325,6 +325,18 @@ tr.total-row td.num { white-space: normal; }   /* 合计行可在 token 间换�
    这些位置的表格都不宽、不需要横滑提示，直接关掉装饰。 */
 .alert .table-scroll, details .table-scroll { background-image: none; }
 
+/* ---------- 决策卡（列表项做成可点的卡片，多张一眼分得清） ---------- */
+.thesis-card {
+  border: 1px solid var(--line); border-left-width: 3px; border-radius: 12px;
+  padding: 12px 14px; margin-top: 10px; cursor: pointer; background: var(--card-solid);
+  transition: border-color .15s, box-shadow .15s, transform .12s;
+}
+.thesis-card:hover { border-color: var(--accent); box-shadow: 0 3px 12px rgba(60,60,90,.10); transform: translateY(-1px); }
+.thesis-card.broken { border-left-color: var(--red); }
+.thesis-card.warn { border-left-color: var(--amber); }
+/* 列表里的多空各占一行，长文截断；详情弹窗里看全文 */
+.clamp1 { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+
 /* 窄屏把信息密集的长文本表格转成逐行卡片（市场指标的手动指标表/自动拉取诊断表）：
    否则说明列被挤成一两个字一行，行高爆炸、没法读 */
 @media (max-width: 820px) {

@@ -4833,52 +4833,198 @@ VIEWS.thesis = function (app) {
     } finally { btn.disabled = false; btn.innerHTML = old; }
   };
 
-  // —— 已有决策卡列表（含证伪勾选）——
+  // —— 已有决策卡：卡片式列表，点开看详情 / 就地修改 / AI 更正 / 删除 ——
   const keys = Object.keys(theses);
   const listCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('list')} 我的决策卡（${keys.length}）</h3>
-    <p class="hint">勾中任一<strong>证伪条件</strong> = 你亲自确认逻辑已破，该标的会自动排到再平衡卖出队首。这是给未来的你留的证据，别事后改条件。</p></div>`);
-  if (!keys.length) {
-    listCard.appendChild(el(`<div class="empty"><div class="big">${icon('clipboard')}</div><p>还没有决策卡。选一个持仓，先给最看重的 2–3 只建卡。</p></div>`));
-  } else {
+    <p class="hint">每张卡一个标的，<strong>点卡片展开详情</strong>：可改内容、勾证伪、让 AI 按最新数据复核、或删除。勾中任一证伪条件 = 你亲自确认逻辑已破，该标的会自动排到再平衡卖出队首——这是给未来的你留的证据，别事后改条件。</p></div>`);
+
+  // 单张卡的状态摘要（列表与详情共用）
+  const cardState = (k) => {
+    const t = theses[k];
+    const a = cands.find(x => thesisKeyOf(x) === k);
+    const px = num(a && a.lastPx);
+    const st = thesisStatus(a || { code: t.code, name: t.name }, px);
+    const hits = (t.falsify || []).filter(f => f && f.hit).length;
+    const badges = [];
+    if (st.broken) badges.push('<span class="pill red">证伪已触发</span>');
+    if (st.expired) badges.push('<span class="pill amber">窗口过期</span>');
+    if (st.target) badges.push('<span class="pill green">达目标价</span>');
+    if (st.stop) badges.push('<span class="pill red">破止损价</span>');
+    // 浮盈亏（按入场价与现价）——决策卡最该被看见的一个数
+    let pnlPct = null;
+    if (num(t.entry) > 0 && px > 0) pnlPct = (px - num(t.entry)) / num(t.entry) * 100;
+    return { t, a, px, st, hits, badges, pnlPct, tone: st.broken || st.stop ? 'broken' : (st.expired ? 'warn' : '') };
+  };
+
+  function drawThesisCards() {
+    listCard.querySelectorAll('[data-tk],.empty').forEach(n => n.remove());
+    if (!keys.length) {
+      listCard.appendChild(el(`<div class="empty"><div class="big">${icon('clipboard')}</div><p>还没有决策卡。选一个持仓，先给最看重的 2–3 只建卡。</p></div>`));
+      return;
+    }
     keys.forEach(k => {
-      const t = theses[k];
-      const a = cands.find(x => thesisKeyOf(x) === k);
-      const px = num(a && a.lastPx);
-      const st = thesisStatus(a || { code: t.code, name: t.name }, px);
-      const badges = [];
-      if (st.broken) badges.push('<span class="pill red">证伪已触发</span>');
-      if (st.expired) badges.push(`<span class="pill amber">窗口过期</span>`);
-      if (st.target) badges.push('<span class="pill green">达目标价</span>');
-      if (st.stop) badges.push('<span class="pill red">破止损价</span>');
+      const c = cardState(k), t = c.t;
       const sc = t.scores || {};
-      const scTxt = Object.keys(SCORE_ANCHORS).filter(x => sc[x] != null).map(x => `${SCORE_ANCHORS[x][0]} ${sc[x]}`).join(' · ');
-      const box = el(`<div style="border-top:1px solid rgba(127,127,127,.2);padding:10px 0">
+      const scChips = Object.keys(SCORE_ANCHORS).filter(x => sc[x] != null)
+        .map(x => `<span class="pill gray">${SCORE_ANCHORS[x][0]} ${sc[x]}</span>`).join(' ');
+      const pnlTxt = c.pnlPct == null ? '' :
+        `<span style="color:${c.pnlPct >= 0 ? 'var(--green-ink)' : 'var(--red-ink)'};font-weight:600">${c.pnlPct >= 0 ? '+' : ''}${c.pnlPct.toFixed(1)}%</span>`;
+      listCard.appendChild(el(`<div class="thesis-card ${c.tone}" data-tk="${escapeHtml(k)}">
         <div class="row" style="gap:8px;align-items:baseline;flex-wrap:wrap">
-          <strong>${escapeHtml(t.name || k)}</strong>${t.code ? `<span class="inline-note">${escapeHtml(t.code)}</span>` : ''}
-          <span class="pill">信心 ${escapeHtml(t.conf || '中')}</span>${badges.join(' ')}
+          <strong style="font-size:15px">${escapeHtml(t.name || k)}</strong>
+          ${t.code ? `<span class="inline-note">${escapeHtml(t.code)}</span>` : ''}
+          ${pnlTxt}
+          <span style="flex:1"></span>
+          <span class="pill">信心 ${escapeHtml(t.conf || '中')}</span>${c.badges.join(' ')}
         </div>
-        <div style="font-size:13px;line-height:1.6;margin-top:4px">
-          <strong style="color:var(--green-ink)">多</strong>：${escapeHtml(t.bull || '')}<br>
-          <strong style="color:var(--red-ink)">空</strong>：${escapeHtml(t.bear || '')}</div>
-        <div class="inline-note" style="margin-top:4px">
-          入场 ${t.entry != null ? t.entry : '—'} · 目标 ${t.target != null ? t.target : '—'} · 止损 ${t.stop != null ? t.stop : '—'}
-          ${px > 0 ? ' · 现价 ' + px : ''} · 窗口 ${t.months != null ? t.months + '个月（至 ' + thesisDueDate(t) + '）' : '—'} · 建卡 ${escapeHtml(t.date || '')}
-          ${scTxt ? ' · ' + escapeHtml(scTxt) : ''}</div>
-        <div style="margin-top:6px">${(t.falsify || []).map((f, idx) => `<label style="display:block;font-size:12.5px;cursor:pointer;padding:2px 0">
-          <input type="checkbox" data-fk="${escapeHtml(k)}" data-fi="${idx}" ${f.hit ? 'checked' : ''} style="width:auto;margin-right:6px"/>
-          <span style="${f.hit ? 'color:var(--red-ink);font-weight:600' : ''}">${escapeHtml(f.t)}</span></label>`).join('')}</div>
-      </div>`);
-      listCard.appendChild(box);
+        <div class="clamp1" style="font-size:13px;margin-top:5px"><strong style="color:var(--green-ink)">多</strong> ${escapeHtml(t.bull || '')}</div>
+        <div class="clamp1" style="font-size:13px"><strong style="color:var(--red-ink)">空</strong> ${escapeHtml(t.bear || '')}</div>
+        <div class="inline-note" style="margin-top:6px">
+          入场 ${t.entry != null ? t.entry : '—'} · 目标 ${t.target != null ? t.target : '—'} · 止损 ${t.stop != null ? t.stop : '—'}${c.px > 0 ? ' · 现价 ' + c.px : ''}
+          · 窗口至 ${thesisDueDate(t) || '—'}
+          · 证伪 <strong style="color:${c.hits ? 'var(--red-ink)' : 'inherit'}">${c.hits}/${(t.falsify || []).length}</strong>
+          ${scChips ? '<br>' + scChips : ''}
+        </div>
+        <div class="inline-note" style="margin-top:4px;color:var(--accent-ink)">点击展开详情 / 修改 / 删除 →</div>
+      </div>`));
     });
-    listCard.querySelectorAll('[data-fk]').forEach(cb => cb.onchange = () => {
-      const t = theses[cb.dataset.fk];
-      if (!t || !t.falsify || !t.falsify[cb.dataset.fi]) return;
-      if (cb.checked && !confirm(`确认「${t.falsify[cb.dataset.fi].t}」已经发生？\n\n勾中 = 你亲自判定逻辑已破，该标的会被提到再平衡卖出队首。`)) { cb.checked = false; return; }
-      logOp('决策卡证伪条件' + (cb.checked ? '勾中' : '取消') + '：' + (t.name || cb.dataset.fk));
-      t.falsify[cb.dataset.fi].hit = cb.checked;
-      saveState(); render();
-    });
+    listCard.querySelectorAll('[data-tk]').forEach(n => n.onclick = () => showThesisModal(n.dataset.tk));
   }
+
+  // 详情弹窗：查看 + 就地修改 + 勾证伪 + AI 按最新数据复核 + 删除
+  function showThesisModal(k) {
+    const c = cardState(k), t = c.t;
+    const sc = t.scores || {};
+    const scRows = Object.keys(SCORE_ANCHORS).map(x =>
+      `<tr><td>${SCORE_ANCHORS[x][0]}</td><td class="num">${sc[x] != null ? sc[x] + ' / 10' : '<span style="color:var(--muted)">未评</span>'}</td></tr>`).join('');
+    const body = `
+      <div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:8px">
+        <span class="pill">信心 ${escapeHtml(t.conf || '中')}</span>${c.badges.join(' ')}
+        ${c.pnlPct != null ? `<span class="pill ${c.pnlPct >= 0 ? 'green' : 'red'}">浮动 ${c.pnlPct >= 0 ? '+' : ''}${c.pnlPct.toFixed(1)}%</span>` : ''}
+      </div>
+      <div class="field"><label>看多逻辑</label><textarea id="tm-bull" rows="2">${escapeHtml(t.bull || '')}</textarea></div>
+      <div class="field"><label>最强反方论证</label><textarea id="tm-bear" rows="2">${escapeHtml(t.bear || '')}</textarea></div>
+      <div class="field"><label>证伪条件（勾选 = 已发生；改文字会重置该条的勾选状态）</label>
+        <div id="tm-fals">${(t.falsify || []).map((f, i) => `<label style="display:flex;gap:7px;align-items:flex-start;font-size:13px;padding:3px 0">
+          <input type="checkbox" data-fi="${i}" ${f.hit ? 'checked' : ''} style="width:auto;margin-top:3px"/>
+          <span style="${f.hit ? 'color:var(--red-ink);font-weight:600' : ''}">${escapeHtml(f.t)}</span></label>`).join('') || '<span class="inline-note">（无）</span>'}</div>
+        <textarea id="tm-falstxt" rows="3" placeholder="每行一条">${escapeHtml((t.falsify || []).map(f => f.t).join('\n'))}</textarea></div>
+      <div class="grid grid-3">
+        <div class="field"><label>入场价</label><input id="tm-entry" type="number" step="0.01" value="${t.entry != null ? t.entry : ''}"/></div>
+        <div class="field"><label>目标价</label><input id="tm-target" type="number" step="0.01" value="${t.target != null ? t.target : ''}"/></div>
+        <div class="field"><label>止损价</label><input id="tm-stop" type="number" step="0.01" value="${t.stop != null ? t.stop : ''}"/></div>
+      </div>
+      <div class="grid grid-3">
+        <div class="field"><label>窗口（月）</label><input id="tm-months" type="number" step="1" value="${t.months != null ? t.months : ''}"/></div>
+        <div class="field"><label>建卡日期</label><input id="tm-date" type="date" value="${escapeHtml(t.date || '')}"/></div>
+        <div class="field"><label>信心</label><select id="tm-conf">${['高', '中', '低'].map(x => `<option${x === (t.conf || '中') ? ' selected' : ''}>${x}</option>`).join('')}</select></div>
+      </div>
+      <details style="margin:6px 0"><summary style="cursor:pointer;font-size:12px;color:var(--muted);list-style:revert">四维评分（只做记录，不参与自动裁决）</summary>
+        <div class="table-scroll"><table><tbody>${scRows}</tbody></table></div></details>
+      <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:10px">
+        <button class="btn" id="tm-save" style="flex:0 0 auto">${icon('check')} 保存修改</button>
+        <button class="btn secondary" id="tm-ai" style="flex:0 0 auto">${icon('sparkles')} AI 按最新数据复核</button>
+        <button class="btn danger" id="tm-del" style="flex:0 0 auto">${icon('trash')} 删除此卡</button>
+      </div>
+      <div id="tm-ai-out"></div>
+      <p class="inline-note" style="margin-top:8px">现价 ${c.px > 0 ? c.px : '—'}${t.entry != null && c.px > 0 ? `，相对入场 ${c.pnlPct >= 0 ? '+' : ''}${c.pnlPct.toFixed(1)}%` : ''}。修改会先留底到「修改日志」，可还原。</p>`;
+    showModal(escapeHtml(t.name || k) + (t.code ? ' <span class="inline-note">' + escapeHtml(t.code) + '</span>' : ''), body);
+    const ov = document.querySelector('[data-modal]');
+    if (!ov) return;
+    const $m = s => ov.querySelector(s);
+    // 勾选证伪：立即生效（与列表口径一致），并二次确认
+    ov.querySelectorAll('#tm-fals [data-fi]').forEach(cb => cb.onchange = () => {
+      const i = +cb.dataset.fi;
+      if (!t.falsify || !t.falsify[i]) return;
+      if (cb.checked && !confirm(`确认「${t.falsify[i].t}」已经发生？\n\n勾中 = 你亲自判定逻辑已破，该标的会被提到再平衡卖出队首。`)) { cb.checked = false; return; }
+      logOp('决策卡证伪条件' + (cb.checked ? '勾中' : '取消') + '：' + (t.name || k));
+      t.falsify[i].hit = cb.checked;
+      saveState(); ov.remove(); render();
+    });
+    $m('#tm-save').onclick = () => {
+      const bull = $m('#tm-bull').value.trim(), bear = $m('#tm-bear').value.trim();
+      const lines = $m('#tm-falstxt').value.split('\n').map(x => x.trim()).filter(Boolean);
+      if (!bull) { alert('看多逻辑不能为空'); return; }
+      if (!bear) { alert('反方论证不能为空——这是这张卡的关键部分'); return; }
+      if (!lines.length) { alert('至少保留 1 条证伪条件'); return; }
+      const oldHit = {};
+      (t.falsify || []).forEach(f => { if (f && f.hit) oldHit[f.t] = true; });   // 文字没改的条目保留勾选
+      logOp('编辑决策卡：' + (t.name || k));
+      t.bull = bull; t.bear = bear;
+      t.falsify = lines.map(x => ({ t: x, hit: !!oldHit[x] }));
+      t.entry = num($m('#tm-entry').value) || null;
+      t.target = num($m('#tm-target').value) || null;
+      t.stop = num($m('#tm-stop').value) || null;
+      t.months = num($m('#tm-months').value) || null;
+      t.date = $m('#tm-date').value || t.date;
+      t.conf = $m('#tm-conf').value;
+      saveState(); ov.remove(); render();
+    };
+    $m('#tm-del').onclick = () => {
+      if (!confirm(`删除「${t.name || k}」这张决策卡？\n证伪条件的触发状态也会一并清除；可在「设置 → 修改日志」还原。`)) return;
+      logOp('删除决策卡：' + (t.name || k));
+      delete theses[k]; saveState(); ov.remove(); render();
+    };
+    // AI 复核：按最新真实数据重出反方与证伪建议（不碰你的看多逻辑，除非你自己填回去）
+    $m('#tm-ai').onclick = async (ev) => {
+      const btn = ev.target.closest('button'); btn.disabled = true;
+      const ob = btn.innerHTML; btn.innerHTML = icon('refresh', 'spin') + ' 复核中…';
+      const out = $m('#tm-ai-out');
+      out.innerHTML = '<div class="inline-note">正在按最新数据复核（约 10–30 秒）…</div>';
+      try {
+        const code = t.code || '';
+        let F = null, T = null, A = null;
+        if (code) {
+          try { const f0 = await fetchFundamentals(code); if (f0.ok) F = f0; } catch (e) {}
+          try { const t0 = techScore(await fetchTechKlines(code)); if (t0.ok) T = t0; } catch (e) {}
+          try { const a0 = await fetchAnnouncements(code, 20); if (a0.ok) A = a0.list; } catch (e) {}
+        }
+        const facts = [];
+        if (F) facts.push('【基本面·最新真实数据】' + [
+          F.pe != null ? 'PE(TTM) ' + F.pe.toFixed(2) : '', F.pb != null ? 'PB ' + F.pb.toFixed(2) : '',
+          F.roe != null ? 'ROE(年化) ' + F.roe + '%' : '', F.gross != null ? '毛利率 ' + F.gross.toFixed(2) + '%' : '',
+          F.debt != null ? '资产负债率 ' + F.debt.toFixed(2) + '%' : '',
+          F.revYoy != null ? '营收同比 ' + F.revYoy.toFixed(2) + '%' : '', F.profitYoy != null ? '净利同比 ' + F.profitYoy.toFixed(2) + '%' : '',
+          F.reportDate ? '报告期 ' + F.reportDate : '',
+        ].filter(Boolean).join('，'));
+        if (T) facts.push('【技术面·最新读数】' + T.date + ' 收盘 ' + T.px + '，评分 ' + T.score + '/10；' + T.parts.map(p => p.k + '：' + p.v).join('；'));
+        if (A && A.length) facts.push('【近期公告】\n' + A.slice(0, 12).map(x => '· ' + x.date + ' ' + x.title).join('\n'));
+        const sys = '你是空头研究员，负责复核一张已存在的投资决策卡是否还站得住。'
+          + '硬性要求：(1) 不给买入/卖出/持有评级、不给目标价、不预测涨跌；'
+          + '(2) 只能引用给定数据里的数字，禁止编造，不确定写"需核实"；'
+          + '(3) 逐条判断【原有证伪条件】是否已经被最新数据触发（hit=true/false），并说明依据；'
+          + '(4) 如原条件写得不可验证或阈值失效，在 newFalsify 里给出改进版（带阈值、可核对）；'
+          + '(5) 用中文。严格返回 JSON：'
+          + '{"bear":"一句话最新反方论证","checks":[{"i":序号,"hit":true或false,"why":"依据"}],"newFalsify":["改进后的证伪条件"],"verdict":"逻辑仍成立|需警惕|已动摇"}';
+        const user = '标的：' + (t.name || k) + (code ? '（' + code + '）' : '')
+          + '\n\n【原看多逻辑】' + (t.bull || '')
+          + '\n【原反方论证】' + (t.bear || '')
+          + '\n【原证伪条件】\n' + (t.falsify || []).map((f, i) => i + '. ' + f.t + (f.hit ? '（已人工勾中）' : '')).join('\n')
+          + '\n\n' + (facts.length ? facts.join('\n\n') : '（未取到真实数据，请说明数据不足，不要编造）');
+        const r = await aiChatJSON(sys, user, { temperature: 0.2, seed: 9, maxTokens: 1600 });
+        const checks = Array.isArray(r.checks) ? r.checks : [];
+        const nf = Array.isArray(r.newFalsify) ? r.newFalsify.map(x => String(x).trim()).filter(Boolean) : [];
+        const used = [F ? '基本面' : '', T ? '技术面' : '', (A && A.length) ? '公告 ' + A.length + ' 条' : ''].filter(Boolean).join(' + ') || '无真实数据';
+        out.innerHTML = `<div class="alert amber" style="margin-top:10px"><span class="icon">${icon('warn')}</span><div>
+          <strong>复核结论：${escapeHtml(String(r.verdict || '—'))}</strong>
+          <span class="inline-note">（事实来源：${escapeHtml(used)}）</span>
+          ${r.bear ? '<br><strong style="color:var(--red-ink)">最新反方</strong>：' + escapeHtml(String(r.bear)) : ''}
+          ${checks.length ? '<br><strong>原证伪条件逐条核对</strong>：<br>' + checks.map(x => {
+            const orig = (t.falsify || [])[x.i];
+            return `${x.hit ? '⛔ <strong>已触发</strong>' : '○ 未触发'} ${escapeHtml(orig ? orig.t : '#' + x.i)}<br><span class="inline-note" style="margin-left:14px">${escapeHtml(String(x.why || ''))}</span>`;
+          }).join('<br>') : ''}
+          ${nf.length ? '<br><strong>建议改进的证伪条件</strong>：<br>· ' + nf.map(escapeHtml).join('<br>· ') : ''}
+          ${nf.length ? `<div class="row" style="gap:6px;margin-top:8px"><button class="btn secondary small" id="tm-ai-use" style="flex:0 0 auto">用改进版替换上方证伪条件（还需点保存）</button></div>` : ''}
+          <span class="inline-note"><strong>AI 的判定不会自动勾选</strong>——是否认定逻辑已破由你亲自勾，这是纪律的一部分。若你认同它的核对结果，请自己勾上面的框。</span></div></div>`;
+        const useBtn = out.querySelector('#tm-ai-use');
+        if (useBtn) useBtn.onclick = () => { $m('#tm-falstxt').value = nf.join('\n'); };
+        if (r.bear) $m('#tm-bear').value = String(r.bear);
+      } catch (e) {
+        out.innerHTML = `<div class="alert red" style="margin-top:10px"><span class="icon">${icon('warn')}</span><div>复核失败：${escapeHtml(e.message)}</div></div>`;
+      } finally { btn.disabled = false; btn.innerHTML = ob; }
+    };
+  }
+  drawThesisCards();
   app.appendChild(listCard);
 };
 
