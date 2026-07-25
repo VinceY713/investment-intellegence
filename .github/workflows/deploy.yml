@@ -294,16 +294,18 @@ jobs:
 
                 # 广期所官方日行情代理：/api/gfex?trade_date=20260724 → POST 表单到 gfex 官方接口
                 # 碳酸锂等广期所品种价格（东财 push2 系对广期所 secid 返回 502 且当前被封，官方源最权威）
+                # 注意：必须丢弃浏览器 query 再转发（rewrite 末尾 ? 的作用）——query+body 同时到达时
+                # 广期所会把 trade_date 合并成数组，返回只有「总计」行的空数据，触发前端连发兜底刷爆 WAF
                 location = /api/gfex {
                     proxy_method POST;
                     proxy_set_body "trade_date=$arg_trade_date&trade_type=0";
-                    proxy_pass http://www.gfex.com.cn/u/interfacesWebTiDayQuotes/loadList;
+                    rewrite ^/api/gfex$ /u/interfacesWebTiDayQuotes/loadList? break;
+                    proxy_pass http://www.gfex.com.cn;
                     proxy_http_version 1.1;
                     proxy_set_header Connection "";
                     proxy_set_header Host www.gfex.com.cn;
                     proxy_set_header Content-Type "application/x-www-form-urlencoded";
                     proxy_set_header User-Agent "Mozilla/5.0";
-                    proxy_ssl_server_name off;
                     resolver 119.29.29.29 223.5.5.5 valid=300s ipv6=off;
                     resolver_timeout 5s;
                     proxy_connect_timeout 10s;
