@@ -6965,9 +6965,14 @@ async function fetchCmdtySource(src) {
     }
     if (src.kind === 'gfex') {
       // 广期所官方日行情（POST 表单，经 /api/gfex 代理）：碳酸锂取 varietyOrder==='lc' 行。
-      // 涨跌% = (收盘 − 昨结) ÷ 昨结。周末/节假日无数据 → 自动回退最近 7 天内有数的一天。
-      for (let back = 0; back < 7; back++) {
-        const d = new Date(todayStr() + 'T00:00:00'); d.setDate(d.getDate() - back);
+      // 涨跌% = (收盘 − 昨结) ÷ 昨结。周末/节假日无数据：先对齐到最近工作日（周末回周五），
+      // 最多再往前 4 天——避免无效日期连发请求触发上游 WAF。
+      const d0 = new Date(todayStr() + 'T00:00:00');
+      const dow = d0.getDay();
+      if (dow === 6) d0.setDate(d0.getDate() - 1);
+      else if (dow === 0) d0.setDate(d0.getDate() - 2);
+      for (let back = 0; back < 4; back++) {
+        const d = new Date(d0.getTime() - back * 864e5);
         const ymd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
         const r = await fetchRaw('/api/gfex?trade_date=' + ymd);
         try {
@@ -6980,7 +6985,7 @@ async function fetchCmdtySource(src) {
           }
         } catch (e) {}
       }
-      return { price: null, chg: null, raw: 'gfex 近 7 天无数据' };
+      return { price: null, chg: null, raw: 'gfex 近 4 个交易日无数据' };
     }
     if (src.kind === 'clist') {
       // push2 clist（与资金流同通道）：fs 指定市场（m:225=广期所），按 f12 代码/f14 名称匹配主力合约
