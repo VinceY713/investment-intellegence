@@ -506,6 +506,26 @@ async function fetchStockFlow(code) {
       return { ok: true, secid, todayYi: d.f62 / 1e8, ratio: (typeof d.f184 === 'number' && isFinite(d.f184)) ? d.f184 : null, diag };
     }
   }
+  // 东财 push2 被封/失败时的兜底：新浪资金流（vip.stock.finance.sina.com.cn，与 hq.sinajs.cn 不同主机、未被封，仅 A股）。
+  // 主力净额 = 特大单(r0_net) + 大单(r1_net)；净占比 = 主力净额 ÷ 分层成交额合计；近 5 日逐日可合计。
+  const c = String(code || '').trim();
+  if (/^\d{6}$/.test(c)) {
+    const sym = detectMarket(c) + c;
+    const r = await fetchRaw('/api/sinaflow?page=1&num=5&sort=opendate&asc=0&daima=' + sym);
+    diag.push('sinaflow/' + sym + ' HTTP' + r.status + ' ' + macroClip(r.text));
+    try {
+      const arr = JSON.parse(r.text);
+      if (Array.isArray(arr) && arr.length) {
+        const mainOf = row => num(row.r0_net) + num(row.r1_net);
+        const latest = arr[0];
+        const tot = num(latest.r0) + num(latest.r1) + num(latest.r2) + num(latest.r3);
+        const todayYi = mainOf(latest) / 1e8;
+        const ratio = tot > 0 ? +(mainOf(latest) / tot * 100).toFixed(2) : null;
+        const d5Yi = arr.reduce((sum, row) => sum + mainOf(row), 0) / 1e8;
+        return { ok: true, secid: sym, todayYi: +todayYi.toFixed(4), ratio, d5Yi: +d5Yi.toFixed(4), diag };
+      }
+    } catch (e) {}
+  }
   return { ok: false, diag };
 }
 // 资金面 0-10：个股主力净额 + 净占比 + 所属板块资金流（板块数据来自「市场指标→资金流向」）
@@ -521,6 +541,12 @@ function flowScore(sf, sectorHit) {
       const rp = sf.ratio > 5 ? 2 : sf.ratio > 0 ? 1.4 : sf.ratio > -5 ? 0.7 : 0;
       score += rp; got += 2;
       parts.push({ k: '主力净占比', v: (sf.ratio >= 0 ? '+' : '') + sf.ratio.toFixed(2) + '%', p: rp, max: 2 });
+    }
+    if (sf.d5Yi != null) {
+      // 近 5 日主力净额合计（新浪兜底源提供）：看持续性，单日噪音大
+      const dp = sf.d5Yi > 2 ? 1 : sf.d5Yi > 0 ? 0.7 : sf.d5Yi > -2 ? 0.3 : 0;
+      score += dp; got += 1;
+      parts.push({ k: '近5日主力净额', v: (sf.d5Yi >= 0 ? '+' : '') + sf.d5Yi.toFixed(2) + ' 亿', p: dp, max: 1 });
     }
   }
   if (sectorHit) {
