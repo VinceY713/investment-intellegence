@@ -321,6 +321,9 @@ tr.total-row td.num { white-space: normal; }   /* 合计行可在 token 间换�
   background-size: 22px 100%, 22px 100%, 11px 100%, 11px 100%;
   background-attachment: local, local, scroll, scroll;
 }
+/* 滚动阴影的遮罩用的是卡片底色，嵌在带色底的 alert / details 里会露成两条白边。
+   这些位置的表格都不宽、不需要横滑提示，直接关掉装饰。 */
+.alert .table-scroll, details .table-scroll { background-image: none; }
 
 /* 窄屏把信息密集的长文本表格转成逐行卡片（市场指标的手动指标表/自动拉取诊断表）：
    否则说明列被挤成一两个字一行，行高爆炸、没法读 */

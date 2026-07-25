@@ -4546,6 +4546,8 @@ VIEWS.thesis = function (app) {
       </div></details>`);
 
   const $f = sel => formCard.querySelector(sel);
+  // 「自动评四维」拉到的真实数据暂存于此，供 AI 起草时作为唯一事实来源（不给它别的信息）
+  let lastData = { tech: null, fund: null, ann: null, code: '', name: '' };
   // 三道闸预览：入场/止损变动时实时算
   function drawGates() {
     const entry = num($f('#th-entry').value), stop = num($f('#th-stop').value);
@@ -4582,6 +4584,7 @@ VIEWS.thesis = function (app) {
       const t = techScore(rows);
       // 技术面不可算不能中断后三维：抛出交给 catch，流程继续
       if (!t.ok) throw new Error(t.err);
+      lastData.tech = t; lastData.code = code; lastData.name = (a && a.name) || '';
       const sc = scoreBox.querySelector('[data-sc="tech"]');
       if (sc) sc.value = t.score;
       // 入场价空着（该标的还没刷过估值）→ 用刚取到的最新收盘价补上，三道闸才算得出来
@@ -4610,6 +4613,7 @@ VIEWS.thesis = function (app) {
     try {
       const fdRaw = await fetchFundamentals(code);
       diags.push(...(fdRaw.diag || []).map(x => ['基本面', x]));
+      if (fdRaw.ok) lastData.fund = fdRaw;
       const fs = fundScore(fdRaw);
       if (fs.ok) {
         const sc2 = scoreBox.querySelector('[data-sc="fund"]'); if (sc2) sc2.value = fs.score;
@@ -4645,6 +4649,7 @@ VIEWS.thesis = function (app) {
     try {
       const ann = await fetchAnnouncements(code, 25);
       diags.push(...(ann.diag || []).map(x => ['消息面', x]));
+      if (ann.ok) lastData.ann = ann.list;
       if (!ann.ok) {
         sec.insertAdjacentHTML('beforeend', `<div class="alert amber" style="margin:8px 0"><span class="icon">${icon('warn')}</span><div>未取到公告列表，消息面留空（诊断见下）。<strong>不会让模型凭记忆编事件。</strong></div></div>`);
       } else {
@@ -4751,39 +4756,76 @@ VIEWS.thesis = function (app) {
     delete theses[k]; saveState(); render();
   };
 
-  // AI 魔鬼代言人：只出反方论证 + 证伪条件建议，明确不给买卖评级
+  // AI 起草正反方 + 证伪条件：把「自动评四维」刚拉到的真实数据作为唯一事实来源喂进去。
+  // 有你自己的看多逻辑时它做针对性反驳；没有时它也起草一版正方——但那只是「按数据能讲出的故事」，
+  // 不等于你的判断，必须改写后再存。
   $f('#th-ai').onclick = async () => {
     const k = $f('#th-pick').value, bull = $f('#th-bull').value.trim();
     if (!k) { alert('请先选择标的'); return; }
-    if (!bull) { alert('请先写下你的看多逻辑，AI 才能针对性反驳'); return; }
     const a = cands.find(x => thesisKeyOf(x) === k);
+    const code = (a && a.code) || '';
     const btn = $f('#th-ai'), out = $f('#th-ai-out');
     btn.disabled = true; const old = btn.innerHTML; btn.innerHTML = icon('refresh', 'spin') + ' 生成中…';
-    out.innerHTML = '<div class="inline-note">正在请求反方论证（约 10–30 秒）…</div>';
+    out.innerHTML = '<div class="inline-note">正在起草（约 10–30 秒）…</div>';
     try {
-      const sys = '你是一位专业的空头研究员（devil\'s advocate）。用户给出他的看多逻辑，你的任务是尽最大努力反驳它，并给出可观测的证伪条件。'
-        + '硬性要求：(1) 绝对不要给出买入/卖出/持有评级，不要给目标价，不要预测涨跌——那不是你的任务；'
-        + '(2) 证伪条件必须是客观可验证的事件（财务指标阈值、项目进度、价格持续时间等），不能是"股价下跌"这类同义反复；'
-        + '(3) 只依据公开常识与用户提供的信息推理，不得编造具体财务数字，不确定就说"需核实"；'
-        + '(4) 用中文。严格返回 JSON：{"bear":"一句话最强空头论证","risks":["下行风险1","下行风险2","下行风险3"],"falsify":["证伪条件1","证伪条件2","证伪条件3"]}';
-      const user = `标的：${(a && a.name) || k}${a && a.code ? '（' + a.code + '）' : ''}\n用户的看多逻辑：${bull}\n请针对性反驳。`;
+      // 还没点过「自动评四维」就先补拉一次，保证 AI 拿到的是真实数据而不是空手推理
+      if (lastData.code !== code) lastData = { tech: null, fund: null, ann: null, code, name: (a && a.name) || '' };
+      if (!lastData.fund && code) { try { const f0 = await fetchFundamentals(code); if (f0.ok) lastData.fund = f0; } catch (e) {} }
+      if (!lastData.ann && code) { try { const a0 = await fetchAnnouncements(code, 20); if (a0.ok) lastData.ann = a0.list; } catch (e) {} }
+      if (!lastData.tech && code) { try { const t0 = techScore(await fetchTechKlines(code)); if (t0.ok) lastData.tech = t0; } catch (e) {} }
+      const F = lastData.fund, T = lastData.tech, A = lastData.ann;
+      const facts = [];
+      if (F) facts.push('【基本面·真实数据】' + [
+        F.pe != null ? 'PE(TTM) ' + F.pe.toFixed(2) : '', F.pb != null ? 'PB ' + F.pb.toFixed(2) : '',
+        F.roe != null ? 'ROE(年化) ' + F.roe + '%' : '', F.gross != null ? '毛利率 ' + F.gross.toFixed(2) + '%' : '',
+        F.netMargin != null ? '净利率 ' + F.netMargin + '%' : '', F.debt != null ? '资产负债率 ' + F.debt.toFixed(2) + '%' : '',
+        F.revYoy != null ? '营收同比 ' + F.revYoy.toFixed(2) + '%' : '', F.profitYoy != null ? '净利同比 ' + F.profitYoy.toFixed(2) + '%' : '',
+        F.reportDate ? '报告期 ' + F.reportDate : '',
+      ].filter(Boolean).join('，'));
+      if (T) facts.push('【技术面·真实读数】' + T.date + ' 收盘 ' + T.px + '，评分 ' + T.score + '/10；'
+        + T.parts.map(p => p.k + '：' + p.v).join('；') + '；近60日区间 ' + T.low60.toFixed(2) + '–' + T.high60.toFixed(2));
+      if (A && A.length) facts.push('【近期公告·真实标题】\n' + A.slice(0, 15).map(x => '· ' + x.date + ' ' + x.title).join('\n'));
+      if (!facts.length) facts.push('（未取到任何真实数据，请在结论中明确说明"数据不足"，不要编造数字）');
+
+      const sys = '你是一位严谨的证券研究员，同时扮演多头与空头两个角色。用户给你【已检索到的真实数据】，请据此起草多空论证与证伪条件。'
+        + '硬性要求：'
+        + '(1) 绝对不给买入/卖出/持有评级，不给目标价，不预测涨跌——那不是你的任务；'
+        + '(2) 只能引用给定数据中出现的数字，禁止编造任何未给出的财务或经营数据，不确定就写"需核实"；'
+        + '(3) 证伪条件必须是【客观可验证且带阈值】的事件（如"单季毛利率跌破25%"、"营收同比连续两季转负"、"某项目投产延后两个季度以上"），'
+        + '禁止写"股价下跌"、"市场情绪转弱"这类同义反复或不可证伪的表述；优先使用上面给定数据里已有的指标，便于日后逐条核对；'
+        + '(4) 多头/空头各一句话，直接、具体、可反驳；'
+        + '(5) 用中文。严格返回 JSON：'
+        + '{"bull":"一句话看多逻辑","bear":"一句话最强空头论证","risks":["下行风险1","下行风险2","下行风险3"],"falsify":["证伪条件1","证伪条件2","证伪条件3"]}';
+      const user = '标的：' + ((a && a.name) || k) + (code ? '（' + code + '）' : '') + '\n\n'
+        + facts.join('\n\n')
+        + (bull ? '\n\n【用户已写的看多逻辑】' + bull + '\n请以用户这条为准写 bull（可据数据润色，但不得改变其核心主张），并针对它写最强反驳。'
+                : '\n\n用户尚未写看多逻辑，请据上述真实数据起草一版。');
       const r = await aiChatJSON(sys, user, { temperature: 0.2, seed: 7 });
+      const dBull = String(r.bull || '').trim();
       const bear = String(r.bear || '').trim();
       const fals = Array.isArray(r.falsify) ? r.falsify.map(x => String(x).trim()).filter(Boolean) : [];
       const risks = Array.isArray(r.risks) ? r.risks.map(x => String(x).trim()).filter(Boolean) : [];
-      out.innerHTML = `<div class="alert amber" style="margin-top:10px"><span class="icon">${icon('warn')}</span><div>
-        <strong>反方论证</strong>：${escapeHtml(bear)}
-        ${risks.length ? '<br><strong>下行风险</strong>：<br>· ' + risks.map(escapeHtml).join('<br>· ') : ''}
-        ${fals.length ? '<br><strong>建议的证伪条件</strong>：<br>· ' + fals.map(escapeHtml).join('<br>· ') : ''}
-        <div class="row" style="gap:6px;margin-top:8px"><button class="btn secondary small" id="th-ai-apply" style="flex:0 0 auto">填入上方表单（可自行修改）</button></div>
-        <span class="inline-note">AI 生成仅供参考、不构成投资建议——<strong>请按你自己的理解改写后再保存</strong>，照抄等于把判断外包。</span></div></div>`;
-      const ap = out.querySelector('#th-ai-apply');
-      if (ap) ap.onclick = () => {
-        if (bear) $f('#th-bear').value = bear;
-        if (fals.length && !$f('#th-fals').value.trim()) $f('#th-fals').value = fals.join('\n');
+      const used = [F ? '基本面' : '', T ? '技术面' : '', (A && A.length) ? '公告 ' + A.length + ' 条' : ''].filter(Boolean).join(' + ') || '无真实数据';
+      out.innerHTML = '<div class="alert amber" style="margin-top:10px"><span class="icon">' + icon('warn') + '</span><div>'
+        + '<span class="inline-note">事实来源：' + escapeHtml(used) + '（AI 只看得到这些，没有其它信息渠道）</span>'
+        + (dBull ? '<br><strong style="color:var(--green-ink)">多</strong>：' + escapeHtml(dBull) : '')
+        + (bear ? '<br><strong style="color:var(--red-ink)">空</strong>：' + escapeHtml(bear) : '')
+        + (risks.length ? '<br><strong>下行风险</strong>：<br>· ' + risks.map(escapeHtml).join('<br>· ') : '')
+        + (fals.length ? '<br><strong>建议的证伪条件</strong>：<br>· ' + fals.map(escapeHtml).join('<br>· ') : '')
+        + '<div class="row" style="gap:6px;margin-top:8px">'
+        + '<button class="btn secondary small" id="th-ai-apply" style="flex:0 0 auto">填入表单（只填空白项）</button>'
+        + '<button class="btn secondary small" id="th-ai-apply-all" style="flex:0 0 auto">覆盖填入全部</button></div>'
+        + '<span class="inline-note"><strong>这是草稿不是结论</strong>：看多逻辑最好是<u>你自己</u>的判断——AI 只是按数据讲了一个能自圆其说的故事，'
+        + '照抄等于把判断外包，这张卡也就失去了意义。证伪条件尽量保留阈值形式，日后才好逐条核对。</span></div></div>';
+      const fill = (force) => {
+        if (dBull && (force || !$f('#th-bull').value.trim())) $f('#th-bull').value = dBull;
+        if (bear && (force || !$f('#th-bear').value.trim())) $f('#th-bear').value = bear;
+        if (fals.length && (force || !$f('#th-fals').value.trim())) $f('#th-fals').value = fals.join('\n');
       };
+      const ap = out.querySelector('#th-ai-apply'); if (ap) ap.onclick = () => fill(false);
+      const ap2 = out.querySelector('#th-ai-apply-all'); if (ap2) ap2.onclick = () => fill(true);
     } catch (e) {
-      out.innerHTML = `<div class="alert red" style="margin-top:10px"><span class="icon">${icon('warn')}</span><div>生成失败：${escapeHtml(e.message)}——可自己填写反方论证。</div></div>`;
+      out.innerHTML = '<div class="alert red" style="margin-top:10px"><span class="icon">' + icon('warn') + '</span><div>生成失败：' + escapeHtml(e.message) + '</div></div>';
     } finally { btn.disabled = false; btn.innerHTML = old; }
   };
 
