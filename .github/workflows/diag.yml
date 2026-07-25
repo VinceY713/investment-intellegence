@@ -1,0 +1,88 @@
+name: Server Diagnostics (read-only)
+
+# 只读诊断：在 ECS 上按真实链路 curl 各 /api 代理端点，打印 HTTP 状态与响应头部片段，
+# 外加 nginx 错误日志与快照 cron 日志尾部。全程不写任何文件、不改配置、不重启服务。
+# 用途：定位数据源是否被封/字段刻度是否正确（沙箱与本地都无法访问这些境内源）。
+on:
+  workflow_dispatch:
+    inputs:
+      stock:
+        description: '用于取数的 A 股代码（默认 002518 科士达）'
+        required: false
+        default: '002518'
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run read-only probes on ECS
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          APP_PASSWORD: ${{ secrets.APP_PASSWORD }}
+          STOCK: ${{ github.event.inputs.stock || '002518' }}
+        with:
+          host: ${{ secrets.ECS_HOST }}
+          username: ${{ secrets.ECS_USERNAME }}
+          key: ${{ secrets.ECS_SSH_KEY }}
+          port: ${{ secrets.ECS_PORT || '22' }}
+          envs: APP_PASSWORD,STOCK
+          script: |
+            AUTH="admin:$APP_PASSWORD"
+            # probe <标签> <路径> [截取字节数]
+            probe() {
+              local label="$1" path="$2" n="${3:-600}"
+              local body code
+              body=$(curl -s -m 20 -u "$AUTH" -w $'\n__CODE__%{http_code}' "http://127.0.0.1${path}" 2>&1)
+              code=$(printf '%s' "$body" | tail -n1 | sed 's/__CODE__//')
+              echo "===== $label"
+              echo "--- path: $path"
+              echo "--- http: $code"
+              printf '%s' "$body" | sed '$d' | head -c "$n"
+              echo ""
+              echo ""
+            }
+
+            echo "########## 1. 基本面字段（关键：核对 ROE/PE/PB/毛利率 的真实刻度）"
+            SECID="0.$STOCK"
+            case "$STOCK" in 6*|5*|11*|13*) SECID="1.$STOCK";; esac
+            probe "emquote 基本面 $SECID" "/api/emquote?secid=$SECID&fields=f43,f57,f58,f59,f105,f116,f162,f167,f173,f183,f184,f185,f186,f187,f188" 900
+
+            echo "########## 2. 个股资金流字段"
+            probe "emquote 资金流 $SECID" "/api/emquote?secid=$SECID&fields=f62,f184,f66,f69,f72,f75,f78" 600
+
+            echo "########## 3. 个股公告（消息面数据源）"
+            probe "emann 公告 $STOCK" "/api/emann?cb=&sr=-1&page_size=5&page_index=1&ann_type=A&client_source=web&f_node=0&stock_list=$STOCK" 700
+
+            echo "########## 4. 美股日K（push2his：第三方称近期封服务器IP，此处求证）"
+            probe "uskline 105.AAPL" "/api/uskline?secid=105.AAPL&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f53&klt=101&fqt=1&beg=20250101&end=20260731" 400
+            probe "uskline 107.SPY" "/api/uskline?secid=107.SPY&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f53&klt=101&fqt=0&beg=20250101&end=20260731" 400
+
+            echo "########## 5. 美股指数日K（腾讯 newfqkline，第三方新加）"
+            probe "usidxkline usINX" "/api/usidxkline?param=usINX,day,,,20,qfq" 400
+            probe "usidxkline usNDX" "/api/usidxkline?param=usNDX,day,,,20,qfq" 300
+
+            echo "########## 6. 资金流向卡的三个源"
+            probe "emflow 行业主力" "/api/emflow?fid=f62&po=1&pz=3&pn=1&np=1&fltt=2&invt=2&fs=m%3A90%2Bt%3A2&fields=f12,f14,f62,f164,f174,f184" 500
+            probe "emflow 广期所(碳酸锂)" "/api/emflow?fid=f12&po=0&pz=10&pn=1&np=1&fltt=2&invt=2&fs=m%3A225&fields=f2,f3,f12,f14" 500
+            probe "emmacro 南向" "/api/emmacro?reportName=RPT_MUTUAL_DEAL_HISTORY&columns=ALL&sortColumns=TRADE_DATE&sortTypes=-1&pageSize=1&pageNumber=1&filter=%28MUTUAL_TYPE%3D%22003%22%29" 400
+
+            echo "########## 7. 商品价格（腾讯外盘 hf_ 与东财）"
+            probe "quote hf_GC 黄金" "/api/quote?code=hf_GC" 300
+            probe "quote hf_CAD 铜" "/api/quote?code=hf_CAD" 300
+
+            echo "########## 8. A股日K与基金净值（已知可用，作对照组）"
+            probe "kline sz$STOCK" "/api/kline?param=sz$STOCK,day,,,5,qfq" 300
+            probe "fundhist 020602" "/api/fundhist?fundCode=020602&pageIndex=1&pageSize=2" 400
+
+            echo "########## 9. nginx 错误日志（尾部 40 行）"
+            sudo tail -n 40 /var/log/nginx/error.log 2>/dev/null || tail -n 40 /var/log/nginx/error.log 2>/dev/null || echo "(读不到 error.log)"
+            echo ""
+
+            echo "########## 10. 快照 cron 日志（尾部 25 行）"
+            sudo tail -n 25 /var/log/ii-snapshot.log 2>/dev/null || tail -n 25 /var/log/ii-snapshot.log 2>/dev/null || echo "(读不到 ii-snapshot.log)"
+            echo ""
+
+            echo "########## 11. 出口 IP 与 DNS（判断是否被数据源按 IP 封禁）"
+            curl -s -m 10 https://myip.ipip.net 2>/dev/null || curl -s -m 10 ifconfig.me 2>/dev/null || echo "(取不到出口IP)"
+            echo ""
+            echo "diag done."
