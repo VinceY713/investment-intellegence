@@ -230,10 +230,49 @@ async function fetchKlines(code, count = 160) {
   if (!Array.isArray(arr) || !arr.length) throw new Error('无K线数据');
   return arr.map(r => ({ date: r[0], close: parseFloat(r[2]) })).filter(x => isFinite(x.close) && x.close > 0);
 }
+/* 美股日K主源：腾讯 newfqkline，但**必须带交易所后缀**（真机实测）：
+     usNVDA      → 只回 3 行（首日 + 今日，稀疏无用）
+     usNVDA.OQ   → 回 61 行完整日K  ✅
+   后缀不用猜：腾讯实时报价的第 3 个字段就是带后缀的完整代码
+   （v_usNVDA="200~英伟达~NVDA.OQ~206.84~…"），先取它再拉 K 线。
+   东财 push2his 已从本服务器不可达（被封），故降为最后备选。 */
+async function usFullSymbol(sym) {
+  const t = await getQuoteText('/api/quote?code=' + encodeURIComponent('us' + sym));
+  const m = t.match(/"([^"]*)"/);
+  const p = m ? m[1].split('~') : [];
+  const full = String(p[2] || '').trim().toUpperCase();
+  return /^[A-Z.\-]+\.[A-Z]{1,3}$/.test(full) ? full : null;
+}
+async function fetchUsKlinesTx(code, count = 250) {
+  const sym = String(code).toUpperCase().replace(/\s+/g, '');
+  const tries = [];
+  let full = null;
+  try { full = await usFullSymbol(sym); } catch (e) { /* 报价拿不到也不影响下面按常见后缀试 */ }
+  if (full) tries.push('us' + full);
+  // .OQ 纳斯达克 / .N 纽交所 / .P NYSE Arca（SPY 等 ETF）/ .A 美交所
+  ['.OQ', '.N', '.P', '.A'].forEach(sfx => { if (!full || full !== sym + sfx) tries.push('us' + sym + sfx); });
+  for (const s of tries) {
+    try {
+      const r = await fetchRaw('/api/usidxkline?param=' + encodeURIComponent(s + ',day,,,' + count + ',qfq'));
+      const node = JSON.parse(r.text).data[s];
+      const arr = node && (node.qfqday || node.day);
+      // 稀疏返回（首日+今日）只有 2–3 行，必须拒绝，否则技术指标全是垃圾
+      if (Array.isArray(arr) && arr.length >= 20) {
+        const out = arr.map(x => ({ date: x[0], close: parseFloat(x[2]), vol: parseFloat(x[5]) }))
+          .filter(x => x.date && isFinite(x.close) && x.close > 0);
+        if (out.length >= 20) return out;
+      }
+    } catch (e) { /* 试下一个后缀 */ }
+  }
+  throw new Error('美股日K获取失败（腾讯 newfqkline 各后缀均无完整数据）');
+}
+
 // 美股日K（东财 push2his，经 /api/uskline 代理，query 整段透传）。
 // secid 市场前缀：105 纳斯达克 / 106 纽交所 / 107 美交所（SPY 等 NYSE Arca ETF 在 107），逐个试到有数据。
 // fields2=f51,f53 → 每行 "日期,收盘"；fqt=1 前复权，klt=101 日K。
 async function fetchUsKlinesEM(code, count = 160) {
+  // 先走腾讯带后缀（push2his 已被封，但保留其逻辑以备恢复）
+  try { return await fetchUsKlinesTx(code, count); } catch (e) { /* 落到东财 */ }
   const sym = String(code).toUpperCase().replace(/\s+/g, '');
   const endD = new Date();
   const begD = new Date(endD.getTime() - Math.ceil(count * 2.2) * 864e5);
@@ -260,6 +299,8 @@ async function fetchUsKlinesEM(code, count = 160) {
    ------------------------------------------------------------------------- */
 async function fetchTechKlines(code, count = 250) {
   if (isUsCode(code)) {
+    // 腾讯带后缀为主源（含成交量），东财 push2his 已被封、仅作兜底
+    try { return await fetchUsKlinesTx(code, count); } catch (e) { /* 落到东财 */ }
     const sym = String(code).toUpperCase().replace(/\s+/g, '');
     const end = todayStr().replace(/-/g, '');
     const d0 = new Date(todayStr() + 'T00:00:00'); d0.setDate(d0.getDate() - Math.ceil(count * 2.2));
@@ -724,7 +765,7 @@ async function fetchBenchSource(src, count) {
     return { series: out, raw: 'txus/' + src.sym + ' HTTP' + r.status + ' ' + out.length + '行 ' + macroClip(r.text) };
   }
   if (src.kind === 'usx') {
-    // 美股 ETF：复用已验证可用的 105/106/107 市场扫描（个股/ETF 路径，与国际指数 100.* 不同）
+    // 美股 ETF：优先腾讯带后缀（SPY→SPY.P / QQQ→QQQ.OQ），东财 push2his 已封仅作兜底
     try {
       const out = await fetchUsKlinesEM(src.sym, count);
       return { series: out, raw: 'usx/' + src.sym + ' ' + out.length + '行' };
