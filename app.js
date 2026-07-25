@@ -4544,18 +4544,46 @@ VIEWS.thesis = function (app) {
   const fx = currentFx();
   const total = portfolioTotal();
   const theses = STATE.theses = STATE.theses || {};
-  // 候选标的：股票类资产（决策卡是给「主动选择的标的」用的，宽基/理财不需要）
-  const cands = (STATE.assets || []).filter(a => a.category === 'A股股票' || a.category === '美股股票' || (a.category === '基金' && /主题|行业|科技|医药|军工|消费|芯片|新能源/.test(a.name || '')));
+  // 候选标的 = 持仓里的股票类资产 ＋ 只在观察名单里（尚未买入）的决策卡标的。
+  // 观察标的没有对应资产，用「类资产对象」参与后续所有计算（分层、状态、相对强弱…），
+  // 现价取上次拉 K 线时缓存的 watchPx，不污染 STATE.assets（不会计入总资产/再平衡）。
+  const heldCands = (STATE.assets || []).filter(a => a.category === 'A股股票' || a.category === '美股股票' || (a.category === '基金' && /主题|行业|科技|医药|军工|消费|芯片|新能源/.test(a.name || '')));
+  const watchOnly = Object.keys(theses)
+    .filter(k => theses[k].watch && !heldCands.some(a => thesisKeyOf(a) === k))
+    .map(k => {
+      const t = theses[k];
+      return { id: 'watch:' + k, name: t.name || k, code: t.code || '', watch: true,
+        category: isUsCode(t.code || '') ? '美股股票' : 'A股股票',
+        currency: isUsCode(t.code || '') ? 'USD' : 'CNY',
+        lastPx: num(t.watchPx) > 0 ? num(t.watchPx) : 0 };
+    });
+  const cands = heldCands.concat(watchOnly);
+  const isWatchKey = (k) => !!(theses[k] && theses[k].watch) && !heldCands.some(a => thesisKeyOf(a) === k);
 
   // —— 待办：需要你处理的卡片（证伪触发 / 到期 / 触价）——
   const alerts = [];
   cands.forEach(a => {
-    const st = thesisStatus(a, num(a.lastPx));
+    const px = num(a.lastPx);
+    const st = thesisStatus(a, px);
     if (!st.has) return;
-    if (st.broken) alerts.push(['red', a, '证伪条件已触发', '你当初写下的"什么情况证明我错了"已经发生——按纪律这应该是卖出队首，不是重新找理由。']);
-    else if (st.expired) alerts.push(['amber', a, '逻辑窗口已过期', `建卡 ${st.t.date} + ${num(st.t.months)} 个月的兑现窗口已过（${thesisDueDate(st.t)}），逻辑未兑现＝资金在付机会成本，考虑时间止损。`]);
-    if (st.target) alerts.push(['green', a, '已触及目标价', `现价 ${num(a.lastPx)} ≥ 目标价 ${num(st.t.target)}——记一笔「兑现」到复盘校准，并决定是止盈还是上调目标（上调需要新证据）。`]);
-    if (st.stop) alerts.push(['red', a, '已触及止损价', `现价 ${num(a.lastPx)} ≤ 止损价 ${num(st.t.stop)}——止损是买入时就定好的，执行它。`]);
+    const watch = !!a.watch;
+    // 证伪与到期对「观察中」同样成立——买之前逻辑就被证伪，是最省钱的一种发现
+    if (st.broken) alerts.push(['red', a, '证伪条件已触发',
+      watch ? '还没买就已经触发了你写下的证伪条件——这张卡的价值已经兑现了：省下一次错误的买入。'
+            : '你当初写下的"什么情况证明我错了"已经发生——按纪律这应该是卖出队首，不是重新找理由。']);
+    else if (st.expired) alerts.push(['amber', a, '逻辑窗口已过期',
+      watch ? `观察窗口（${st.t.date} + ${num(st.t.months)} 个月，至 ${thesisDueDate(st.t)}）已过仍未进场——要么现在给出新的进场理由，要么把它从观察名单里删掉。`
+            : `建卡 ${st.t.date} + ${num(st.t.months)} 个月的兑现窗口已过（${thesisDueDate(st.t)}），逻辑未兑现＝资金在付机会成本，考虑时间止损。`]);
+    if (watch) {
+      // 观察标的没有持仓，目标价/止损价无意义；真正该提醒的是「跌到你计划的买入位了」
+      if (num(st.t.entry) > 0 && px > 0 && px <= num(st.t.entry)) {
+        alerts.push(['green', a, '已到计划买入价',
+          `现价 ${px} ≤ 计划买入价 ${num(st.t.entry)}。进场前最后过一遍：证伪条件还成立吗？三道闸算出的可买金额是多少？`]);
+      }
+      return;
+    }
+    if (st.target) alerts.push(['green', a, '已触及目标价', `现价 ${px} ≥ 目标价 ${num(st.t.target)}——记一笔「兑现」到复盘校准，并决定是止盈还是上调目标（上调需要新证据）。`]);
+    if (st.stop) alerts.push(['red', a, '已触及止损价', `现价 ${px} ≤ 止损价 ${num(st.t.stop)}——止损是买入时就定好的，执行它。`]);
   });
   if (alerts.length) {
     const aCard = el(`<div class="card"><h3>${icon('warn')} 需要处理（${alerts.length}）</h3></div>`);
@@ -4596,9 +4624,14 @@ VIEWS.thesis = function (app) {
     <p class="hint">空头论证是<strong>必填</strong>——写不出反方理由，说明你还没想清楚就要下注。证伪条件请写<strong>可观测的客观事件</strong>（如"Q3 毛利率跌破 30%""金价跌破 3000 且持续一个月"），而不是"跌了很多"。</p>
     <div class="grid grid-2">
       <div class="field"><label>标的</label><select id="th-pick">
-        <option value="">— 选择持仓 —</option>
-        ${cands.map(a => `<option value="${escapeHtml(thesisKeyOf(a))}">${escapeHtml(a.name)}${a.code ? '（' + escapeHtml(a.code) + '）' : ''}${theses[thesisKeyOf(a)] ? ' ✓已有卡' : ''}</option>`).join('')}
-      </select></div>
+        <option value="">— 选择持仓 / 观察标的 —</option>
+        ${cands.map(a => `<option value="${escapeHtml(thesisKeyOf(a))}">${a.watch ? '👁 ' : ''}${escapeHtml(a.name)}${a.code ? '（' + escapeHtml(a.code) + '）' : ''}${a.watch ? '·观察' : ''}${theses[thesisKeyOf(a)] ? ' ✓已有卡' : ''}</option>`).join('')}
+      </select>
+      <div class="row" style="gap:6px;margin-top:6px">
+        <input id="th-watch-code" placeholder="加观察标的：A股代码如 601899 / 美股如 NVDA" style="flex:1"/>
+        <button class="btn secondary small" id="th-watch-add" style="flex:0 0 auto">${icon('plus')} 校验并加入</button>
+      </div>
+      <p class="inline-note" id="th-watch-note">还没买入、只在观察的股票也能建卡——这正是决策卡的用法：<strong>先写下逻辑与证伪条件，再决定买不买</strong>。观察标的不计入总资产与再平衡。</p></div>
       <div class="field"><label>信心水平</label><select id="th-conf"><option>中</option><option>高</option><option>低</option></select></div>
     </div>
     <div class="field"><label>看多逻辑（一句话说清你为什么买）<span class="req">*</span></label><input id="th-bull" placeholder="如：金铜双引擎+锂2026放量，矿业股利润对金价有杠杆"/></div>
@@ -4707,6 +4740,10 @@ VIEWS.thesis = function (app) {
       // 技术面不可算不能中断后三维：抛出交给 catch，流程继续
       if (!t.ok) throw new Error(t.err);
       lastData.tech = t; lastData.code = code; lastData.name = (a && a.name) || '';
+      // 观察标的没有资产可刷价：把刚拉到的最新收盘缓存进卡，卡片与状态判定才有现价可用
+      if (a && a.watch && theses[k] && num(t.px) > 0) {
+        theses[k].watchPx = t.px; theses[k].watchPxDate = t.date || todayStr(); saveState();
+      }
       const sc = scoreBox.querySelector('[data-sc="tech"]');
       if (sc) sc.value = t.score;
       // 入场价空着 → 优先补【成本价】；实在没有成本数据才用最新收盘价占位并明确标注
@@ -4854,17 +4891,30 @@ VIEWS.thesis = function (app) {
     if (!t) {
       $f('#th-tech-out').innerHTML = '';
     ['#th-bull', '#th-bear', '#th-fals', '#th-target', '#th-stop'].forEach(s => { $f(s).value = ''; });
-      // 入场价取【成本价】而非现价：现价会让浮动盈亏恒为 0、三道闸的止损幅度也算错
-      const cp = costPriceOf(a);
-      $f('#th-entry').value = cp.price != null ? cp.price : '';
+      // 已持仓 → 入场价取【成本价】（现价会让浮动盈亏恒为 0、止损幅度也算错）；
+      // 观察标的（未买入）→ 没有成本，入场价即【计划买入价】，用现价起步再手改
       const en = $f('#th-entry-note');
-      if (en) en.innerHTML = cp.price != null
-        ? `已带出成本价 <strong>${cp.price}</strong>（${escapeHtml(cp.src)}），可手改为你的实际买入价`
-        : (a && num(a.lastPx) > 0 ? `<span style="color:var(--amber-ink)">该标的没有成本数据（份额/浮盈亏为空），请手填你的实际买入价；现价 ${num(a.lastPx)} 仅供参考</span>` : '');
+      if (a && a.watch) {
+        $f('#th-entry').value = num(a.lastPx) > 0 ? num(a.lastPx) : '';
+        if (en) en.innerHTML = num(a.lastPx) > 0
+          ? `观察标的尚未买入，此处是<strong>计划买入价</strong>（已用现价 ${num(a.lastPx)} 起步，请改成你打算的进场位）`
+          : '观察标的：请填你计划的买入价';
+      } else {
+        const cp = costPriceOf(a);
+        $f('#th-entry').value = cp.price != null ? cp.price : '';
+        if (en) en.innerHTML = cp.price != null
+          ? `已带出成本价 <strong>${cp.price}</strong>（${escapeHtml(cp.src)}），可手改为你的实际买入价`
+          : (a && num(a.lastPx) > 0 ? `<span style="color:var(--amber-ink)">该标的没有成本数据（份额/浮盈亏为空），请手填你的实际买入价；现价 ${num(a.lastPx)} 仅供参考</span>` : '');
+      }
       $f('#th-months').value = 12; $f('#th-date').value = todayStr(); $f('#th-conf').value = '中';
       scoreBox.querySelectorAll('[data-sc]').forEach(i => { i.value = ''; });
       drawGates(); return;
     }
+    // 已有卡也要标明这一栏的语义（观察=计划买入价 / 持仓=成本价）
+    const en2 = $f('#th-entry-note');
+    if (en2) en2.innerHTML = (a && a.watch)
+      ? `观察标的尚未买入，此处是<strong>计划买入价</strong>${num(a.lastPx) > 0 ? '（现价 ' + num(a.lastPx) + '）' : ''}`
+      : '此处应为你的<strong>成本价</strong>（不是现价）';
     $f('#th-bull').value = t.bull || ''; $f('#th-bear').value = t.bear || '';
     $f('#th-fals').value = (t.falsify || []).map(f => f.t).join('\n');
     $f('#th-entry').value = t.entry != null ? t.entry : ''; $f('#th-target').value = t.target != null ? t.target : '';
@@ -4874,6 +4924,36 @@ VIEWS.thesis = function (app) {
     drawGates();
   }
   $f('#th-pick').onchange = e => loadThesis(e.target.value);
+
+  // 加观察标的：用真实行情校验代码（A股 5–6 位数字 / 美股字母代码），拿回名称与现价
+  $f('#th-watch-add').onclick = async () => {
+    const raw = $f('#th-watch-code').value.trim();
+    const note = $f('#th-watch-note'), btn = $f('#th-watch-add');
+    if (!raw) { note.innerHTML = '<span style="color:var(--amber-ink)">请先填代码</span>'; return; }
+    const code = isUsCode(raw) ? raw.toUpperCase() : raw;
+    if (theses[code]) { note.innerHTML = `<span style="color:var(--amber-ink)">「${escapeHtml(code)}」已有决策卡，直接在上面的下拉里选它即可</span>`; return; }
+    if (heldCands.some(a => thesisKeyOf(a) === code)) { note.innerHTML = `<span style="color:var(--amber-ink)">「${escapeHtml(code)}」已在你的持仓里，请直接在下拉里选</span>`; return; }
+    btn.disabled = true; const ob = btn.innerHTML; btn.innerHTML = icon('refresh', 'spin') + ' 校验中…';
+    note.textContent = '正在用真实行情校验代码…';
+    try {
+      const q = await fetchQuote(code);
+      if (!q || !(num(q.price) > 0)) throw new Error('未取到有效行情');
+      // 只写进决策卡（watch 标记），不进 STATE.assets：不计入总资产、不参与再平衡
+      logOp('新增观察标的：' + (q.name || code));
+      theses[code] = {
+        key: code, name: q.name || code, code, watch: true,
+        watchPx: +num(q.price).toFixed(4), watchPxDate: todayStr(),
+        bull: '', bear: '', falsify: [],
+        // 计划买入价先按现价起步（观察标的没有成本，这一栏的语义是「你打算在哪进场」）
+        entry: +num(q.price).toFixed(4), target: null, stop: null,
+        months: 12, scores: {}, conf: '中', date: todayStr(),
+      };
+      saveState(); render();
+    } catch (e) {
+      note.innerHTML = `<span style="color:var(--red-ink)">校验失败：${escapeHtml(e.message)}</span>`;
+      btn.disabled = false; btn.innerHTML = ob;
+    }
+  };
 
   $f('#th-save').onclick = () => {
     const k = $f('#th-pick').value;
@@ -4899,6 +4979,10 @@ VIEWS.thesis = function (app) {
       stop: num($f('#th-stop').value) || null, months: num($f('#th-months').value) || null,
       scores, conf: $f('#th-conf').value, date: $f('#th-date').value || todayStr(),
       aiBear: old && old.aiBear || null,
+      // 观察标记与缓存现价随卡保留：编辑后不会变回「已持仓」口径
+      watch: !!(a && a.watch) || !!(old && old.watch && !heldCands.some(x => thesisKeyOf(x) === k)),
+      watchPx: (old && old.watchPx) || (a && a.watch ? num(a.lastPx) || null : null),
+      watchPxDate: (old && old.watchPxDate) || (a && a.watch ? todayStr() : null),
     };
     saveState(); render();
   };
@@ -5017,18 +5101,22 @@ VIEWS.thesis = function (app) {
   const cardState = (k) => {
     const t = theses[k];
     const a = cands.find(x => thesisKeyOf(x) === k);
-    const px = num(a && a.lastPx);
+    const watch = isWatchKey(k);
+    const px = num(a && a.lastPx) || num(t.watchPx);
     const st = thesisStatus(a || { code: t.code, name: t.name }, px);
     const hits = (t.falsify || []).filter(f => f && f.hit).length;
     const badges = [];
+    if (watch) badges.push('<span class="pill">👁 观察中·未买入</span>');
     if (st.broken) badges.push('<span class="pill red">证伪已触发</span>');
     if (st.expired) badges.push('<span class="pill amber">窗口过期</span>');
     if (st.target) badges.push('<span class="pill green">达目标价</span>');
     if (st.stop) badges.push('<span class="pill red">破止损价</span>');
-    // 浮盈亏（按入场价与现价）——决策卡最该被看见的一个数
+    // 已持仓：浮动盈亏（现价 vs 成本）；观察中：现价距计划买入价还有多远（负=已跌破计划价，更划算）
     let pnlPct = null;
     if (num(t.entry) > 0 && px > 0) pnlPct = (px - num(t.entry)) / num(t.entry) * 100;
-    return { t, a, px, st, hits, badges, pnlPct, tone: st.broken || st.stop ? 'broken' : (st.expired ? 'warn' : '') };
+    return { t, a, px, st, hits, badges, pnlPct, watch,
+      pnlLabel: watch ? '距计划买入价' : '浮动',
+      tone: st.broken || st.stop ? 'broken' : (st.expired ? 'warn' : '') };
   };
 
   function drawThesisCards() {
@@ -5042,8 +5130,9 @@ VIEWS.thesis = function (app) {
       const sc = t.scores || {};
       const scChips = Object.keys(SCORE_ANCHORS).filter(x => sc[x] != null)
         .map(x => `<span class="pill gray">${SCORE_ANCHORS[x][0]} ${sc[x]}</span>`).join(' ');
+      // 观察中的卡：绿=已跌破计划买入价(更划算)，红=已涨过计划价(追高)，与持仓的盈亏色义相反，故加标签
       const pnlTxt = c.pnlPct == null ? '' :
-        `<span style="color:${c.pnlPct >= 0 ? 'var(--green-ink)' : 'var(--red-ink)'};font-weight:600">${c.pnlPct >= 0 ? '+' : ''}${c.pnlPct.toFixed(1)}%</span>`;
+        `<span title="${c.pnlLabel}" style="color:${(c.watch ? -c.pnlPct : c.pnlPct) >= 0 ? 'var(--green-ink)' : 'var(--red-ink)'};font-weight:600">${c.watch ? c.pnlLabel + ' ' : ''}${c.pnlPct >= 0 ? '+' : ''}${c.pnlPct.toFixed(1)}%</span>`;
       listCard.appendChild(el(`<div class="thesis-card ${c.tone}" data-tk="${escapeHtml(k)}">
         <div class="row" style="gap:8px;align-items:baseline;flex-wrap:wrap">
           <strong style="font-size:15px">${escapeHtml(t.name || k)}</strong>
@@ -5055,7 +5144,7 @@ VIEWS.thesis = function (app) {
         <div class="clamp1" style="font-size:13px;margin-top:5px"><strong style="color:var(--green-ink)">多</strong> ${escapeHtml(t.bull || '')}</div>
         <div class="clamp1" style="font-size:13px"><strong style="color:var(--red-ink)">空</strong> ${escapeHtml(t.bear || '')}</div>
         <div class="inline-note" style="margin-top:6px">
-          入场 ${t.entry != null ? t.entry : '—'} · 目标 ${t.target != null ? t.target : '—'} · 止损 ${t.stop != null ? t.stop : '—'}${c.px > 0 ? ' · 现价 ' + c.px : ''}
+          ${c.watch ? '计划入场' : '入场'} ${t.entry != null ? t.entry : '—'} · 目标 ${t.target != null ? t.target : '—'} · 止损 ${t.stop != null ? t.stop : '—'}${c.px > 0 ? ' · 现价 ' + c.px : ''}
           · 窗口至 ${thesisDueDate(t) || '—'}
           · 证伪 <strong style="color:${c.hits ? 'var(--red-ink)' : 'inherit'}">${c.hits}/${(t.falsify || []).length}</strong>
           ${scChips ? '<br>' + scChips : ''}
@@ -5075,7 +5164,7 @@ VIEWS.thesis = function (app) {
     const body = `
       <div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:8px">
         <span class="pill">信心 ${escapeHtml(t.conf || '中')}</span>${c.badges.join(' ')}
-        ${c.pnlPct != null ? `<span class="pill ${c.pnlPct >= 0 ? 'green' : 'red'}">浮动 ${c.pnlPct >= 0 ? '+' : ''}${c.pnlPct.toFixed(1)}%</span>` : ''}
+        ${c.pnlPct != null ? `<span class="pill ${(c.watch ? -c.pnlPct : c.pnlPct) >= 0 ? 'green' : 'red'}">${c.pnlLabel} ${c.pnlPct >= 0 ? '+' : ''}${c.pnlPct.toFixed(1)}%</span>` : ''}
       </div>
       <div class="field"><label>看多逻辑</label><textarea id="tm-bull" rows="2">${escapeHtml(t.bull || '')}</textarea></div>
       <div class="field"><label>最强反方论证</label><textarea id="tm-bear" rows="2">${escapeHtml(t.bear || '')}</textarea></div>

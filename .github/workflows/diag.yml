@@ -120,6 +120,25 @@ jobs:
             probe "dc 行业资金流 RPT_BKZJL" "/api/emmacro?reportName=RPT_BKZJL_ZJLRQS&columns=ALL&pageSize=2&source=WEB&client=WEB" 300
             probe "dc 板块资金 RPT_DFZJL" "/api/emmacro?reportName=RPT_DFZJL_HYZJL&columns=ALL&pageSize=2&source=WEB&client=WEB" 300
 
+            echo "########## 8h. 【美股专项】决策卡的美股数据全断，逐个找可用源"
+            echo "--- 8h-1 腾讯 newfqkline 各种参数形态（看能否拿到完整日K而非稀疏两行）"
+            for PRM in "usNVDA,day,,,60,qfq" "usNVDA.OQ,day,,,60,qfq" "usNVDA,day,,,60," "usNVDA,week,,,60,qfq" "usAAPL,day,2025-01-01,2026-07-25,60,qfq"; do
+              RESP=$(curl -s -m 15 -u "$AUTH" "http://127.0.0.1/api/usidxkline?param=$(printf %s "$PRM" | sed 's/,/%2C/g')" 2>/dev/null)
+              ROWS=$(printf '%s' "$RESP" | grep -o '\["20[0-9][0-9]-' | wc -l)
+              echo "    $PRM → 日期行数=$ROWS  头部：$(printf '%s' "$RESP" | head -c 150)"
+            done
+            echo ""
+            echo "--- 8h-2 新浪美股日K（stock.finance.sina.com.cn，是否也被封）"
+            curl -s -m 15 -A "Mozilla/5.0" -e "https://finance.sina.com.cn/" \
+              "https://stock.finance.sina.com.cn/usstock/api/jsonp.php/x/US_MinKService.getDailyK?symbol=NVDA&___qn=3" 2>&1 | head -c 300; echo ""
+            echo ""
+            echo "--- 8h-3 东财 datacenter 是否有美股财务/行情报表（push2 已死，看数据中心）"
+            probe "dc 美股F10 RPT_USF10_FN_MAININDICATOR" "/api/emmacro?reportName=RPT_USF10_FN_MAININDICATOR&columns=ALL&filter=%28SECUCODE%3D%22NVDA.O%22%29&pageSize=1&source=SECURITIES&client=PC" 300
+            probe "dc 美股行情 RPT_USSTOCK_QUOTE" "/api/emmacro?reportName=RPT_USSTOCK_QUOTE&columns=ALL&pageSize=1&source=WEB&client=WEB" 250
+            echo "--- 8h-4 腾讯美股实时报价（已知可用，作对照）"
+            curl -s -m 15 -u "$AUTH" "http://127.0.0.1/api/quote?code=usNVDA" 2>/dev/null | head -c 200; echo ""
+            echo ""
+
             echo "########## 9. nginx 错误日志（尾部 40 行）"
             sudo tail -n 40 /var/log/nginx/error.log 2>/dev/null || tail -n 40 /var/log/nginx/error.log 2>/dev/null || echo "(读不到 error.log)"
             echo ""
