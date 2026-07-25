@@ -261,9 +261,12 @@ const BENCHMARKS = [
   { key: 'sh',     label: '上证指数',   color: '#d97706', sources: [{ kind: 'tx', sym: 'sh000001' }, { kind: 'em', secid: '1.000001' }] },
   { key: 'csi500', label: '中证500',   color: '#0891b2', sources: [{ kind: 'tx', sym: 'sh000905' }, { kind: 'em', secid: '1.000905' }] },
   { key: 'cyb',    label: '创业板指',   color: '#7c3aed', sources: [{ kind: 'tx', sym: 'sz399006' }, { kind: 'em', secid: '0.399006' }] },
-  { key: 'hsi',    label: '恒生指数',   color: '#059669', sources: [{ kind: 'em', secid: '100.HSI' }, { kind: 'tx', sym: 'hkHSI' }] },
-  { key: 'spx',    label: '标普500',   color: '#2563eb', sources: [{ kind: 'em', secid: '100.SPX' }, { kind: 'em', secid: '100.SPX', fqt: 1 }, { kind: 'em', secid: '100.GSPC' }] },
-  { key: 'ndx',    label: '纳斯达克100', color: '#db2777', sources: [{ kind: 'em', secid: '100.NDX' }, { kind: 'em', secid: '100.NDX', fqt: 1 }] },
+  // 国际指数（100.* 前缀）在东财 kline 路径上取不到（真机确认失败）；改用跟踪同一指数的 ETF，
+  // 走 105/106/107 前缀——这正是相关性热力图已验证可用的路径。ETF 含分红再投（全收益口径），
+  // 与你自己的 TWR（含分红利息）比更公平：纯价格指数会系统性低估基准约 1.3%/年。
+  { key: 'hsi',    label: '恒生指数',   color: '#059669', sources: [{ kind: 'em', secid: '100.HSI' }, { kind: 'tx', sym: 'hkHSI' }, { kind: 'tx', sym: 'sz159920', via: '恒生ETF' }] },
+  { key: 'spx',    label: '标普500',   color: '#2563eb', sources: [{ kind: 'em', secid: '100.SPX' }, { kind: 'em', secid: '100.SPX', fqt: 1 }, { kind: 'usx', sym: 'SPY', via: 'SPY' }, { kind: 'usx', sym: 'IVV', via: 'IVV' }] },
+  { key: 'ndx',    label: '纳斯达克100', color: '#db2777', sources: [{ kind: 'em', secid: '100.NDX' }, { kind: 'usx', sym: 'QQQ', via: 'QQQ' }, { kind: 'usx', sym: 'QQQM', via: 'QQQM' }] },
   { key: 'gold',   label: '黄金(ETF)',  color: '#ca8a04', sources: [{ kind: 'tx', sym: 'sh518880' }, { kind: 'em', secid: '1.518880' }] },
 ];
 const BENCH_BY_KEY = {};
@@ -294,22 +297,32 @@ async function fetchBenchSource(src, count) {
     } catch (e) {}
     return { series: out, raw: 'em/' + src.secid + '(fqt=' + (src.fqt != null ? src.fqt : 0) + ') HTTP' + r.status + ' ' + out.length + '行 ' + macroClip(r.text) };
   }
+  if (src.kind === 'usx') {
+    // 美股 ETF：复用已验证可用的 105/106/107 市场扫描（个股/ETF 路径，与国际指数 100.* 不同）
+    try {
+      const out = await fetchUsKlinesEM(src.sym, count);
+      return { series: out, raw: 'usx/' + src.sym + ' ' + out.length + '行' };
+    } catch (e) {
+      return { series: [], raw: 'usx/' + src.sym + ' 失败:' + macroClip(e.message) };
+    }
+  }
   return { series: [], raw: '未知源' };
 }
-// 返回 {series, diag:[原始返回]}；series 为空表示全部候选源都失败
+// 返回 {series, diag:[原始返回], via}；series 为空表示全部候选源都失败。
+// via 非空表示用的是替代标的（如 SPY 代表标普500），会在图例上如实标注，不冒充原指数。
 async function fetchBenchmarkSeries(key, count) {
   count = count || 400;
   const b = BENCH_BY_KEY[key];
-  if (!b) return { series: [], diag: ['未知基准 ' + key] };
+  if (!b) return { series: [], diag: ['未知基准 ' + key], via: '' };
   const diag = [];
   for (const src of b.sources) {
     let res;
     try { res = await fetchBenchSource(src, count); }
     catch (e) { diag.push((src.sym || src.secid) + ' 异常:' + macroClip(e.message)); continue; }
     diag.push(res.raw);
-    if (res.series.length >= 5) return { series: res.series, diag };   // 至少5个交易日才算有效
+    if (res.series.length >= 5) return { series: res.series, diag, via: src.via || '' };   // 至少5个交易日才算有效
   }
-  return { series: [], diag };
+  return { series: [], diag, via: '' };
 }
 // 组合自身的 TWR 净值指数（首个快照 = 100）：剔除出入金，与基准对比才公平
 function twrIndexSeries(snaps) {
@@ -4802,7 +4815,7 @@ VIEWS.trends = function (app) {
         try {
           const r = await fetchBenchmarkSeries(key);
           benchDiag[key] = r.diag;
-          benchLoaded[key] = r.series.length ? { label: b.label, color: b.color, series: r.series } : null;
+          benchLoaded[key] = r.series.length ? { label: b.label + (r.via ? '(' + r.via + ')' : ''), color: b.color, series: r.series, via: r.via } : null;
         } catch (e) { benchDiag[key] = ['异常:' + e.message]; benchLoaded[key] = null; }
       }
     }
@@ -4816,7 +4829,7 @@ VIEWS.trends = function (app) {
     try {
       const r = await fetchBenchmarkSeries(k);
       benchDiag[k] = r.diag;
-      benchLoaded[k] = r.series.length ? { label: b.label, color: b.color, series: r.series } : null;
+      benchLoaded[k] = r.series.length ? { label: b.label + (r.via ? '(' + r.via + ')' : ''), color: b.color, series: r.series, via: r.via } : null;
     } catch (e) { benchDiag[k] = ['异常:' + e.message]; benchLoaded[k] = null; }
     drawBenchChips(); redraw();
   });
@@ -4962,7 +4975,8 @@ VIEWS.trends = function (app) {
           const bRet = r.points[r.points.length - 1].value - 100, ex = mRet - bRet;
           return `<span style="color:${r.color}">━</span> ${escapeHtml(r.name)} ${bRet >= 0 ? '+' : ''}${fmtPct(bRet, 2)}` +
             `<span style="color:${ex >= 0 ? 'var(--green-ink)' : 'var(--red-ink)'}">（超额 ${ex >= 0 ? '+' : ''}${fmtPct(ex, 2)}）</span>`;
-        }).join('　') + '　<span style="color:var(--muted)">起点=100</span>';
+        }).join('　') + '　<span style="color:var(--muted)">起点=100</span>'
+        + (refs.some(r => /\(/.test(r.name)) ? '<br><span style="color:var(--muted);font-size:11px">带括号的基准用跟踪 ETF 代表该指数（含分红再投的全收益口径，与你含分红利息的 TWR 比更公平；纯价格指数会低估基准约 1.3%/年）。</span>' : '');
       box.appendChild(buildLineChart(mine, { extra: refs, tooltip: (i) => trendTip(i, mine, gran, true, refs) }));
       return;
     }
