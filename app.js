@@ -530,9 +530,11 @@ const BENCHMARKS = [
   // 国际指数（100.* 前缀）在东财 kline 路径上取不到（真机确认失败）；改用跟踪同一指数的 ETF，
   // 走 105/106/107 前缀——这正是相关性热力图已验证可用的路径。ETF 含分红再投（全收益口径），
   // 与你自己的 TWR（含分红利息）比更公平：纯价格指数会系统性低估基准约 1.3%/年。
+  // 首选 txus（腾讯 newfqkline 国际指数，usINX/usNDX 实测有完整日K）：东财 push2his 近期对
+  // 服务器出口 IP 封锁且整体不稳定（000 空响应），usx 的 105/106/107 路径同样走东财会连带失败。
   { key: 'hsi',    label: '恒生指数',   color: '#059669', sources: [{ kind: 'em', secid: '100.HSI' }, { kind: 'tx', sym: 'hkHSI' }, { kind: 'tx', sym: 'sz159920', via: '恒生ETF' }] },
-  { key: 'spx',    label: '标普500',   color: '#2563eb', sources: [{ kind: 'em', secid: '100.SPX' }, { kind: 'em', secid: '100.SPX', fqt: 1 }, { kind: 'usx', sym: 'SPY', via: 'SPY' }, { kind: 'usx', sym: 'IVV', via: 'IVV' }] },
-  { key: 'ndx',    label: '纳斯达克100', color: '#db2777', sources: [{ kind: 'em', secid: '100.NDX' }, { kind: 'usx', sym: 'QQQ', via: 'QQQ' }, { kind: 'usx', sym: 'QQQM', via: 'QQQM' }] },
+  { key: 'spx',    label: '标普500',   color: '#2563eb', sources: [{ kind: 'txus', sym: 'usINX' }, { kind: 'em', secid: '100.SPX' }, { kind: 'em', secid: '100.SPX', fqt: 1 }, { kind: 'usx', sym: 'SPY', via: 'SPY' }, { kind: 'usx', sym: 'IVV', via: 'IVV' }] },
+  { key: 'ndx',    label: '纳斯达克100', color: '#db2777', sources: [{ kind: 'txus', sym: 'usNDX' }, { kind: 'em', secid: '100.NDX' }, { kind: 'usx', sym: 'QQQ', via: 'QQQ' }, { kind: 'usx', sym: 'QQQM', via: 'QQQM' }] },
   { key: 'gold',   label: '黄金(ETF)',  color: '#ca8a04', sources: [{ kind: 'tx', sym: 'sh518880' }, { kind: 'em', secid: '1.518880' }] },
 ];
 const BENCH_BY_KEY = {};
@@ -562,6 +564,18 @@ async function fetchBenchSource(src, count) {
         .filter(x => x.date && isFinite(x.close) && x.close > 0);
     } catch (e) {}
     return { series: out, raw: 'em/' + src.secid + '(fqt=' + (src.fqt != null ? src.fqt : 0) + ') HTTP' + r.status + ' ' + out.length + '行 ' + macroClip(r.text) };
+  }
+  if (src.kind === 'txus') {
+    // 腾讯 newfqkline 美股**指数**日K（usINX 标普500 / usNDX 纳指100，经 /api/usidxkline）。
+    // 注意：此接口对美股个股返回稀疏数据，只适用于指数；东财 push2his 被封/不稳定时的主力源。
+    const r = await fetchRaw('/api/usidxkline?param=' + encodeURIComponent(src.sym + ',day,,,' + count + ',qfq'));
+    let out = [];
+    try {
+      const node = JSON.parse(r.text).data[src.sym];
+      const arr = node && (node.qfqday || node.day);
+      if (Array.isArray(arr)) out = arr.map(x => ({ date: x[0], close: parseFloat(x[2]) })).filter(x => x.date && isFinite(x.close) && x.close > 0);
+    } catch (e) {}
+    return { series: out, raw: 'txus/' + src.sym + ' HTTP' + r.status + ' ' + out.length + '行 ' + macroClip(r.text) };
   }
   if (src.kind === 'usx') {
     // 美股 ETF：复用已验证可用的 105/106/107 市场扫描（个股/ETF 路径，与国际指数 100.* 不同）
