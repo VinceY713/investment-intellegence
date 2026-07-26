@@ -5916,9 +5916,12 @@ VIEWS.trends = function (app) {
     const list = (STATE.cashflows || []).slice().sort((a, b) => b.date.localeCompare(a.date));
     const t = cfCard.querySelector('#cf-table');
     t.innerHTML = list.length
-      ? `<thead><tr><th>日期</th><th class="num">金额</th><th>备注</th><th class="num"></th></tr></thead><tbody>${list.map(c => `<tr>
+      ? `<thead><tr><th>日期</th><th class="num">金额</th><th>是否动总资产</th><th>备注</th><th class="num"></th></tr></thead><tbody>${list.map(c => `<tr>
           <td>${escapeHtml(c.date)}</td>
           <td class="num" style="color:${num(c.amount)>=0?'var(--green-ink)':'var(--red-ink)'}">${num(c.amount)>=0?'+':''}${fmtMoney(c.amount)}</td>
+          <td>${c.synced
+              ? `<span class="tag-chip">已同步 ${escapeHtml(c.syncTo || '资产')}</span>`
+              : '<span class="inline-note">仅算收益率</span>'}</td>
           <td>${escapeHtml(c.note || '')}</td>
           <td class="num"><button class="btn danger small" data-cfdel="${c.id}">${icon('trash')}</button></td>
         </tr>`).join('')}</tbody>`
@@ -5953,25 +5956,32 @@ VIEWS.trends = function (app) {
     if (!(isFinite(amount) && amount !== 0)) { alert('请填写非零金额（正=入金，负=出金）'); return; }
     const doSync = syncCb.checked;
     const target = syncSel.value;
+    const tgtAsset = target === '__pool__' ? null : (STATE.assets || []).find(a => a.id === target);
+    const tgtName = target === '__pool__' ? poolName('CNY') : (tgtAsset || {}).name || '所选资产';
     if (doSync) {
-      const tgtName = target === '__pool__' ? poolName('CNY')
-        : ((STATE.assets || []).find(a => a.id === target) || {}).name || '所选资产';
+      // 出金必须扣得动：余额不足时宁可拒绝，也不能截断到 0——那会让「流水记了 3424、总资产只少 1000」，
+      // 差额凭空消失，之后 TWR 会把这块当成亏损。
+      const avail = target === '__pool__' ? stockCashPoolBalance('CNY') : num((tgtAsset || {}).amount);
+      if (amount < 0 && -amount > avail + 0.005) {
+        alert(`「${tgtName}」当前只有 ${fmtMoney(avail)}，扣不出 ${fmtMoney(-amount)}。\n\n`
+          + `请改选余额足够的账户，或先在「投资组合」把钱归到正确的账户再登记；\n`
+          + `若这笔钱本就是从别处转出的，就选那个账户。（强行扣会让总资产少算 ${fmtMoney(-amount - avail)}）`);
+        return;
+      }
       if (!confirm(`登记出入金 ${fmtMoney(amount)}，并${amount >= 0 ? '增加' : '减少'}资产「${tgtName}」${fmtMoney(Math.abs(amount))}。\n\n`
         + `若这笔钱你已经在「投资组合」里改过金额了，请点取消——否则会重复计算。\n确认同步？`)) return;
     }
     logOp('登记出入金：' + date + ' ' + fmtMoney(amount) + (doSync ? '（同步资产）' : ''));
-    (STATE.cashflows = STATE.cashflows || []).push({ id: uid(), date, amount, note });
+    // synced/syncTo 只作留痕：流水表里标出来，一眼看得出这笔钱动没动总资产（不勾就只改收益率口径）
+    (STATE.cashflows = STATE.cashflows || []).push({ id: uid(), date, amount, note,
+      synced: !!doSync, syncTo: doSync ? tgtName : '' });
     if (doSync) {
       if (target === '__pool__') {
         settleToPool(amount, 'CNY', (amount >= 0 ? '入金' : '出金') + (note ? '·' + note : ''));
-      } else {
-        const a = (STATE.assets || []).find(x => x.id === target);
-        if (a) {
-          a.amount = Math.round((num(a.amount) + amount) * 100) / 100;
-          if (a.amount < 0) a.amount = 0;                    // 出金不超过该资产余额，避免记成负资产
-          a.cny = Math.round(assetCny(a, currentFx()));
-          if (!(num(a.amount) > 0)) a.shares = 0;            // 清零时同步清份额（与资产表单同口径）
-        }
+      } else if (tgtAsset) {
+        tgtAsset.amount = Math.max(0, Math.round((num(tgtAsset.amount) + amount) * 100) / 100);
+        tgtAsset.cny = Math.round(assetCny(tgtAsset, currentFx()));
+        if (!(num(tgtAsset.amount) > 0)) tgtAsset.shares = 0;   // 清零时同步清份额（与资产表单同口径）
       }
       recordDailySnapshot();       // 总资产变了 → 覆盖今日快照，趋势/TWR 才用到新值
     }
@@ -7021,12 +7031,18 @@ VIEWS.portfolio = function (app) {
         }
       }
     } else { STATE.assets.push(asset); }
-    // 理财/存款赎回结转：金额减少的差额提示一键入现金池（总资产守恒：理财↓＝现金↑）。
-    // 拒绝则视为钱已离开组合，提醒去「出入金登记」，否则趋势/归因会把它当亏损。
-    if (editId && (cat === '理财(QDII)' || cat === '定期存款') && oldAmount - amount > 1) {
+    // 赎回/卖出结转：金额减少的差额提示一键入现金池（总资产守恒：某类资产↓＝现金↑）。
+    // 覆盖「靠改金额来卖」的品类——场外基金、黄金、理财、定存（股票走「当日交易/减仓记账」，已自带入池）。
+    // 关键提醒：场外基金 T+1~T+3 才到账，但赎回确认当日资金就已锁定为你的现金（不再随净值波动），
+    // 所以【确认当天就该入池】，等实际到账无需再操作；否则这几天总资产凭空少一块、趋势里像是亏了。
+    const SELL_BY_AMOUNT = ['理财(QDII)', '定期存款', '基金', '黄金'];
+    if (editId && SELL_BY_AMOUNT.indexOf(cat) >= 0 && oldAmount - amount > 1) {
       const redeemed = oldAmount - amount;                  // 原币
-      if (confirm(`「${name}」金额减少了 ${fmtOrig(redeemed, cur)}（赎回/到期？）。\n「确定」= 自动把这笔钱计入「${poolName(cur)}」（总资产守恒）；\n「取消」= 不入池——若这笔钱已转出组合，请到「资产趋势 → 出入金登记」记一笔出金，否则趋势会把它当亏损。`)) {
-        settleToPool(redeemed, cur, name + ' 赎回');
+      const inTransit = (cat === '基金')
+        ? '\n\n场外基金 T+1~T+3 到账：赎回确认当日金额就已锁定（不再随净值波动），现在就该入池；周一钱到账时无需再操作。'
+        : '';
+      if (confirm(`「${name}」金额减少了 ${fmtOrig(redeemed, cur)}（赎回/卖出？）。\n「确定」= 自动把这笔钱计入「${poolName(cur)}」（总资产守恒，含在途未到账资金）；\n「取消」= 不入池——若这笔钱已转出组合，请到「资产趋势 → 出入金登记」记一笔出金，否则趋势会把它当亏损。${inTransit}`)) {
+        settleToPool(redeemed, cur, name + (cat === '基金' ? ' 赎回(在途)' : ' 赎回'));
       }
     }
     saveState(); render();
