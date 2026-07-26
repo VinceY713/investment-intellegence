@@ -5900,6 +5900,14 @@ VIEWS.trends = function (app) {
       <div class="field"><label>金额（+入金 / −出金）</label><input id="cf-amount" type="number" step="100" placeholder="如 50000 或 -20000"/></div>
       <div class="field"><label>备注（可选）</label><input id="cf-note" placeholder="如 工资加仓"/></div>
     </div>
+    <div class="field" style="margin-bottom:8px">
+      <label style="display:flex;align-items:center;gap:7px;cursor:pointer">
+        <input type="checkbox" id="cf-sync" style="width:auto"/>
+        <span>同时把这笔钱计入下面这个资产（钱真的进/出了账户就勾上）</span>
+      </label>
+      <select id="cf-sync-to" style="margin-top:7px;display:none"></select>
+      <p class="inline-note" id="cf-sync-note" style="margin-top:6px">出入金登记只修正<strong>收益率口径</strong>（TWR / 基准对比 / 收益归因），<strong>不会改总资产</strong>。
+        钱实际到账了就勾上同步，否则总资产会少算这笔——两边都记，账才是对的。</p></div>
     <div class="row"><button class="btn" id="cf-add" style="flex:0 0 auto">${icon('plus')} 登记</button></div>
     <div class="table-scroll" style="margin-top:12px"><table id="cf-table"></table></div>
   </div>`);
@@ -5922,14 +5930,51 @@ VIEWS.trends = function (app) {
       saveState(); await pushCloudNow(); render();
     });
   }
+  // 同步目标：人民币现金/理财类资产（出入金登记的金额口径是人民币，故只列 CNY 资产）
+  // ＋一个「新建/并入股票现金池」兜底选项，避免一个可用目标都没有。
+  const syncTargets = (STATE.assets || []).filter(a => a.currency !== 'USD'
+    && (/现金|理财|存款/.test(a.category || '') || /现金|活期|余额|零钱|货基/.test(a.name || '')));
+  const syncSel = cfCard.querySelector('#cf-sync-to');
+  syncSel.innerHTML = syncTargets.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name)}（当前 ${fmtMoney(num(a.amount))}）</option>`).join('')
+    + `<option value="__pool__">${escapeHtml(poolName('CNY'))}（自动现金池，没有则新建）</option>`;
+  const syncCb = cfCard.querySelector('#cf-sync');
+  syncCb.onchange = () => {
+    syncSel.style.display = syncCb.checked ? '' : 'none';
+    cfCard.querySelector('#cf-sync-note').innerHTML = syncCb.checked
+      ? '勾选后：登记的同时把金额加/减到上面这个资产，总资产与收益率口径一次对齐。'
+      : '出入金登记只修正<strong>收益率口径</strong>（TWR / 基准对比 / 收益归因），<strong>不会改总资产</strong>。钱实际到账了就勾上同步，否则总资产会少算这笔。';
+  };
+
   cfCard.querySelector('#cf-add').onclick = async () => {
     const date = cfCard.querySelector('#cf-date').value;
     const amount = num(cfCard.querySelector('#cf-amount').value);
     const note = cfCard.querySelector('#cf-note').value.trim();
     if (!date) { alert('请选择日期'); return; }
     if (!(isFinite(amount) && amount !== 0)) { alert('请填写非零金额（正=入金，负=出金）'); return; }
-    logOp('登记出入金：' + date + ' ' + fmtMoney(amount));
+    const doSync = syncCb.checked;
+    const target = syncSel.value;
+    if (doSync) {
+      const tgtName = target === '__pool__' ? poolName('CNY')
+        : ((STATE.assets || []).find(a => a.id === target) || {}).name || '所选资产';
+      if (!confirm(`登记出入金 ${fmtMoney(amount)}，并${amount >= 0 ? '增加' : '减少'}资产「${tgtName}」${fmtMoney(Math.abs(amount))}。\n\n`
+        + `若这笔钱你已经在「投资组合」里改过金额了，请点取消——否则会重复计算。\n确认同步？`)) return;
+    }
+    logOp('登记出入金：' + date + ' ' + fmtMoney(amount) + (doSync ? '（同步资产）' : ''));
     (STATE.cashflows = STATE.cashflows || []).push({ id: uid(), date, amount, note });
+    if (doSync) {
+      if (target === '__pool__') {
+        settleToPool(amount, 'CNY', (amount >= 0 ? '入金' : '出金') + (note ? '·' + note : ''));
+      } else {
+        const a = (STATE.assets || []).find(x => x.id === target);
+        if (a) {
+          a.amount = Math.round((num(a.amount) + amount) * 100) / 100;
+          if (a.amount < 0) a.amount = 0;                    // 出金不超过该资产余额，避免记成负资产
+          a.cny = Math.round(assetCny(a, currentFx()));
+          if (!(num(a.amount) > 0)) a.shares = 0;            // 清零时同步清份额（与资产表单同口径）
+        }
+      }
+      recordDailySnapshot();       // 总资产变了 → 覆盖今日快照，趋势/TWR 才用到新值
+    }
     saveState(); await pushCloudNow(); render();
   };
   drawCfTable();
