@@ -1103,6 +1103,58 @@ function settleToPool(deltaOrig, ccy = 'CNY', note = '') {
   if (note) p.note = note;
   return num(p.amount);
 }
+// 该币种下可以当「钱」接收赎回款的账户（活期/存款/理财/货基）。基金赎回回到的是银行活期，
+// 不是股票现金池——把选择权交给用户，只把上次选的记下来做默认值。
+function cashDestChoices(ccy) {
+  return (STATE.assets || []).filter(a => (a.currency || 'CNY') === (ccy || 'CNY')
+    && !a.autoPool
+    && (/现金|理财|存款/.test(a.category || '') || /现金|活期|余额|零钱|货基|存款/.test(a.name || '')));
+}
+// 资金去向选择弹窗。resolve：{mode:'asset',id} / {mode:'pool'} / {mode:'none'}（不入账）/ null（关闭）
+function pickCashDestination(o) {
+  return new Promise(resolve => {
+    const ccy = o.ccy || 'CNY';
+    const choices = cashDestChoices(ccy);
+    const remembered = ((STATE.redeemDest || {})[ccy]) || '';
+    const has = id => choices.some(a => a.id === id) || id === '__pool__';
+    const def = has(remembered) ? remembered : (choices[0] ? choices[0].id : '__pool__');
+    const opts = choices.map(a => `<option value="${escapeHtml(a.id)}"${a.id === def ? ' selected' : ''}>${escapeHtml(a.name)}（当前 ${fmtOrig(num(a.amount), ccy)}）</option>`).join('')
+      + `<option value="__pool__"${def === '__pool__' ? ' selected' : ''}>${escapeHtml(poolName(ccy))}（自动现金池，没有则新建）</option>`;
+    const ov = el(`<div data-modal style="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1000;display:flex;align-items:center;justify-content:center;padding:16px">
+      <div class="card" style="max-width:520px;width:100%;max-height:84vh;overflow:auto;margin:0">
+        <div class="card-head-row"><h3 style="margin:0">${o.title || '这笔钱去哪了？'}</h3></div>
+        <p class="hint" style="margin-top:4px">${o.subtitle || ''}</p>
+        <div class="field"><label>转入账户</label><select id="dst-sel">${opts}</select></div>
+        ${o.footnote ? `<p class="inline-note" style="margin-top:6px">${o.footnote}</p>` : ''}
+        <div class="row" style="margin-top:12px;flex-wrap:wrap">
+          <button class="btn" id="dst-ok" style="flex:0 0 auto">确认转入</button>
+          <button class="btn secondary" id="dst-none" style="flex:0 0 auto">钱已转出组合，不入账</button>
+          <button class="btn secondary" id="dst-cancel" style="flex:0 0 auto">取消</button>
+        </div>
+        <p class="inline-note" style="margin-top:8px">选「不入账」= 总资产会减少这一笔。若钱确实转出了组合，请再到「资产趋势 → 出入金登记」记一笔出金，否则收益率会把它当亏损。</p>
+      </div></div>`);
+    const done = v => { ov.remove(); resolve(v); };
+    ov.querySelector('#dst-ok').onclick = () => {
+      const v = ov.querySelector('#dst-sel').value;
+      STATE.redeemDest = Object.assign({}, STATE.redeemDest, { [ccy]: v });   // 记住选择，下次默认
+      done(v === '__pool__' ? { mode: 'pool' } : { mode: 'asset', id: v });
+    };
+    ov.querySelector('#dst-none').onclick = () => done({ mode: 'none' });
+    ov.querySelector('#dst-cancel').onclick = () => done(null);
+    ov.addEventListener('click', e => { if (e.target === ov) done(null); });
+    document.body.appendChild(ov);
+  });
+}
+// 把一笔现金按选择结果落账（原币）。返回落账去向名，未落账返回 null
+function creditCash(dest, amtOrig, ccy, note) {
+  if (!dest || dest.mode === 'none') return null;
+  if (dest.mode === 'pool') { settleToPool(amtOrig, ccy, note); return poolName(ccy); }
+  const a = (STATE.assets || []).find(x => x.id === dest.id);
+  if (!a) { settleToPool(amtOrig, ccy, note); return poolName(ccy); }
+  a.amount = Math.round((num(a.amount) + amtOrig) * 100) / 100;
+  a.cny = Math.round(assetCny(a, currentFx()));
+  return a.name;
+}
 // 持股数变动 → 现金结算预览（不落账）。规则：Δ股数×现价 < 0 = 卖出盈余计入现金池；
 // > 0 = 买入动用现金。按标的所属市场分币种：A股结人民币池，美股结美元池。
 function previewSharesSettlement(oldShares, newShares, price, code) {
@@ -5842,7 +5894,8 @@ VIEWS.trends = function (app) {
     <div id="trend-chart" style="margin-top:14px"></div>
     <div id="bench-legend" class="inline-note" style="margin-top:8px"></div>
     <div id="bench-diag"></div>
-    <p class="inline-note" style="margin-top:10px">切换「维度」可分别看总资产或某个大类/类别（如权益、基金、黄金）随时间的走势。<strong>鼠标移到折线上</strong>可查看任一日期的数值，及较昨日 / 较上月 / 较期初累计的变化——<strong>多选基准时提示框会逐条列出每个基准</strong>。基准对比在「日」粒度 +「总资产」维度下生效：组合按 TWR 指数化（剔除出入金），与各基准同起点归一（起点=100）。</p>
+    <p class="inline-note" style="margin-top:10px">切换「维度」可分别看总资产或某个大类/类别（如权益、基金、黄金）随时间的走势。<strong>鼠标移到折线上</strong>可查看任一日期的数值，及较昨日 / 较上月 / 较期初累计的变化——<strong>多选基准时提示框会逐条列出每个基准</strong>。基准对比在「日」粒度 +「总资产」维度下生效：组合按 TWR 指数化（剔除出入金），与各基准同起点归一（起点=100）。<br>
+      <strong>注意：这条是「总资产净值线」，不是收益线。</strong>入金会把它抬上去、出金会把它压下去——那是本金搬家，不是赚赔。有流水的那天，提示框会单列「其中入金/出金」与「剔除后净投资变化」；想看纯投资表现，勾一条基准切到 <strong>TWR 指数</strong>，或看上方的收益率(TWR)。</p>
   </div>`);
   app.appendChild(chartCard);
 
@@ -6094,12 +6147,12 @@ VIEWS.trends = function (app) {
     }
     legend.textContent = benchKeys.length ? '基准对比仅在「日」粒度 +「总资产」维度下显示。' : '';
     const pts = aggregate(gran, dim);
-    box.appendChild(buildLineChart(pts, { tooltip: (i) => trendTip(i, pts, gran) }));
+    box.appendChild(buildLineChart(pts, { tooltip: (i) => trendTip(i, pts, gran, false, null, dim) }));
   }
 
   // 悬停提示：当日数值 ＋ 较昨日（日粒度）/较上一期 ＋ 较上月（日粒度，30 天前最近点）＋ 较期初累计
   // refs：叠加的基准序列，每条按同一口径逐条列出（当日点位 / 较前一日 / 累计），便于横向对比
-  function trendTip(i, pts, gran, indexMode, refs) {
+  function trendTip(i, pts, gran, indexMode, refs, dimKey) {
     // 某序列在第 i 点的三项对比（返回 HTML 行数组）
     const cmpRows = (series, mode, prefix) => {
       const p = series[i];
@@ -6132,6 +6185,18 @@ VIEWS.trends = function (app) {
     html += `<div style="margin:2px 0 3px"><span style="color:var(--accent)">━</span> <strong>${list.length ? '组合(TWR) ' : ''}${fmtV(p.value)}</strong>${indexMode && !list.length ? '<span style="color:var(--muted);font-size:11px">（TWR指数·起点100）</span>' : ''}</div>`;
     const mineRows = cmpRows(pts, indexMode, '');
     html += mineRows.join('') || (list.length ? '' : '<div style="color:var(--muted)">首个数据点</div>');
+    // 出入金拆分：总资产线本来就该随入金上抬，但那不是「赚的」。把当区间的流水单列出来，
+    // 并给出剔除后的净投资变化，省得看到线往上翘就以为是收益。仅日粒度+总资产口径（流水按人民币总额登记）。
+    if (!indexMode && gran === 'day' && dimKey === 'total' && i > 0 && pts[i].date && pts[i - 1].date) {
+      const cf = cashflowBetween(pts[i - 1].date, pts[i].date);
+      if (Math.abs(cf) > 0.5) {
+        const net = (pts[i].value - pts[i - 1].value) - cf;
+        html += `<div style="margin-top:4px;border-top:1px dashed rgba(127,127,127,.35);padding-top:4px;font-size:12px">
+          <div style="color:var(--muted)">其中${cf >= 0 ? '入金' : '出金'} ${cf >= 0 ? '+' : ''}${fmtMoney(cf)}（本金搬家，不是收益）</div>
+          <div style="color:${net >= 0 ? 'var(--green-ink)' : 'var(--red-ink)'}">剔除后净投资变化 ${net >= 0 ? '+' : ''}${fmtMoney(net)}</div>
+        </div>`;
+      }
+    }
     // 各基准逐条
     list.forEach(r => {
       const rp = r.points[i];
@@ -6979,14 +7044,18 @@ VIEWS.portfolio = function (app) {
     <div class="grid grid-3">
       <div class="field"><label>累计已实现收益 ¥（赎回/卖出落袋，可选）</label><input id="af-rpnl" type="number" step="1" placeholder="如 326——历史赎回赚到手的部分"/></div>
     </div>
-    <button class="btn" id="af-add">${icon('plus')} 添加资产</button>
+    <div class="row" style="flex-wrap:wrap"><button class="btn" id="af-add" style="flex:0 0 auto">${icon('plus')} 添加资产</button>
+      <button class="btn secondary" id="af-fx" style="flex:0 0 auto">${icon('refresh')} 换汇（美元 ↔ 人民币）</button></div>
     <input type="hidden" id="af-edit"/>
-    <p class="inline-note" style="margin-top:10px">提示：股票的<strong>买卖请在「持仓」页改持股数</strong>——释放/占用的资金会自动结算到对应现金池（A股 → 股票现金池，美股 → 美股现金池），并同步回写这里的资产金额。</p>
+    <p class="inline-note" style="margin-top:10px">提示：股票的<strong>买卖请在「持仓」页改持股数</strong>——释放/占用的资金会自动结算到对应现金池（A股 → 股票现金池，美股 → 美股现金池），并同步回写这里的资产金额。<br>
+      <strong>基金/理财/存款/黄金的赎回</strong>：直接在这里把「金额」改小（清仓改成 0），保存时会问你钱转入哪个账户，选实际到账的活期/存款即可，总资产自动守恒。<br>
+      <strong>美元与人民币互换</strong>：点上面的「换汇」——那是账户之间搬钱，<em>不要</em>去出入金登记记一笔。</p>
   `));
   app.appendChild(mgmt);
   const $a = sel => mgmt.querySelector(sel);
+  $a('#af-fx').onclick = () => showFxExchangeModal();
 
-  $a('#af-add').onclick = () => {
+  $a('#af-add').onclick = async () => {
     const name = $a('#af-name').value.trim();
     if (!name) { alert('请填写名称'); return; }
     const cur = $a('#af-cur').value;
@@ -7039,11 +7108,16 @@ VIEWS.portfolio = function (app) {
     if (editId && SELL_BY_AMOUNT.indexOf(cat) >= 0 && oldAmount - amount > 1) {
       const redeemed = oldAmount - amount;                  // 原币
       const inTransit = (cat === '基金')
-        ? '\n\n场外基金 T+1~T+3 到账：赎回确认当日金额就已锁定（不再随净值波动），现在就该入池；周一钱到账时无需再操作。'
+        ? '<br><strong>场外基金 T+1~T+3 到账</strong>：赎回确认当日金额就已锁定（不再随净值波动），<strong>现在就该入账</strong>；钱真正到卡时无需再操作。'
         : '';
-      if (confirm(`「${name}」金额减少了 ${fmtOrig(redeemed, cur)}（赎回/卖出？）。\n「确定」= 自动把这笔钱计入「${poolName(cur)}」（总资产守恒，含在途未到账资金）；\n「取消」= 不入池——若这笔钱已转出组合，请到「资产趋势 → 出入金登记」记一笔出金，否则趋势会把它当亏损。${inTransit}`)) {
-        settleToPool(redeemed, cur, name + (cat === '基金' ? ' 赎回(在途)' : ' 赎回'));
-      }
+      const dest = await pickCashDestination({
+        ccy: cur,
+        title: '赎回款转入哪个账户？',
+        subtitle: `「${escapeHtml(name)}」金额减少了 <strong>${fmtOrig(redeemed, cur)}</strong>（赎回/卖出）。这笔钱要记到下面这个账户，总资产才守恒。`,
+        footnote: `基金/理财赎回一般回到<strong>银行活期或存款</strong>，不是股票现金池——按实际到账账户选。${inTransit}`,
+      });
+      creditCash(dest, redeemed, cur, name + (cat === '基金' ? ' 赎回(在途)' : ' 赎回'));
+      if (dest && dest.mode === 'none') recordDailySnapshot();   // 选了不入账＝总资产真减少，覆盖今日快照
     }
     saveState(); render();
   };
@@ -7224,6 +7298,84 @@ function showModal(titleHtml, bodyHtml) {
       <div>${bodyHtml}</div></div></div>`);
   ov.addEventListener('click', e => { if (e.target === ov || e.target.closest('[data-close]')) ov.remove(); });
   document.body.appendChild(ov);
+}
+// 换汇：美元现金 ↔ 人民币现金。本质是「一个账户减、另一个账户加」，与基金赎回同构，
+// 区别在于要按成交汇率折算，且成交价与系统估值汇率的差额是真实的汇兑损益（会体现在总资产上）。
+function showFxExchangeModal() {
+  const fx = currentFx();
+  const optsOf = ccy => cashDestChoices(ccy).map(a =>
+    `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name)}（${fmtOrig(num(a.amount), ccy)}）</option>`).join('')
+    + `<option value="__pool__">${escapeHtml(poolName(ccy))}（自动现金池）</option>`;
+  const body = `
+    <div class="field"><label>方向</label><select id="fx-dir">
+      <option value="u2c">美元 → 人民币（结汇）</option>
+      <option value="c2u">人民币 → 美元（购汇）</option></select></div>
+    <div class="grid grid-2">
+      <div class="field"><label>从（转出账户）</label><select id="fx-src"></select></div>
+      <div class="field"><label>到（转入账户）</label><select id="fx-dst"></select></div>
+    </div>
+    <div class="grid grid-2">
+      <div class="field"><label>转出金额（<span id="fx-srcccy">USD</span>）</label><input id="fx-amt" type="number" step="0.01" placeholder="如 5000"/></div>
+      <div class="field"><label>成交汇率（1 USD = ? CNY）</label><input id="fx-rate" type="number" step="0.0001" value="${(+fx).toFixed(4)}"/></div>
+    </div>
+    <div id="fx-preview" class="alert" style="margin-top:10px"></div>
+    <div class="row" style="margin-top:12px;flex-wrap:wrap">
+      <button class="btn" id="fx-go" style="flex:0 0 auto">确认换汇</button>
+      <button class="btn secondary" data-close style="flex:0 0 auto">取消</button></div>
+    <p class="inline-note" style="margin-top:8px">换汇<strong>不是出入金</strong>（钱没离开组合），所以不要去「出入金登记」记一笔——那会把收益率算错。
+      成交汇率与系统估值汇率（当前 ${(+fx).toFixed(4)}）不同时，差额是真实的<strong>汇兑损益</strong>，总资产会相应变动。</p>`;
+  showModal('换汇（美元 ↔ 人民币）', body);
+  const ov = [...document.querySelectorAll('[data-modal]')].pop();
+  const $ = s => ov.querySelector(s);
+  const dirCcy = () => $('#fx-dir').value === 'u2c' ? ['USD', 'CNY'] : ['CNY', 'USD'];
+  const fillSel = () => {
+    const [s, d] = dirCcy();
+    $('#fx-src').innerHTML = optsOf(s); $('#fx-dst').innerHTML = optsOf(d);
+    $('#fx-srcccy').textContent = s;
+  };
+  const calc = () => {
+    const [s] = dirCcy();
+    const amt = num($('#fx-amt').value), rate = num($('#fx-rate').value);
+    if (!(amt > 0) || !(rate > 0)) return null;
+    const recv = s === 'USD' ? amt * rate : amt / rate;          // 到账原币
+    const outCny = s === 'USD' ? amt * fx : amt;                 // 转出侧折人民币（系统估值口径）
+    const inCny = s === 'USD' ? recv : recv * fx;                // 到账侧折人民币
+    return { amt, rate, recv, diff: inCny - outCny, srcCcy: s, dstCcy: s === 'USD' ? 'CNY' : 'USD' };
+  };
+  const preview = () => {
+    const c = calc();
+    if (!c) { $('#fx-preview').innerHTML = '<span class="inline-note">填入金额与成交汇率后显示折算结果。</span>'; return; }
+    const srcAsset = (STATE.assets || []).find(a => a.id === $('#fx-src').value);
+    const bal = $('#fx-src').value === '__pool__' ? stockCashPoolBalance(c.srcCcy) : num((srcAsset || {}).amount);
+    const short = c.amt > bal + 0.005;
+    $('#fx-preview').innerHTML = `<div>转出 <strong>${fmtOrig(c.amt, c.srcCcy)}</strong> → 到账 <strong>${fmtOrig(c.recv, c.dstCcy)}</strong></div>
+      <div style="margin-top:4px;color:${Math.abs(c.diff) < 1 ? 'var(--muted)' : (c.diff >= 0 ? 'var(--green-ink)' : 'var(--red-ink)')}">
+        汇兑损益 ${c.diff >= 0 ? '+' : ''}${fmtMoney(c.diff)}（成交价 ${(+c.rate).toFixed(4)} vs 系统估值 ${(+fx).toFixed(4)}）</div>
+      ${short ? `<div style="margin-top:4px;color:var(--red-ink)">转出账户只有 ${fmtOrig(bal, c.srcCcy)}，不够扣。</div>` : ''}`;
+  };
+  $('#fx-dir').onchange = () => { fillSel(); preview(); };
+  ['#fx-amt', '#fx-rate', '#fx-src', '#fx-dst'].forEach(s => { $(s).oninput = preview; $(s).onchange = preview; });
+  fillSel(); preview();
+  $('#fx-go').onclick = () => {
+    const c = calc();
+    if (!c) { alert('请填写转出金额与成交汇率'); return; }
+    const srcId = $('#fx-src').value, dstId = $('#fx-dst').value;
+    const srcAsset = (STATE.assets || []).find(a => a.id === srcId);
+    const bal = srcId === '__pool__' ? stockCashPoolBalance(c.srcCcy) : num((srcAsset || {}).amount);
+    if (c.amt > bal + 0.005) { alert(`转出账户只有 ${fmtOrig(bal, c.srcCcy)}，扣不出 ${fmtOrig(c.amt, c.srcCcy)}。`); return; }
+    if (srcId === dstId) { alert('转出与转入不能是同一个账户。'); return; }
+    if (!confirm(`确认换汇：\n转出 ${fmtOrig(c.amt, c.srcCcy)} → 到账 ${fmtOrig(c.recv, c.dstCcy)}\n汇兑损益 ${c.diff >= 0 ? '+' : ''}${fmtMoney(c.diff)}\n\n（钱没离开组合，不要再去出入金登记记一笔）`)) return;
+    logOp(`换汇 ${fmtOrig(c.amt, c.srcCcy)} → ${fmtOrig(c.recv, c.dstCcy)} @${(+c.rate).toFixed(4)}`);
+    if (srcId === '__pool__') settleToPool(-c.amt, c.srcCcy, '换汇转出');
+    else if (srcAsset) {
+      srcAsset.amount = Math.max(0, Math.round((num(srcAsset.amount) - c.amt) * 100) / 100);
+      srcAsset.cny = Math.round(assetCny(srcAsset, currentFx()));
+    }
+    creditCash(dstId === '__pool__' ? { mode: 'pool' } : { mode: 'asset', id: dstId },
+      c.recv, c.dstCcy, `换汇转入 @${(+c.rate).toFixed(4)}`);
+    recordDailySnapshot();          // 汇兑损益会改总资产 → 覆盖今日快照
+    saveState(); ov.remove(); render();
+  };
 }
 // 指标详解弹窗：当前值 + 大刻度条 + 走势 + 分区依据 + 方法论 + 对组合的含义
 function showIndicatorModal(key) {
