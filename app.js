@@ -7211,7 +7211,7 @@ VIEWS.portfolio = function (app) {
     </div>
     <div class="grid grid-3">
       <div class="field"><label>手动单位净值（无公开接口产品，可选）</label><input id="af-nav" type="number" step="0.0001" placeholder="如 111.0304"/></div>
-      <div class="field"><label>净值日期（可选）</label><input id="af-navdate" type="text" placeholder="2026-07-24"/></div>
+      <div class="field"><label>净值日期（可选）</label><input id="af-navdate" type="text" autocomplete="off" placeholder="如 2026-07-24"/></div>
       <div class="field"><label></label><span class="inline-note" style="align-self:end;display:block">跨境理财通/银行理财等无公开净值的，填这里即可随净值更新市值；留空则金额保持不变。代码为 6 位的公募债基无需手填，会自动拉。</span></div>
     </div>
     <div class="grid grid-3">
