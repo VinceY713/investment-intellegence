@@ -8024,6 +8024,8 @@ async function autoPullFlow() {
   const diag = [];
   const flow = { date: todayStr(), sectors: null, south: null, margin: null, diag };
   // 1 行业板块主力资金（push2 clist，fid=f62 今日主力净额降序；带5日/10日字段）
+  //    主源：push2.eastmoney.com（数据最全：今日/5日/10日 + 净占比）
+  //    备源：新浪行业资金流 sinasectorflow（push2 被封/502 时自动降级，仅当日净额）
   try {
     const q = 'fid=f62&po=1&pz=100&pn=1&np=1&fltt=2&invt=2&fs=' + encodeURIComponent('m:90+t:2')
       + '&fields=' + encodeURIComponent('f12,f14,f62,f164,f174,f184');
@@ -8037,7 +8039,30 @@ async function autoPullFlow() {
         .map(x => ({ name: String(x.f14 || ''), today: x.f62 / 1e8, d5: (typeof x.f164 === 'number' ? x.f164 : 0) / 1e8, d10: (typeof x.f174 === 'number' ? x.f174 : 0) / 1e8 }))
         .filter(x => x.name);
       diag.push({ label: '行业主力资金(push2)', ok: true, raw: arr.length + ' 个板块，Top1 ' + flow.sectors[0].name + ' ' + flow.sectors[0].today.toFixed(1) + '亿' });
-    } else diag.push({ label: '行业主力资金(push2)', ok: false, raw: 'HTTP ' + r.status + ' ' + txt.slice(0, 160) });
+    } else {
+      // push2 失败（502/被封/空数据）→ 自动降级到新浪行业资金流备源
+      diag.push({ label: '行业主力资金(push2)', ok: false, raw: 'HTTP ' + r.status + '（已降级至新浪备源）' });
+      try {
+        const sr = await fetch('/api/sinasectorflow', { cache: 'no-store' });
+        const stxt = await sr.text();
+        let sj = null; try { sj = JSON.parse(stxt); } catch (e2) {}
+        // 新浪行业资金流返回数组：每项 { name, net_in(万), ... }，按 net_in 降序
+        if (Array.isArray(sj) && sj.length > 5) {
+          flow.sectors = sj.filter(x => x.name && typeof x.net_in === 'number' && isFinite(x.net_in))
+            .map(x => ({ name: String(x.name), today: x.net_in / 1e4,   // 万→亿
+              d5: 0, d10: 0 }))                                   // 新浪无5日/10日
+            .filter(x => x.name);
+          if (flow.sectors.length > 0)
+            diag.push({ label: '行业主力资金(新浪备源)', ok: true, raw: flow.sectors.length + ' 个板块，Top1 ' + flow.sectors[0].name + ' ' + flow.sectors[0].today.toFixed(1) + '亿（注：仅当日数据，无5日/10日累计）' });
+          else
+            diag.push({ label: '行业主力资金(新浪备源)', ok: false, raw: '解析后有效数据为空' });
+        } else {
+          diag.push({ label: '行业主力资金(新浪备源)', ok: false, raw: 'HTTP ' + sr.status + ' ' + stxt.slice(0, 120) });
+        }
+      } catch (e2) {
+        diag.push({ label: '行业主力资金(新浪备源)', ok: false, raw: e2.message });
+      }
+    }
   } catch (e) { diag.push({ label: '行业主力资金(push2)', ok: false, raw: e.message }); }
   // 2 南向资金（datacenter 沪深港通历史：003=港股通沪 004=港股通深，取最新交易日净买额，亿元）
   try {
