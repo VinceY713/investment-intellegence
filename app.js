@@ -944,7 +944,7 @@ function corrHoldings() {
     if (!code || seen.has(code)) return;
     // 美股（含字母代码）作为个股弹性；场外基金作为压舱基金
     if (a.category === '美股股票' && isUsCode(code)) { extra.push({ code, name: a.name, category: '美股股票', role: 'stock', weight: wPct(a), factor: guessFactor(a.name) }); seen.add(code); }
-    else if (a.category === '基金' && /^\d{6}$/.test(code) && !isCashLikeAsset(a)) { extra.push({ code, name: a.name, category: '基金', role: 'fund', weight: wPct(a), factor: guessFactor(a.name) }); seen.add(code); }
+    else if ((a.category === '基金' || a.category === '债券') && /^\d{6}$/.test(code) && !isCashLikeAsset(a)) { extra.push({ code, name: a.name, category: a.category, role: a.category === '债券' ? 'bond' : 'fund', weight: wPct(a), factor: guessFactor(a.name) }); seen.add(code); }
   });
   return positions.concat(extra);
 }
@@ -1058,6 +1058,7 @@ const SEED_POSITIONS = [
 // 此前所有基金都算权益，导致债券敞口被吞进股票篮子、组合看似“零债券”。
 function bigClassOf(cat, name) {
   if (cat === 'A股股票' || cat === '美股股票') return '权益';
+  if (cat === '债券') return '债券';
   if (cat === '基金') {
     const n = String(name || '');
     if (/债|债券|纯债|中短债|长债|信用债|利率债|转债/i.test(n)) return '债券';
@@ -1439,7 +1440,7 @@ function classRank(cat) {
   if (cat === '黄金') return 4;
   return 5;
 }
-const ASSET_CATEGORIES = ['A股股票', '美股股票', '基金', '理财(QDII)', '定期存款', '黄金', '人民币现金', '香港账户现金', '外汇'];
+const ASSET_CATEGORIES = ['A股股票', '美股股票', '基金', '债券', '理财(QDII)', '定期存款', '黄金', '人民币现金', '香港账户现金', '外汇'];
 
 // 收益：理财/存款 → 年化利息（美元按当日中间价折人民币）；其它 → 浮盈亏
 function assetIncome(a, fx) {
@@ -2844,7 +2845,7 @@ VIEWS.positions = function (app) {
   // —— 当日交易录入（精确当日盈亏）——
   {
     const tradeCard = el('<div class="card" style="margin-top:16px"><h3>' + icon('coins') + ' 当日交易 · 精确当日盈亏</h3></div>');
-    const tradables = (STATE.assets || []).filter(a => a.code && ['A股股票', '美股股票', '基金'].includes(a.category));
+    const tradables = (STATE.assets || []).filter(a => a.code && ['A股股票', '美股股票', '基金', '债券'].includes(a.category));
     if (!tradables.length) {
       tradeCard.appendChild(el('<p class="hint">在「投资组合」里有股票/ETF/基金后，这里可录入当日买入/卖出（带成交价）：按成交价精确算当日盈亏，并自动更新股数与现金池，比"直接改数量"更准。</p>'));
     } else {
@@ -3692,7 +3693,10 @@ function kellyCandidates() {
 
 // 判定持仓的风险角色：个股(凯利适用) / 配置型债券 / 配置型核心(宽基·低波·红利·货币) / 主题卫星
 function holdingRiskType(cand) {
-  if (!cand || cand.kind !== '基金') return 'stock';
+  if (!cand) return 'stock';
+  // 显式「债券」类别 → 直接返回 bond（不再依赖名称正则）
+  if (cand.category === '债券') return 'bond';
+  if (cand.kind !== '基金') return 'stock';
   const n = cand.name || '';
   // 纯债/固收基金独立为「债券」角色——此前被 core 正则里的 债券? 误并入宽基核心
   if (/债|债券|纯债|中短债|长债|信用债|利率债|转债/i.test(n)) return 'bond';
@@ -3826,6 +3830,7 @@ function layerOf(a) {
   if (cat === '定期存款') return usd ? 'oseas' : 'safe';   // 美元定存有汇率→海外固收；人民币定存→兜底
   if (cat === '人民币现金') return 'cash';
   if (cat === '香港账户现金') return 'cash';               // 美元现金：机动（币种敞口另算）
+  if (cat === '债券') return 'bond';                          // 显式标记的债券资产 → bond 层
   if (cat === '基金') {
     if (/标普|纳斯达克|纳指|美国|海外|全球|S&P|QDII/i.test(name)) return 'us';   // 美元海外基金
     // 纯债/固收基金：独立的「债券」层（此前被 债券? 误并入 ballast 低波股票层）
