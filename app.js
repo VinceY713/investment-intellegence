@@ -802,6 +802,33 @@ function twrIndexSeries(snaps) {
   }
   return out;
 }
+// 权益子仓位的 TWR 净值指数（首个含明细快照 = 100）：只用「连续持有、有价」的权益标的(A股/美股/基金)
+// 逐日价格贡献 ÷ 该标的前一日市值算出当日收益率——分子分母都只取「两天都在持有」的仓位。
+// 卖出/买入/换仓天然被排除在外（不在分子也不在分母），所以减仓不会把这条线拉成"亏损"，
+// 它回答的是「留着没动的权益仓位，本身赚不赚钱」，与总资产/大类净值线（会被内部划转污染）是两回事。
+function equityTwrIndexSeries(detailedSnaps) {
+  let acc = 100;
+  const out = [{ date: detailedSnaps[0].date, value: 100 }];
+  for (let i = 1; i < detailedSnaps.length; i++) {
+    const prev = detailedSnaps[i - 1], cur = detailedSnaps[i];
+    const fx = num(cur.fx) > 0 ? num(cur.fx) : currentFx();
+    const fxPrev = num(prev.fx) > 0 ? num(prev.fx) : fx;
+    const prevMap = new Map((prev.assets || []).map(a => [(a.code || a.id), a]));
+    let numer = 0, denom = 0;
+    (cur.assets || []).forEach(a => {
+      if (bigClassOf(a.category) !== '权益') return;
+      const pa = prevMap.get(a.code || a.id);
+      if (!pa || bigClassOf(pa.category) !== '权益') return;                 // 新买入/新调入 → 跳过，不进分子分母
+      if (!(num(pa.shares) > 0 && num(pa.shares) === num(a.shares) && num(pa.lastPx) > 0 && num(a.lastPx) > 0)) return; // 有换仓/无价 → 跳过
+      const cfCur = a.currency === 'USD' ? fx : 1, cfPrev = a.currency === 'USD' ? fxPrev : 1;
+      numer += num(pa.shares) * (num(a.lastPx) * cfCur - num(pa.lastPx) * cfPrev);
+      denom += num(pa.shares) * num(pa.lastPx) * cfPrev;
+    });
+    if (denom > 0) acc *= 1 + numer / denom;
+    out.push({ date: cur.date, value: acc });
+  }
+  return out;
+}
 // 基准序列按快照日期对齐（非交易日用此前最近收盘价填充），并以首个有数据的快照日 = 100 归一
 function alignBenchmark(snaps, series) {
   const dates = series.map(x => x.date);                 // 已升序
@@ -6533,6 +6560,101 @@ VIEWS.attribution = function (app) {
     利息、手动改金额、当日调仓的标的价格变动计入「残差」——残差大说明该区间的手动操作多，归因仅供参考。</p>`);
   app.appendChild(headCard);
 
+  // 权益仓位收益曲线 vs 基准指数：与「资产趋势」同一套基准，但这条线不是总资产/大类净值，
+  // 而是只用「连续持有」的权益仓位算出的 TWR 指数——减仓/换仓不会把它拉成"亏损"，
+  // 回答的正是"留着没动的仓位到底跑赢跑输了大盘多少"。
+  const eqChartCard = el(`<div class="card" style="margin-top:16px">
+    <h3 style="margin:0">${icon('chart')} 权益仓位 vs 基准</h3>
+    <div class="row" id="eq-bench-chips" style="gap:6px;flex-wrap:wrap;margin-top:10px"></div>
+    <div id="eq-chart" style="margin-top:14px"></div>
+    <div id="eq-bench-legend" class="inline-note" style="margin-top:8px"></div>
+    <p class="inline-note" style="margin-top:10px">与上方「按大类」不同：这条线只用<strong>两天都在持有、有报价</strong>的权益标的（A股/美股/基金）算收益率，
+      卖出/买入/换仓当天不计入分子分母，因此不会像总资产/大类走势那样因为减仓而显示"亏损"。区间跟随上面的「区间」选择联动。</p>
+  </div>`);
+  app.appendChild(eqChartCard);
+  const eqBenchLoaded = {}, eqBenchDiag = {};
+  let eqBenchKeys = ((STATE.settings || {}).attrBenchKeys || []).filter(k => BENCH_BY_KEY[k]);
+  let eqCurList = detailed;
+  function drawEqChips(busyKey) {
+    const box = eqChartCard.querySelector('#eq-bench-chips');
+    box.innerHTML = `<span class="inline-note" style="align-self:center">对比基准（可多选）</span>` + BENCHMARKS.map(b => {
+      const on = eqBenchKeys.indexOf(b.key) >= 0;
+      const failed = on && eqBenchLoaded[b.key] === null;
+      const busy = b.key === busyKey;
+      const style = on && !failed
+        ? `background:${b.color}22;color:${b.color};border:1px solid ${b.color}`
+        : failed ? 'background:rgba(255,59,48,.10);color:var(--red-ink);border:1px solid rgba(255,59,48,.4)'
+        : 'background:rgba(120,120,128,.10);color:var(--muted);border:1px solid rgba(120,120,128,.25)';
+      return `<button data-ebk="${b.key}" style="${style};font:inherit;font-size:12.5px;font-weight:600;padding:4px 10px;border-radius:999px;cursor:pointer">${busy ? '…' : (on && !failed ? '━ ' : '')}${escapeHtml(b.label)}${failed ? ' ✕' : ''}</button>`;
+    }).join('');
+    box.querySelectorAll('[data-ebk]').forEach(btn => btn.onclick = () => toggleEqBench(btn.dataset.ebk));
+  }
+  async function toggleEqBench(key) {
+    const i = eqBenchKeys.indexOf(key);
+    if (i >= 0) { eqBenchKeys.splice(i, 1); delete eqBenchLoaded[key]; delete eqBenchDiag[key]; }
+    else {
+      eqBenchKeys.push(key);
+      if (!eqBenchLoaded[key]) {
+        drawEqChips(key);
+        const b = BENCH_BY_KEY[key];
+        try {
+          const r = await fetchBenchmarkSeries(key);
+          eqBenchDiag[key] = r.diag;
+          eqBenchLoaded[key] = r.series.length ? { label: b.label + (r.via ? '(' + r.via + ')' : ''), color: b.color, series: r.series, via: r.via } : null;
+        } catch (e) { eqBenchDiag[key] = ['异常:' + e.message]; eqBenchLoaded[key] = null; }
+      }
+    }
+    STATE.settings.attrBenchKeys = eqBenchKeys.slice(); saveState();
+    drawEqChips(); drawEqChart(eqCurList);
+  }
+  drawEqChips();
+  eqBenchKeys.slice().forEach(async k => {
+    const b = BENCH_BY_KEY[k];
+    try {
+      const r = await fetchBenchmarkSeries(k);
+      eqBenchDiag[k] = r.diag;
+      eqBenchLoaded[k] = r.series.length ? { label: b.label + (r.via ? '(' + r.via + ')' : ''), color: b.color, series: r.series, via: r.via } : null;
+    } catch (e) { eqBenchDiag[k] = ['异常:' + e.message]; eqBenchLoaded[k] = null; }
+    drawEqChips(); drawEqChart(eqCurList);
+  });
+  function eqTip(i, mine, refs) {
+    const p = mine[i];
+    let html = `<div style="font-weight:600">${escapeHtml(p.date.slice(5))}</div>
+      <div style="margin:2px 0 3px"><span style="color:var(--accent)">━</span> <strong>权益仓位 ${(+p.value).toFixed(2)} 点</strong><span style="color:var(--muted);font-size:11px">（指数·起点100）</span></div>`;
+    if (i > 0) {
+      const d = p.value - mine[i - 1].value;
+      html += `<div style="color:${d >= 0 ? 'var(--green-ink)' : 'var(--red-ink)'}">较上一点 ${d >= 0 ? '+' : ''}${d.toFixed(2)} 点</div>`;
+    }
+    refs.forEach(r => {
+      const rp = r.points[i]; if (!rp) return;
+      html += `<div style="margin:5px 0 2px;border-top:1px solid rgba(127,127,127,.25);padding-top:4px"><span style="color:${r.color}">━</span> <strong>${escapeHtml(r.name)} ${(+rp.value).toFixed(2)} 点</strong></div>`;
+      if (i > 0 && r.points[i - 1]) {
+        const d2 = rp.value - r.points[i - 1].value;
+        html += `<div style="color:${d2 >= 0 ? 'var(--green-ink)' : 'var(--red-ink)'}">较上一点 ${d2 >= 0 ? '+' : ''}${d2.toFixed(2)} 点</div>`;
+      }
+    });
+    return html;
+  }
+  function drawEqChart(list) {
+    eqCurList = list;
+    const box = eqChartCard.querySelector('#eq-chart');
+    const legend = eqChartCard.querySelector('#eq-bench-legend');
+    if (list.length < 2) { box.innerHTML = '<div class="empty">该区间明细快照不足 2 份。</div>'; legend.textContent = ''; return; }
+    const mine = equityTwrIndexSeries(list);
+    const active = eqBenchKeys.map(k => eqBenchLoaded[k]).filter(Boolean);
+    const refs = active.map(b => ({ name: b.label, color: b.color, points: alignBenchmark(list, b.series) }));
+    const mRet = mine[mine.length - 1].value - 100;
+    legend.innerHTML = `<span style="color:var(--accent)">━</span> <strong>权益仓位 ${mRet >= 0 ? '+' : ''}${fmtPct(mRet, 2)}</strong>　` +
+      refs.map(r => {
+        const bRet = r.points[r.points.length - 1].value - 100, ex = mRet - bRet;
+        return `<span style="color:${r.color}">━</span> ${escapeHtml(r.name)} ${bRet >= 0 ? '+' : ''}${fmtPct(bRet, 2)}` +
+          `<span style="color:${ex >= 0 ? 'var(--green-ink)' : 'var(--red-ink)'}">（超额 ${ex >= 0 ? '+' : ''}${fmtPct(ex, 2)}）</span>`;
+      }).join('　') + '　<span style="color:var(--muted)">起点=100</span>';
+    box.innerHTML = '';
+    box.appendChild(buildLineChart(mine.map(p => ({ label: p.date.slice(5), date: p.date, value: p.value })),
+      { extra: refs, tooltip: (i) => eqTip(i, mine, refs) }));
+  }
+
   const factorOf = (code, name) => {
     const p = (STATE.positions || []).find(x => x.code && x.code === code);
     return (p && p.factor) || guessFactor(name) || '其它';
@@ -6594,6 +6716,7 @@ VIEWS.attribution = function (app) {
       list = detailed.filter(s => s.date >= cutoff);
       if (list.length < 2) list = detailed.slice(-2);     // 区间内不足两天 → 用最近两天兜底
     }
+    drawEqChart(list);
     const { byAsset, residual, explained, flows, first, last } = compute(list);
     const totalChange = num(last.total) - num(first.total) - flows;
     const chgCol = totalChange >= 0 ? 'var(--green-ink)' : 'var(--red-ink)';
