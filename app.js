@@ -50,6 +50,8 @@ function guessFactor(name) {
     [/银行|Bank|JPMorgan|Goldman|Morgan\s*Stanley|Citi|Wells\s*Fargo|Berkshire/i, '银行'],
     [/证券|券商|保险|Securit|Insuranc|Broker|Visa|Mastercard|PayPal/i, '证券保险'],
     [/黄金|金矿|金业|山东黄金|中金黄金|招金|赤峰|白银|Gold|Silver|Barrick|Newmont/i, '黄金'],
+    [/债|债券|纯债|中短债|长债|信用债|利率债|转债/i, '债券'],
+    [/混合|平衡/i, '混合'],
     [/半导体|芯片|集成电路|中芯|华虹|北方华创|光刻|存储|封测|Semiconduct|Chip|台积电|TSM|Intel|英特尔|Micron|美光|Broadcom|博通|Qualcomm|高通|\bAMD\b|\bARM\b/i, '半导体'],
     [/机器人|Robot/i, '机器人'],
     [/光伏|风电|太阳能|Solar|Wind|First\s*Solar/i, '光伏风电'],
@@ -179,7 +181,7 @@ const FACTOR_GROUPS = {
   '创新药': '医药消费', '医疗器械': '医药消费', '消费': '医药消费', '食品饮料': '医药消费',
   '银行': '价值周期', '证券保险': '价值周期', '地产': '价值周期', '能源': '价值周期',
   '有色金属': '价值周期', '化工': '价值周期', '公用事业': '价值周期', '农业': '价值周期',
-  '军工': '主题', '其它': '其它', '黄金': '避险',
+  '军工': '主题', '其它': '其它', '黄金': '避险', '债券': '避险', '混合': '其它',
 };
 const GROUP_CORR = 0.72;   // 同一大组（如均属科技成长）默认相关
 const CROSS_CORR = 0.32;   // 跨组默认相关（A股系统性 beta 不低，同涨同跌常见）
@@ -1050,9 +1052,19 @@ const SEED_POSITIONS = [
   { name: 'TRIP.COM', code: 'TCOM', factor: '消费', pnl: -9.54, maxDrop: 40, cost: 46.929, price: 42.45, shares: 650 },
 ];
 
-// 资产大类归并（用于总览饼图与诊断）
-function bigClassOf(cat) {
-  if (cat === 'A股股票' || cat === '美股股票' || cat === '基金') return '权益';
+// 资产大类归并（用于总览饼图与诊断）。
+// 关键修正：category='基金' 不再一刀切并入「权益」——纯债/固收基金落到「债券」，
+// 混合基金落「混合」，货币基金落「现金」，只把宽基/指数/行业/主题/红利/低波算「权益」。
+// 此前所有基金都算权益，导致债券敞口被吞进股票篮子、组合看似“零债券”。
+function bigClassOf(cat, name) {
+  if (cat === 'A股股票' || cat === '美股股票') return '权益';
+  if (cat === '基金') {
+    const n = String(name || '');
+    if (/债|债券|纯债|中短债|长债|信用债|利率债|转债/i.test(n)) return '债券';
+    if (/货币|货基|现金|余额宝|朝朝宝/i.test(n)) return '现金';
+    if (/混合/i.test(n)) return '混合';
+    return '权益';
+  }
   if (cat === '理财(QDII)' || cat === '定期存款') return '固收/理财';
   if (cat === '人民币现金' || cat === '香港账户现金') return '现金';
   if (cat === '黄金') return '黄金';
@@ -1485,7 +1497,7 @@ function buildSeedState() {
   // 大类/类别拆分（用于 7/19 起点快照）
   const byBig = {}, byCat = {};
   assets.forEach(a => {
-    byBig[bigClassOf(a.category)] = (byBig[bigClassOf(a.category)] || 0) + a.cny;
+    byBig[bigClassOf(a.category, a.name)] = (byBig[bigClassOf(a.category, a.name)] || 0) + a.cny;
     byCat[a.category] = (byCat[a.category] || 0) + a.cny;
   });
   const seedSnap = {
@@ -1627,7 +1639,7 @@ function makeSnapshot(dateStr) {
   let interest = 0, pnl = 0;
   assets.forEach(a => {
     const v = assetCny(a, fx);
-    byBig[bigClassOf(a.category)] = (byBig[bigClassOf(a.category)] || 0) + v;
+    byBig[bigClassOf(a.category, a.name)] = (byBig[bigClassOf(a.category, a.name)] || 0) + v;
     byCat[a.category] = (byCat[a.category] || 0) + v;
     const inc = assetIncome(a, fx);
     if (inc.kind === 'interest') interest += inc.value;
@@ -3304,7 +3316,10 @@ VIEWS.kelly = function (app) {
       } else {
         // 配置型基金：凯利会系统性低估，改用「资产角色 + 策略权重区间」
         const band = ROLE_BAND[rtype];
-        const roleName = rtype === 'core' ? '宽基/低波/红利/债 —— 配置型核心' : '行业/主题基金 —— 卫星仓';
+        const roleName = rtype === 'core' ? '宽基/低波/红利 —— 配置型核心'
+          : rtype === 'bond' ? '债券/纯债 —— 配置型债券仓'
+          : '行业/主题基金 —— 卫星仓';
+        const roleTerm = rtype === 'core' ? '核心配置' : rtype === 'bond' ? '债券仓' : '卫星仓';
         sizing = `<div class="result-box">
           <div class="metric-row"><span class="k">资产角色</span><span class="v">${roleName}</span></div>
           <div class="metric-row"><span class="k">建议策略权重区间</span><span class="v" style="color:var(--accent-ink)">${band[0]}–${band[1]}%${total > 0 ? '（约 ' + fmtMoney(band[0] / 100 * total) + '–' + fmtMoney(band[1] / 100 * total) + '）' : ''}</span></div>
@@ -3312,7 +3327,7 @@ VIEWS.kelly = function (app) {
           <div class="metric-row"><span class="k">¼ 凯利测算（仅参考，会低估配置型）</span><span class="v" style="color:var(--muted)">${Math.max(0, f * frac * 100).toFixed(1)}%</span></div>
         </div>`;
         if (ev < 0) advice = `<div class="alert amber"><span class="icon">${icon('warn')}</span><div><strong>AI 保守看，短期期望值偏弱（EV ${ev.toFixed(1)}%）</strong><br>作为配置型资产不必据此清仓，但可暂缓加仓、等性价比更好时再补到区间内。</div></div>`;
-        else if (cur < band[0]) advice = `<div class="alert green"><span class="icon">${icon('check')}</span><div><strong>当前 ${cur.toFixed(1)}% 低于建议下沿 ${band[0]}%</strong><br>作为${rtype === 'core' ? '核心配置' : '卫星仓'}可考虑逐步补到区间内，分批而非一次到位。</div></div>`;
+        else if (cur < band[0]) advice = `<div class="alert green"><span class="icon">${icon('check')}</span><div><strong>当前 ${cur.toFixed(1)}% 低于建议下沿 ${band[0]}%</strong><br>作为${roleTerm}可考虑逐步补到区间内，分批而非一次到位。</div></div>`;
         else if (cur > band[1]) advice = `<div class="alert amber"><span class="icon">${icon('warn')}</span><div><strong>当前 ${cur.toFixed(1)}% 高于建议上沿 ${band[1]}%</strong><br>可适度再平衡到 ${band[1]}% 以内（尤其若与其它持仓高度相关）。</div></div>`;
         else advice = `<div class="alert green"><span class="icon">${icon('check')}</span><div><strong>当前 ${cur.toFixed(1)}% 在建议区间 ${band[0]}–${band[1]}% 内</strong>，属合理配置，保持并定期再平衡即可。</div></div>`;
         caveat = `<div class="alert blue" style="margin-top:10px"><span class="icon">${icon('info')}</span><div>
@@ -3675,15 +3690,17 @@ function kellyCandidates() {
   return list;
 }
 
-// 判定持仓的风险角色：个股(凯利适用) / 配置型核心(宽基·低波·红利·债·货币) / 主题卫星
+// 判定持仓的风险角色：个股(凯利适用) / 配置型债券 / 配置型核心(宽基·低波·红利·货币) / 主题卫星
 function holdingRiskType(cand) {
   if (!cand || cand.kind !== '基金') return 'stock';
   const n = cand.name || '';
-  if (/红利|低波|沪深\s*300|中证\s*(500|800|1000|A?500|100)|上证\s*50|A50|标普|纳斯达克|道琼斯|宽基|指数|债券?|货币|余额|MSCI|全球|恒生(?!科技)/.test(n)) return 'core';
+  // 纯债/固收基金独立为「债券」角色——此前被 core 正则里的 债券? 误并入宽基核心
+  if (/债|债券|纯债|中短债|长债|信用债|利率债|转债/i.test(n)) return 'bond';
+  if (/红利|低波|沪深\s*300|中证\s*(500|800|1000|A?500|100)|上证\s*50|A50|标普|纳斯达克|道琼斯|宽基|指数|货币|余额|MSCI|全球|恒生(?!科技)/.test(n)) return 'core';
   return 'theme';
 }
 // 配置型资产的建议策略权重区间（%），凯利不适用它们
-const ROLE_BAND = { core: [8, 30], theme: [3, 12] };
+const ROLE_BAND = { core: [8, 30], theme: [3, 12], bond: [8, 40] };
 
 /* -------------------------------------------------------------------------
    战略再平衡：按「期限 × 最大回撤」预设匹配科学目标盘
@@ -3691,21 +3708,21 @@ const ROLE_BAND = { core: [8, 30], theme: [3, 12] };
    组合压力回撤上界）；各预设的目标权重都满足"压力回撤 ≤ 该档预算"。用户三层策略
    （股票博弹性/基金压舱/理财兜底）被拆成 8 个可对照的层，美元敞口单列。
    ------------------------------------------------------------------------- */
-// 层顺序与显示名（兜底→机动现金→海外固收→压舱→宽基→单股→美股→黄金）
-const LAYER_ORDER = ['safe', 'cash', 'oseas', 'ballast', 'broad', 'single', 'us', 'gold'];
+// 层顺序与显示名（兜底→机动现金→海外固收→压舱→债券→宽基→单股→美股→黄金）
+const LAYER_ORDER = ['safe', 'cash', 'oseas', 'ballast', 'bond', 'broad', 'single', 'us', 'gold'];
 const LAYER_NAME = {
-  safe: '兜底·在岸保本', cash: '机动现金', oseas: '海外固收(美元)', ballast: '压舱·低波基金',
-  broad: '弹性·宽基', single: '弹性·单股', us: '美股', gold: '黄金',
+  safe: '兜底·在岸保本', cash: '机动现金', oseas: '海外固收(美元)', ballast: '压舱·低波/混合基金',
+  bond: '债券·固收配置', broad: '弹性·宽基', single: '弹性·单股', us: '美股', gold: '黄金',
 };
 // 压力情景（危机）下各层的假设回撤%——用于"这套配置最多能亏多少"的估算，透明可调
-const LAYER_DD = { safe: 0, cash: 0, oseas: 8, ballast: 15, broad: 32, single: 45, us: 35, gold: 5 };
+const LAYER_DD = { safe: 0, cash: 0, oseas: 8, ballast: 15, bond: 5, broad: 32, single: 45, us: 35, gold: 5 };
 const USD_LAYERS = { oseas: 1, us: 1 };   // 计入美元敞口的层（美元现金另按币种实算）
 // 预设：每档目标权重求和=100，压力回撤≤该档 maxDD；期限只影响兜底/现金厚度（流动性），回撤预算决定风险档
 const REBAL_PRESETS = [
-  { id: '3y15', years: 3, maxDD: 15, label: '3年·回撤≤15%', tone: '保守', t: { safe: 18, cash: 18, oseas: 12, ballast: 15, broad: 8, single: 12, us: 7, gold: 10 } },
-  { id: '3y20', years: 3, maxDD: 20, label: '3年·回撤≤20%', tone: '稳健', t: { safe: 15, cash: 12, oseas: 12, ballast: 15, broad: 10, single: 18, us: 8, gold: 10 } },
-  { id: '5y20', years: 5, maxDD: 20, label: '5年·回撤≤20%', tone: '均衡', t: { safe: 10, cash: 11, oseas: 12, ballast: 15, broad: 12, single: 18, us: 10, gold: 12 } },
-  { id: '5y25', years: 5, maxDD: 25, label: '5年·回撤≤25%', tone: '进取', t: { safe: 8, cash: 8, oseas: 12, ballast: 13, broad: 13, single: 24, us: 12, gold: 10 } },
+  { id: '3y15', years: 3, maxDD: 15, label: '3年·回撤≤15%', tone: '保守', t: { safe: 18, cash: 18, oseas: 12, ballast: 10, bond: 5, broad: 8, single: 12, us: 7, gold: 10 } },
+  { id: '3y20', years: 3, maxDD: 20, label: '3年·回撤≤20%', tone: '稳健', t: { safe: 15, cash: 12, oseas: 12, ballast: 10, bond: 5, broad: 10, single: 18, us: 8, gold: 10 } },
+  { id: '5y20', years: 5, maxDD: 20, label: '5年·回撤≤20%', tone: '均衡', t: { safe: 10, cash: 11, oseas: 12, ballast: 10, bond: 5, broad: 12, single: 18, us: 10, gold: 12 } },
+  { id: '5y25', years: 5, maxDD: 25, label: '5年·回撤≤25%', tone: '进取', t: { safe: 8, cash: 8, oseas: 12, ballast: 8, bond: 5, broad: 13, single: 24, us: 12, gold: 10 } },
 ];
 // 资产 → 战略层；手动改层（STATE.layerOverrides）优先于名称/类别自动识别
 function layerKeyOfAsset(a) { return String(a.code || a.name || '').trim(); }
@@ -3811,7 +3828,11 @@ function layerOf(a) {
   if (cat === '香港账户现金') return 'cash';               // 美元现金：机动（币种敞口另算）
   if (cat === '基金') {
     if (/标普|纳斯达克|纳指|美国|海外|全球|S&P|QDII/i.test(name)) return 'us';   // 美元海外基金
-    if (/红利|低波|高股息|价值|债|货币/i.test(name)) return 'ballast';
+    // 纯债/固收基金：独立的「债券」层（此前被 债券? 误并入 ballast 低波股票层）
+    if (/债|债券|纯债|中短债|长债|信用债|利率债|转债/i.test(name)) return 'bond';
+    if (/货币|货基|现金|余额宝|朝朝宝/i.test(name)) return 'cash';               // 货币基金=现金等价物
+    if (/混合/i.test(name)) return 'ballast';                                         // 混合基金：低波压舱（含债袖口，非纯宽基）
+    if (/红利|低波|高股息|价值/i.test(name)) return 'ballast';
     return 'broad';                                        // 宽基/指数
   }
   if (cat === 'A股股票') return 'single';                  // 个股 + 行业主题ETF = 卫星弹性
@@ -6494,7 +6515,7 @@ VIEWS.rebalance = function (app) {
       if (lockedVal > 0) html += `<li><span class="inline-note">（${LAYER_NAME[g.k]} 另有锁定 ${fmtMoney(lockedVal)} 不动，到期再算）</span></li>`;
     });
     // 后买（低配层）：给层级金额 + 建议标的方向
-    const HINT = { safe: '在岸定存/国债/在岸货基', cash: '活期/货基', oseas: '每日可赎的美元固收QDII', ballast: '红利低波/高股息低波基金', broad: '沪深300/A500 宽基', single: '低相关的新主题个股（避开已重仓的AI链）', us: '优质美股/标普500', gold: '积存金/黄金ETF' };
+    const HINT = { safe: '在岸定存/国债/在岸货基', cash: '活期/货基', oseas: '每日可赎的美元固收QDII', ballast: '红利低波/高股息低波/混合基金', bond: '纯债/中短债/利率债基金（组合对冲腿）', broad: '沪深300/A500 宽基', single: '低相关的新主题个股（避开已重仓的AI链）', us: '优质美股/标普500', gold: '积存金/黄金ETF' };
     underL.forEach(g => {
       html += `<li>补入 <strong>${LAYER_NAME[g.k]}</strong> 约 <strong>${fmtMoney(-g.devCny)}</strong> <span class="inline-note">[低配 ${(-g.devPct).toFixed(1)}pp；建议方向：${HINT[g.k] || '该层现有品种'}]</span></li>`;
     });
@@ -6683,7 +6704,7 @@ VIEWS.attribution = function (app) {
         const c = num(pa.shares) * (num(a.lastPx) * cfCur - num(pa.lastPx) * cfPrev);
         dayExplained += c;
         const rec = byAsset.get(key) || {
-          name: a.name, cat: bigClassOf(a.category), rawCat: a.category,
+          name: a.name, cat: bigClassOf(a.category, a.name), rawCat: a.category,
           factor: factorOf(a.code, a.name), contrib: 0,
         };
         rec.contrib += c;
@@ -6784,7 +6805,7 @@ function stressBuckets() {
       factor = (p && p.factor) || guessFactor(a.name) || '其它';
       bucket = a.category === '美股股票' ? 'us' : 'cn';
     } else if (a.category === '基金') bucket = 'fund';
-    else if (bigClassOf(a.category) === '黄金') bucket = 'gold';
+    else if (bigClassOf(a.category, a.name) === '黄金') bucket = 'gold';
     rows.push({ name: a.name, code: a.code, cat: a.category, bucket, factor, usd: a.currency === 'USD', v });
   });
   return rows;
@@ -6961,7 +6982,7 @@ VIEWS.portfolio = function (app) {
   const byBig = {}, byCat = {}, byCur = {};
   assets.forEach(a => {
     const v = cnyOf(a);
-    byBig[bigClassOf(a.category)] = (byBig[bigClassOf(a.category)] || 0) + v;
+    byBig[bigClassOf(a.category, a.name)] = (byBig[bigClassOf(a.category, a.name)] || 0) + v;
     byCat[a.category] = (byCat[a.category] || 0) + v;
     byCur[a.currency] = (byCur[a.currency] || 0) + v;
   });
