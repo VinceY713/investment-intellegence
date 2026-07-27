@@ -818,9 +818,9 @@ function equityTwrIndexSeries(detailedSnaps) {
     const prevMap = new Map((prev.assets || []).map(a => [(a.code || a.id), a]));
     let numer = 0, denom = 0;
     (cur.assets || []).forEach(a => {
-      if (bigClassOf(a.category) !== '权益') return;
+      if (bigClassOf(a.category, a.name) !== '权益') return;
       const pa = prevMap.get(a.code || a.id);
-      if (!pa || bigClassOf(pa.category) !== '权益') return;                 // 新买入/新调入 → 跳过，不进分子分母
+      if (!pa || bigClassOf(pa.category, pa.name) !== '权益') return;        // 新买入/新调入 → 跳过，不进分子分母
       if (!(num(pa.shares) > 0 && num(pa.shares) === num(a.shares) && num(pa.lastPx) > 0 && num(a.lastPx) > 0)) return; // 有换仓/无价 → 跳过
       const cfCur = a.currency === 'USD' ? fx : 1, cfPrev = a.currency === 'USD' ? fxPrev : 1;
       numer += num(pa.shares) * (num(a.lastPx) * cfCur - num(pa.lastPx) * cfPrev);
