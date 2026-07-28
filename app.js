@@ -1212,6 +1212,48 @@ function pickCashDestination(o) {
     document.body.appendChild(ov);
   });
 }
+// 加仓成交价询问弹窗：用「改金额」表达买入时，金额本身说不出你是几点、按什么价买的。
+// 不问清成交价，当日盈亏只能按「昨收→现价」的全天涨幅算——你盘中才买入，却被记了一整天的涨幅。
+// resolve：{price} 记一笔当日买入 / {skip:true} 只当估值修正 / null 取消
+function askBuyPrice(o) {
+  return new Promise(resolve => {
+    const px = num(o.lastPx);
+    const ov = el(`<div data-modal style="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1000;display:flex;align-items:center;justify-content:center;padding:16px">
+      <div class="card" style="max-width:520px;width:100%;max-height:84vh;overflow:auto;margin:0">
+        <div class="card-head-row"><h3 style="margin:0">这笔加仓的成交价是多少？</h3></div>
+        <p class="hint" style="margin-top:4px">「${escapeHtml(o.name)}」金额增加了 <strong>${fmtOrig(o.addedAmount, o.ccy)}</strong>，约 <strong>${(+o.addedShares).toFixed(2)}</strong> 股/份。
+          填入<strong>实际成交价</strong>，「今日」列才会按你的真实成本算，而不是按标的全天涨幅算。</p>
+        <div class="field"><label>成交价（${o.ccy}／股·份）</label>
+          <input id="bp-px" type="number" step="0.0001" value="${px > 0 ? px : ''}"/></div>
+        <p class="inline-note" id="bp-preview" style="margin-top:6px"></p>
+        <div class="row" style="margin-top:12px;flex-wrap:wrap">
+          <button class="btn" id="bp-ok" style="flex:0 0 auto">记为当日买入</button>
+          <button class="btn secondary" id="bp-skip" style="flex:0 0 auto">不是买入，只是估值修正</button>
+          <button class="btn secondary" id="bp-cancel" style="flex:0 0 auto">取消</button>
+        </div>
+        <p class="inline-note" style="margin-top:8px">此处只修正<strong>当日盈亏口径</strong>，不会自动从现金账户扣款——钱从组合内哪个账户出的，请自行调整该账户金额；
+          若希望买入自动结算现金，改用「持仓」页改持股数。</p>
+      </div></div>`);
+    const preview = () => {
+      const v = num(ov.querySelector('#bp-px').value);
+      const el2 = ov.querySelector('#bp-preview');
+      if (!(v > 0) || !(px > 0)) { el2.textContent = ''; return; }
+      const gain = o.addedShares * (px - v);
+      el2.innerHTML = `按此价买入，这部分今日盈亏 = ${(+o.addedShares).toFixed(2)} × (现价 ${px} − 成交 ${v}) = <strong style="color:${gain >= 0 ? 'var(--green-ink)' : 'var(--red-ink)'}">${gain >= 0 ? '+' : ''}${fmtOrig(gain, o.ccy)}</strong>`;
+    };
+    ov.querySelector('#bp-px').oninput = preview; preview();
+    const done = v => { ov.remove(); resolve(v); };
+    ov.querySelector('#bp-ok').onclick = () => {
+      const v = num(ov.querySelector('#bp-px').value);
+      if (!(v > 0)) { alert('请填写大于 0 的成交价'); return; }
+      done({ price: v });
+    };
+    ov.querySelector('#bp-skip').onclick = () => done({ skip: true });
+    ov.querySelector('#bp-cancel').onclick = () => done(null);
+    ov.addEventListener('click', e => { if (e.target === ov) done(null); });
+    document.body.appendChild(ov);
+  });
+}
 // 把一笔现金按选择结果落账（原币）。返回落账去向名，未落账返回 null
 function creditCash(dest, amtOrig, ccy, note) {
   if (!dest || dest.mode === 'none') return null;
@@ -7264,6 +7306,10 @@ VIEWS.portfolio = function (app) {
     // 赎回检测：编辑理财/存款且金额减少 → 保存后提示把这笔钱结转进现金池，防"钱凭空消失"
     const oldAsset = editId ? STATE.assets.find(x => x.id === editId) : null;
     const oldAmount = oldAsset ? num(oldAsset.amount) : 0;
+    const oldShares = oldAsset ? num(oldAsset.shares) : 0;
+    // 改金额会连带改持股数（下面按现价校准），必须先记下当日开盘持股，
+    // 否则「今日」列会把今天才买的那部分也按昨收→现价的全天涨幅计。
+    if (oldAsset && Math.abs(amount - oldAmount) > 0.005) captureSod(oldAsset);
     const asset = {
       id: editId || uid(), name, code: $a('#af-code').value.trim(),
       platform: $a('#af-platform').value.trim(), category: cat, currency: cur,
@@ -7319,6 +7365,28 @@ VIEWS.portfolio = function (app) {
       });
       creditCash(dest, redeemed, cur, name + (cat === '基金' ? ' 赎回(在途)' : ' 赎回'));
       if (dest && dest.mode === 'none') recordDailySnapshot();   // 选了不入账＝总资产真减少，覆盖今日快照
+    }
+    // 加仓结转：金额增加 → 问成交价，记一笔当日买入。不问的话，今天盘中才买的那部分
+    // 会被按「昨收→现价」的全天涨幅计入今日盈亏——你没吃到的那段涨幅也算成了你的收益。
+    const BUY_BY_AMOUNT = ['基金', '黄金', 'A股股票', '美股股票'];
+    const oa2 = editId ? STATE.assets.find(x => x.id === editId) : null;
+    if (oa2 && BUY_BY_AMOUNT.indexOf(cat) >= 0 && amount - oldAmount > 1 && num(oa2.lastPx) > 0) {
+      const addedShares = num(oa2.shares) - oldShares;
+      if (addedShares > 0) {
+        const r = await askBuyPrice({
+          name, ccy: cur, lastPx: num(oa2.lastPx),
+          addedAmount: amount - oldAmount, addedShares,
+        });
+        if (r && r.price > 0) {
+          const cf = cur === 'USD' ? currentFx() : 1;
+          if (oa2.tradesDate !== todayStr() || !Array.isArray(oa2.todayTrades)) { oa2.todayTrades = []; oa2.tradesDate = todayStr(); }
+          oa2.todayTrades.push({ type: 'buy', shares: addedShares, price: r.price, prevShares: oldShares, prevPnl: oa2.pnl });
+          // 用户没手填浮盈亏时，把新买这条腿的浮盈亏并进来（成交价→现价）
+          if (pnlStr === '' && oa2.pnl != null) {
+            oa2.pnl = Math.round((num(oa2.pnl) + addedShares * (num(oa2.lastPx) - r.price) * cf) * 100) / 100;
+          }
+        }
+      }
     }
     saveState(); render();
   };
