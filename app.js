@@ -39,7 +39,8 @@ const FACTORS = [
   '半导体', '机器人', '创新药', '医疗器械', '银行',
   '证券保险', '黄金', '有色金属', '能源', '公用事业',
   '化工', '消费', '食品饮料', '新能源车', '光伏风电',
-  '军工', '地产', '农业', '其它'
+  '军工', '卫星航天', '通信运营', '交通运输', '建筑基建',
+  '数字资产', '地产', '农业', '其它'
 ];
 
 // 按名称粗分类底层因子（中英双语，兼容美股/ETF 英文名），避免用户手选默认而错标。
@@ -47,6 +48,10 @@ const FACTORS = [
 function guessFactor(name) {
   const s = String(name || '');
   const rules = [
+    // 数字资产要排在最前：Coinbase 原先被「科技互联网」吃掉，MicroStrategy 直接落「其它」
+    [/比特币|以太坊|加密|数字货币|区块链|Bitcoin|Ethereum|Crypto|Blockchain|Coinbase|MicroStrategy|MSTR|\bBTC\b|\bETH\b/i, '数字资产'],
+    // 卫星/航天商业化要排在军工之前：SpaceX/星链/低轨卫星的驱动力是通信商业化，不是国防订单
+    [/卫星|星链|星网|低轨|北斗|遥感|SpaceX|Space\s*X|Starlink|Rocket\s*Lab|铱星|Iridium|SpaceMobile|中国卫通/i, '卫星航天'],
     [/银行|Bank|JPMorgan|Goldman|Morgan\s*Stanley|Citi|Wells\s*Fargo|Berkshire/i, '银行'],
     [/证券|券商|保险|Securit|Insuranc|Broker|Visa|Mastercard|PayPal/i, '证券保险'],
     [/黄金|金矿|金业|山东黄金|中金黄金|招金|赤峰|白银|Gold|Silver|Barrick|Newmont/i, '黄金'],
@@ -60,16 +65,26 @@ function guessFactor(name) {
     [/医药|生物|制药|医疗|药业|创新药|疫苗|药明|恒瑞|百济|CXO|Biotech|Pharma|Bio\b|Health|Medical|Pfizer|Merck|Lilly|Moderna|Amgen/i, '创新药'],
     [/白酒|茅台|五粮液|泸州|食品|饮料|乳业|伊利|蒙牛|Food|Beverage|Staples|Coca|Pepsi|McDonald|Nike|Starbucks|星巴克/i, '食品饮料'],
     [/家电|美的|格力|海尔|零售|免税|消费|Consumer|Retail|Discretionary|Walmart|Costco|Home\s*Depot/i, '消费'],
-    [/军工|航空|航天|兵器|船舶|国防|导弹|Defense|Aerospace|Lockheed|Boeing|Raytheon/i, '军工'],
+    // 军工只留真国防：原规则里的裸「航空」会把南方航空/春秋航空这类航司误标成军工（实测确认）
+    [/军工|航天|航空工业|兵器|船舶|国防|导弹|中航|沈飞|成飞|航发|Defense|Aerospace|Lockheed|Boeing|Raytheon|Northrop/i, '军工'],
+    // 航司/航运/快递/铁路港口 —— 与国防无关的周期性交运
+    [/航空|航运|海运|货运|快递|物流|铁路|高铁|港口|机场|中远|顺丰|圆通|申通|韵达|国航|东航|南航|海航|吉祥航|Airline|Airways|Shipping|Freight|Logistic|\bUPS\b|FedEx|Delta\s*Air|United\s*Airlines|Southwest\s*Air/i, '交通运输'],
+    // 运营商/通信设备：现金流稳、高股息，属价值周期，与卫星互联网的成长逻辑区分开
+    [/中国移动|中国电信|中国联通|运营商|通信|光通信|光纤|宽带|基站|中兴通讯|\bZTE\b|Verizon|T-?Mobile|AT&T|Telecom|Telefon|Vodafone/i, '通信运营'],
+    [/建筑|建材|水泥|工程|基建|重工|机械|盾构|海螺|中国建筑|中国中铁|中国铁建|三一|徐工|中联重科|Construct|Caterpillar|Cement/i, '建筑基建'],
     [/地产|置业|万科|保利|招商蛇口|华润置地|Real\s*Estate|REIT|Property/i, '地产'],
-    [/化工|Chemical|Dow\b|DuPont/i, '化工'],
+    [/化工|化学|化纤|塑料|橡胶|Chemical|Dow\b|DuPont|BASF/i, '化工'],
     [/有色|铜|铝|钢|稀土|锌|铅|镍|Metal|Copper|Steel|Alumin|Freeport/i, '有色金属'],
-    [/煤|石油|石化|油气|燃气|能源|矿业|Energy|\bOil\b|\bGas\b|Coal|Mining|Exxon|Chevron|埃克森|雪佛龙|Mobil|Occidental|Conoco/i, '能源'],
-    [/电网|水电|核电|公用|Utilit/i, '公用事业'],
+    // Mobil 必须限定成 Exxon Mobil：裸 Mobil 会把 T-Mobile / AST SpaceMobile 误判成能源股（实测确认）
+    [/煤|石油|石化|油气|燃气|能源|矿业|Energy|\bOil\b|\bGas\b|Coal|Mining|Exxon|Chevron|埃克森|雪佛龙|Exxon\s*Mobil|Occidental|Conoco/i, '能源'],
+    // 传统电力运营商归公用事业：原先裸「电力」规则把长江电力/国投电力这类防御型水电
+    // 划进「AI电力」→ 科技成长组，与 AI 算力仓假设 0.72 相关，严重高估科技集中度（实测确认）
+    [/电网|水电|核电|公用|发电|华能|大唐|华电|国电|国投电力|长江电力|三峡|Utilit/i, '公用事业'],
     [/农业|养殖|种业|饲料|Agri|Farm/i, '农业'],
     [/传媒|游戏|影视|Media|Game|Entertain|Netflix|奈飞|Disney|迪士尼|Spotify/i, '传媒游戏'],
     [/算力|光模块|服务器|数据中心|CPO|GPU|人工智能|英伟达|NVIDIA|NVDA|Palantir|\bAI\b/i, 'AI算力'],
-    [/电力|Power/i, 'AI电力'],
+    // AI电力只保留「算力配套供电」这层含义；泛化的「电力/Power」已由上面的公用事业接住
+    [/AI\s*电力|算力电力|数据中心供电|储能|虚拟电厂|Vertiv|Constellation\s*Energy/i, 'AI电力'],
     [/软件|云计算|互联网|SaaS|平台|科技|Tech|Internet|Software|Cloud|Nasdaq|QQQ|Apple|苹果|Microsoft|微软|Google|Alphabet|谷歌|Amazon|亚马逊|Meta|Facebook|Oracle|甲骨文|Adobe|Salesforce|Alibaba|阿里|BABA|拼多多|\bPDD\b|京东|\bJD\b|携程|Trip|Uber|Airbnb|Coinbase|百度|Baidu/i, '科技互联网'],
   ];
   for (const [re, f] of rules) if (re.test(s)) return f;
@@ -182,6 +197,11 @@ const FACTOR_GROUPS = {
   '银行': '价值周期', '证券保险': '价值周期', '地产': '价值周期', '能源': '价值周期',
   '有色金属': '价值周期', '化工': '价值周期', '公用事业': '价值周期', '农业': '价值周期',
   '军工': '主题', '其它': '其它', '黄金': '避险', '债券': '避险', '混合': '其它',
+  // 卫星航天/数字资产按「实际同涨同跌」归到科技成长——它们的日常波动由风险偏好驱动，
+  // 而不是由发射进度或链上数据驱动，归到「主题」会低估与 AI 仓的相关性（0.32 vs 0.72）。
+  '卫星航天': '科技成长', '数字资产': '科技成长',
+  // 运营商/交运/基建是典型的价值周期资产：现金流稳、估值低、与利率和经济周期挂钩。
+  '通信运营': '价值周期', '交通运输': '价值周期', '建筑基建': '价值周期',
 };
 const GROUP_CORR = 0.72;   // 同一大组（如均属科技成长）默认相关
 const CROSS_CORR = 0.32;   // 跨组默认相关（A股系统性 beta 不低，同涨同跌常见）
@@ -6791,7 +6811,8 @@ VIEWS.attribution = function (app) {
    视图：压力测试 —— 极端情景下组合会亏多少（相对最大回撤承受线）
    ========================================================================= */
 // 科技成长因子组（预设情景用）
-const STRESS_TECH = ['AI算力', 'AI电力', 'AI应用', '科技互联网', '传媒游戏', '半导体', '机器人', '新能源车', '光伏风电'];
+// 卫星航天/数字资产同样是高 beta 成长资产，科技股杀估值时一起跌，纳入同一冲击组
+const STRESS_TECH = ['AI算力', 'AI电力', 'AI应用', '科技互联网', '传媒游戏', '半导体', '机器人', '新能源车', '光伏风电', '卫星航天', '数字资产'];
 // 当前组合的风险桶：每资产归入 cn(个股A股)/us(个股美股)/fund(基金)/gold(黄金)/safe(固收理财现金)
 function stressBuckets() {
   const fx = currentFx();
