@@ -264,6 +264,15 @@ button.btn.secondary {
 }
 button.btn.danger { background: linear-gradient(145deg, #ff453a, #d70015); box-shadow: 0 4px 12px rgba(255, 59, 48, 0.3); }
 button.btn.small { padding: 7px 13px; font-size: 12.5px; }
+/* 情景按钮：允许文字换行，防止长名称溢出重叠 */
+#preset-row button.btn {
+  white-space: normal; line-height: 1.35; text-align: left;
+  max-width: 100%; word-break: break-word;
+}
+@media (max-width: 600px) {
+  #preset-row { gap: 6px; }
+  #preset-row button.btn { font-size: 11.5px; padding: 6px 10px; }
+}
 button.btn:disabled { opacity: 0.5; cursor: not-allowed; }
 button.btn .spin { animation: spin 0.9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }

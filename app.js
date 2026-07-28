@@ -964,13 +964,20 @@ function corrHoldings() {
     if (!code || seen.has(code)) return;
     // 美股（含字母代码）作为个股弹性；场外基金作为压舱基金
     if (a.category === '美股股票' && isUsCode(code)) { extra.push({ code, name: a.name, category: '美股股票', role: 'stock', weight: wPct(a), factor: guessFactor(a.name) }); seen.add(code); }
-    else if (a.category === '基金' && /^\d{6}$/.test(code) && !isCashLikeAsset(a)) { extra.push({ code, name: a.name, category: '基金', role: 'fund', weight: wPct(a), factor: guessFactor(a.name) }); seen.add(code); }
+    else if ((a.category === '基金' || a.category === '债券') && /^\d{6}$/.test(code) && !isCashLikeAsset(a)) { extra.push({ code, name: a.name, category: a.category, role: a.category === '债券' ? 'bond' : 'fund', weight: wPct(a), factor: guessFactor(a.name) }); seen.add(code); }
   });
   return positions.concat(extra);
 }
-// 相关性解析器：有缓存则用实测相关，缺失的（场外基金）回退因子先验
+// 当前组合参与相关性分析的标的状态签名（代码+角色），用于判断缓存是否仍对应同一组合
+function corrSig() {
+  return corrHoldings().map(h => h.code + ':' + h.role).sort().join('|');
+}
+// 相关性解析器：有缓存则用实测相关，缺失的（场外基金）回退因子先验。
+// 关键：缓存记录的是「当时」的组合；一旦持仓增删导致签名变化，缓存即失效，
+// 回退到因子先验（始终基于当前组合），避免「真实相关性」停留在旧组合上不跟随变化。
 function corrResolver(cache) {
   if (!cache || !cache.matrix || !cache.index) return null;
+  if (cache._sig && cache._sig !== corrSig()) return null;
   return (a, b) => {
     const ia = cache.index[a.c], ib = cache.index[b.c];
     if (ia == null || ib == null) return factorCorr(a.f, b.f);
@@ -1078,6 +1085,7 @@ const SEED_POSITIONS = [
 // 此前所有基金都算权益，导致债券敞口被吞进股票篮子、组合看似“零债券”。
 function bigClassOf(cat, name) {
   if (cat === 'A股股票' || cat === '美股股票') return '权益';
+  if (cat === '债券') return '债券';
   if (cat === '基金') {
     const n = String(name || '');
     if (/债|债券|纯债|中短债|长债|信用债|利率债|转债/i.test(n)) return '债券';
@@ -1459,7 +1467,7 @@ function classRank(cat) {
   if (cat === '黄金') return 4;
   return 5;
 }
-const ASSET_CATEGORIES = ['A股股票', '美股股票', '基金', '理财(QDII)', '定期存款', '黄金', '人民币现金', '香港账户现金', '外汇'];
+const ASSET_CATEGORIES = ['A股股票', '美股股票', '基金', '债券', '理财(QDII)', '定期存款', '黄金', '人民币现金', '香港账户现金', '外汇'];
 
 // 收益：理财/存款 → 年化利息（美元按当日中间价折人民币）；其它 → 浮盈亏
 function assetIncome(a, fx) {
@@ -2321,7 +2329,9 @@ function renderRealCorrCard(app, positions) {
     const n = c.codes.length;
     // 缓存比当前可纳入的标的少（多半是旧版本算的、没含基金/美股）→ 提示重算，避免"看着还是6只"的误会
     const avail = corrHoldings().length;
+    const sigMismatch = c._sig && c._sig !== corrSig();
     const staleHint = (avail > n) ? `<div class="alert amber" style="margin-top:10px"><span class="icon">${icon('warn')}</span><div>下面是<strong>上次缓存</strong>的结果（${n} 个标的）。当前可纳入 <strong>${avail}</strong> 个（含基金/美股），点上方蓝色<strong>「拉取历史序列」</strong>重算即可纳入。</div></div>` : '';
+    const sigHint = sigMismatch ? `<div class="alert amber" style="margin-top:10px"><span class="icon">${icon('warn')}</span><div>组合已变动（新增/删除了标的），上方缓存是 <strong>${escapeHtml(c.date)}</strong> 算的旧组合结果，<strong>不再跟随当前持仓</strong>。点上方蓝色<strong>「拉取历史序列」</strong>重算，以反映当前真实相关性。</div></div>` : '';
     const roles = c.roles || c.codes.map(() => 'stock');
     const dot = i => roles[i] === 'fund' ? '<span title="压舱基金" style="color:var(--accent)">◆</span>' : '<span title="个股/美股弹性" style="color:var(--muted)">●</span>';
     const shortN = c.names.map(nm => (nm || '').slice(0, 4));
@@ -2346,6 +2356,7 @@ function renderRealCorrCard(app, positions) {
     out.innerHTML = `
       <p class="inline-note" style="margin-top:6px">数据日期 ${escapeHtml(c.date)} · 颜色越红＝相关性越高（同涨同跌）、越绿＝越低/负相关。</p>
       ${staleHint}
+      ${sigHint}
       ${failNote}
       <div class="table-scroll"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>
       ${anaHtml}
@@ -2372,6 +2383,7 @@ function renderRealCorrCard(app, positions) {
     btn.disabled = true; note.innerHTML = icon('refresh', 'spin') + ' 拉取历史序列中（个股日K + 基金净值），约 5–25 秒…';
     try {
       const c = await buildRealCorr(corrHoldings());
+      c._sig = corrSig();                       // 记录计算时的组合签名，组合变动后缓存自动失效
       STATE.corrCache = c; saveState();
       const nf = (c.roles || []).filter(r => r === 'fund').length, ns = (c.codes.length - nf);
       note.innerHTML = `${icon('check')} 已更新（个股/美股 ${ns} + 基金 ${nf}，数据日期 ${c.date}）`;
@@ -2717,7 +2729,7 @@ function assetFetchable(a) {
   if (!a) return false;
   if (a.category === '黄金') return true;               // 纸黄金按国际金价折人民币/克
   if (!a.code) return false;
-  if (a.category === '基金') return /^\d{6}$/.test(a.code);
+  if (a.category === '基金' || a.category === '债券') return /^\d{6}$/.test(a.code);  // 债券6位标准码（如国债ETF）也可自动拉净值
   if (a.category === 'A股股票' || a.category === '美股股票') return isUsCode(a.code) || /^\d{5,6}$/.test(a.code);
   return false;
 }
@@ -2728,7 +2740,12 @@ async function refreshOneAsset(a, fx) {
   let px = null, dayPct = null, pxDateVal = lastTradingDayStr();
   if (a.category === '黄金') {
     const g = await fetchGold(fx); px = g.px; dayPct = g.dayPct;   // 金价（元/克）+ 当日涨跌
-  } else if (a.category === '基金') {
+  } else if (num(a.manualNav) > 0 && !assetFetchable(a)) {
+    // 手动单位净值：无公开接口的产品（如招银国际跨境理财通 81002），用用户填写的净值更新市值
+    px = num(a.manualNav);
+    const nd = String(a.manualNavDate || '').slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(nd)) pxDateVal = nd;
+  } else if (a.category === '基金' || (a.category === '债券' && /^\d{6}$/.test(a.code))) {
     const f = await fetchFund(a.code); px = f.nav; dayPct = f.dayPct;
     // 基金取到的多是 T-1 确认净值（QDII 更滞后）：pxDate 用净值日期而非今天，
     // 否则昨日净值涨跌会冒充「今日盈亏」
@@ -2763,7 +2780,7 @@ async function refreshOneAsset(a, fx) {
 
 async function refreshAllQuotes() {
   const fx = currentFx();
-  const targets = (STATE.assets || []).filter(assetFetchable);
+  const targets = (STATE.assets || []).filter(a => assetFetchable(a) || num(a.manualNav) > 0);
   let updated = 0, failed = 0, skipped = 0;
   for (const a of targets) {
     try { const ok = await refreshOneAsset(a, fx); if (ok) updated++; else skipped++; }
@@ -2864,7 +2881,7 @@ VIEWS.positions = function (app) {
   // —— 当日交易录入（精确当日盈亏）——
   {
     const tradeCard = el('<div class="card" style="margin-top:16px"><h3>' + icon('coins') + ' 当日交易 · 精确当日盈亏</h3></div>');
-    const tradables = (STATE.assets || []).filter(a => a.code && ['A股股票', '美股股票', '基金'].includes(a.category));
+    const tradables = (STATE.assets || []).filter(a => a.code && ['A股股票', '美股股票', '基金', '债券'].includes(a.category));
     if (!tradables.length) {
       tradeCard.appendChild(el('<p class="hint">在「投资组合」里有股票/ETF/基金后，这里可录入当日买入/卖出（带成交价）：按成交价精确算当日盈亏，并自动更新股数与现金池，比"直接改数量"更准。</p>'));
     } else {
@@ -3712,7 +3729,10 @@ function kellyCandidates() {
 
 // 判定持仓的风险角色：个股(凯利适用) / 配置型债券 / 配置型核心(宽基·低波·红利·货币) / 主题卫星
 function holdingRiskType(cand) {
-  if (!cand || cand.kind !== '基金') return 'stock';
+  if (!cand) return 'stock';
+  // 显式「债券」类别 → 直接返回 bond（不再依赖名称正则）
+  if (cand.category === '债券') return 'bond';
+  if (cand.kind !== '基金') return 'stock';
   const n = cand.name || '';
   // 纯债/固收基金独立为「债券」角色——此前被 core 正则里的 债券? 误并入宽基核心
   if (/债|债券|纯债|中短债|长债|信用债|利率债|转债/i.test(n)) return 'bond';
@@ -3846,6 +3866,7 @@ function layerOf(a) {
   if (cat === '定期存款') return usd ? 'oseas' : 'safe';   // 美元定存有汇率→海外固收；人民币定存→兜底
   if (cat === '人民币现金') return 'cash';
   if (cat === '香港账户现金') return 'cash';               // 美元现金：机动（币种敞口另算）
+  if (cat === '债券') return 'bond';                          // 显式标记的债券资产 → bond 层
   if (cat === '基金') {
     if (/标普|纳斯达克|纳指|美国|海外|全球|S&P|QDII/i.test(name)) return 'us';   // 美元海外基金
     // 纯债/固收基金：独立的「债券」层（此前被 债券? 误并入 ballast 低波股票层）
@@ -6826,6 +6847,7 @@ function stressBuckets() {
       factor = (p && p.factor) || guessFactor(a.name) || '其它';
       bucket = a.category === '美股股票' ? 'us' : 'cn';
     } else if (a.category === '基金') bucket = 'fund';
+    else if (a.category === '债券') bucket = 'bond';
     else if (bigClassOf(a.category, a.name) === '黄金') bucket = 'gold';
     rows.push({ name: a.name, code: a.code, cat: a.category, bucket, factor, usd: a.currency === 'USD', v });
   });
@@ -6844,6 +6866,7 @@ function shockOf(row, rules) {
     else if (kind === 'cnOther' && row.bucket === 'cn' && !(row.factor && STRESS_TECH.indexOf(row.factor) >= 0)) s += r.shock;
     else if (kind === 'us' && row.bucket === 'us') s += r.shock;
     else if (kind === 'fund' && row.bucket === 'fund') s += r.shock;
+    else if (kind === 'bond' && row.bucket === 'bond') s += r.shock;
     else if (kind === 'gold' && row.bucket === 'gold') s += r.shock;
     else if (kind === 'usd-fx' && row.usd) s += r.shock;   // 汇率冲击：美元资产的人民币折算损失
   });
@@ -6855,11 +6878,12 @@ const STRESS_PRESETS = [
   { name: '美股 −20%', rules: [{ scope: 'us', shock: -20 }] },
   { name: '黄金 −15%', rules: [{ scope: 'gold', shock: -15 }] },
   { name: '美元贬值 5%', rules: [{ scope: 'usd-fx', shock: -5 }] },
+  { name: '利率上行·债券 −8%（信用利差走阔）', rules: [{ scope: 'bond', shock: -8 }, { scope: 'fund', shock: -5 }] },
   { name: '全面危机：权益−35% 黄金+5%', rules: [{ scope: 'cn', shock: -35 }, { scope: 'us', shock: -35 }, { scope: 'fund', shock: -30 }, { scope: 'gold', shock: 5 }] },
 ];
 // 自定义情景可选的冲击对象
 const STRESS_SCOPES = [
-  ['cn', '全部 A股个股'], ['us', '全部 美股个股'], ['fund', '全部 基金'], ['gold', '黄金'], ['usd-fx', '美元资产（汇率）'],
+  ['cn', '全部 A股个股'], ['us', '全部 美股个股'], ['fund', '全部 基金'], ['bond', '债券（利率/信用）'], ['gold', '黄金'], ['usd-fx', '美元资产（汇率）'],
 ].concat(FACTORS.map(f => ['factor:' + f, '因子 · ' + f]));
 
 VIEWS.stress = function (app) {
@@ -7207,6 +7231,11 @@ VIEWS.portfolio = function (app) {
       <div class="field"><label>备注（可选）</label><input id="af-note"/></div>
     </div>
     <div class="grid grid-3">
+      <div class="field"><label>手动单位净值（无公开接口产品，可选）</label><input id="af-nav" type="number" step="0.0001" placeholder="如 111.0304"/></div>
+      <div class="field"><label>净值日期（可选）</label><input id="af-navdate" type="text" autocomplete="off" placeholder="如 2026-07-24"/></div>
+      <div class="field"><label></label><span class="inline-note" style="align-self:end;display:block">跨境理财通/银行理财等无公开净值的，填这里即可随净值更新市值；留空则金额保持不变。代码为 6 位的公募债基无需手填，会自动拉。</span></div>
+    </div>
+    <div class="grid grid-3">
       <div class="field"><label>累计已实现收益 ¥（赎回/卖出落袋，可选）</label><input id="af-rpnl" type="number" step="1" placeholder="如 326——历史赎回赚到手的部分"/></div>
     </div>
     <div class="row" style="flex-wrap:wrap"><button class="btn" id="af-add" style="flex:0 0 auto">${icon('plus')} 添加资产</button>
@@ -7229,6 +7258,8 @@ VIEWS.portfolio = function (app) {
     const rateStr = $a('#af-rate').value.trim();
     const pnlStr = $a('#af-pnl').value.trim();
     const rpnlStr = $a('#af-rpnl').value.trim();
+    const navStr = $a('#af-nav').value.trim();
+    const navDateStr = $a('#af-navdate').value.trim();
     const editId = $a('#af-edit').value;
     // 赎回检测：编辑理财/存款且金额减少 → 保存后提示把这笔钱结转进现金池，防"钱凭空消失"
     const oldAsset = editId ? STATE.assets.find(x => x.id === editId) : null;
@@ -7242,6 +7273,8 @@ VIEWS.portfolio = function (app) {
     if (rateStr !== '') asset.annualRate = num(rateStr) / 100;
     if (pnlStr !== '') asset.pnl = num(pnlStr);
     if (rpnlStr !== '') asset.realizedPnl = num(rpnlStr);
+    if (navStr !== '') asset.manualNav = num(navStr); else delete asset.manualNav;
+    if (navDateStr !== '') asset.manualNavDate = navDateStr; else delete asset.manualNavDate;
     logOp((editId ? '编辑资产：' : '新增资产：') + name);
     if (editId) {
       const i = STATE.assets.findIndex(x => x.id === editId);
@@ -7259,6 +7292,9 @@ VIEWS.portfolio = function (app) {
           if (!(implied > 0) || Math.abs(num(oa.amount) - implied) / implied > 0.001) {
             oa.shares = num(oa.amount) / num(oa.lastPx);
           }
+        } else if (num(oa.manualNav) > 0 && num(oa.amount) > 0) {
+          // 手动净值资产：改金额＝按手填净值补/减仓，同步校准份额（下次刷新用 份额×手填净值 重算市值）
+          oa.shares = num(oa.amount) / num(oa.manualNav);
         } else if (num(oa.amount) <= 0 && num(oa.shares) > 0) {
           // 金额清零=全部卖出/赎回：份额必须同步清零，否则下次刷新用旧份额×现价把金额"复活"
           oa.shares = 0;
@@ -7311,6 +7347,8 @@ VIEWS.portfolio = function (app) {
     $a('#af-code').value = a.code || '';
     $a('#af-platform').value = a.platform || '';
     $a('#af-note').value = a.note || '';
+    $a('#af-nav').value = a.manualNav != null ? a.manualNav : '';
+    $a('#af-navdate').value = a.manualNavDate || '';
     $a('#af-edit').value = a.id;
     $a('#af-add').innerHTML = icon('check') + ' 保存修改';
     mgmt.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -7814,6 +7852,17 @@ function macroSignals() {
   }
   const cpiCN = g('cnCPI');
   if (cpiCN != null && cpiCN < 0.5) out.push({ t: 'amber', tag: '中国通缩压力', msg: `中国 CPI 偏低（${cpiCN}%）：通缩压力、实际利率偏高，压制顺周期、利好债与红利；也倒逼政策进一步宽松。` });
+  // —— 债券相关（引入国内/海外债后需要宏观对照）——
+  const cn10 = g('cn10');
+  if (cn10 != null) {
+    if (cn10 < 2.0) out.push({ t: 'blue', tag: '中债利率低位', msg: `中债10年收益率 ${cn10}% 处于低位：利率下行利好你的国内债基/理财底仓与红利股估值；但再下行空间有限，长债久期风险累积。` });
+    else if (cn10 > 3.0) out.push({ t: 'amber', tag: '中债利率偏高', msg: `中债10年收益率 ${cn10}% 偏高：新买入债基票息更有吸引力，存量长债价格承压；国内债可作为组合压舱。` });
+  }
+  // 国内债配置缺口（币种错配视角）：海外债超配、国内债不足时提示
+  const fx = currentFx(), tot = portfolioTotal();
+  const domBond = (STATE.assets || []).filter(a => a.category === '债券' && a.currency !== 'USD').reduce((s, a) => s + assetCny(a, fx), 0);
+  const domBondPct = tot > 0 ? domBond / tot * 100 : 0;
+  if (domBondPct < 5) out.push({ t: 'info', tag: '国内债偏低', msg: `国内债（人民币纯债）占组合约 ${domBondPct.toFixed(1)}%，低于 5%：你当前债券敞口集中在美元（汇率+美债利率风险），本币避险主仓缺失。利率下行周期里国内债基能提供「债涨+对冲 A 股回撤」这条腿，建议在再平衡目标盘里补国内债层。` });
   const cpiUS = g('usCPI');
   if (cpiUS != null && cpiUS >= 3) out.push({ t: 'amber', tag: '美通胀偏高', msg: `美国通胀仍偏高（CPI ${cpiUS}%）：美联储降息受限，短期压制估值与黄金。` });
   const pmiCN = g('cnPMI');
@@ -7996,6 +8045,8 @@ async function autoPullFlow() {
   const diag = [];
   const flow = { date: todayStr(), sectors: null, south: null, margin: null, diag };
   // 1 行业板块主力资金（push2 clist，fid=f62 今日主力净额降序；带5日/10日字段）
+  //    主源：push2.eastmoney.com（数据最全：今日/5日/10日 + 净占比）
+  //    备源：新浪行业资金流 sinasectorflow（push2 被封/502 时自动降级，仅当日净额）
   try {
     const q = 'fid=f62&po=1&pz=100&pn=1&np=1&fltt=2&invt=2&fs=' + encodeURIComponent('m:90+t:2')
       + '&fields=' + encodeURIComponent('f12,f14,f62,f164,f174,f184');
@@ -8009,7 +8060,30 @@ async function autoPullFlow() {
         .map(x => ({ name: String(x.f14 || ''), today: x.f62 / 1e8, d5: (typeof x.f164 === 'number' ? x.f164 : 0) / 1e8, d10: (typeof x.f174 === 'number' ? x.f174 : 0) / 1e8 }))
         .filter(x => x.name);
       diag.push({ label: '行业主力资金(push2)', ok: true, raw: arr.length + ' 个板块，Top1 ' + flow.sectors[0].name + ' ' + flow.sectors[0].today.toFixed(1) + '亿' });
-    } else diag.push({ label: '行业主力资金(push2)', ok: false, raw: 'HTTP ' + r.status + ' ' + txt.slice(0, 160) });
+    } else {
+      // push2 失败（502/被封/空数据）→ 自动降级到新浪行业资金流备源
+      diag.push({ label: '行业主力资金(push2)', ok: false, raw: 'HTTP ' + r.status + '（已降级至新浪备源）' });
+      try {
+        const sr = await fetch('/api/sinasectorflow', { cache: 'no-store' });
+        const stxt = await sr.text();
+        let sj = null; try { sj = JSON.parse(stxt); } catch (e2) {}
+        // 新浪行业资金流返回数组：每项 { name, net_in(万), ... }，按 net_in 降序
+        if (Array.isArray(sj) && sj.length > 5) {
+          flow.sectors = sj.filter(x => x.name && typeof x.net_in === 'number' && isFinite(x.net_in))
+            .map(x => ({ name: String(x.name), today: x.net_in / 1e4,   // 万→亿
+              d5: 0, d10: 0 }))                                   // 新浪无5日/10日
+            .filter(x => x.name);
+          if (flow.sectors.length > 0)
+            diag.push({ label: '行业主力资金(新浪备源)', ok: true, raw: flow.sectors.length + ' 个板块，Top1 ' + flow.sectors[0].name + ' ' + flow.sectors[0].today.toFixed(1) + '亿（注：仅当日数据，无5日/10日累计）' });
+          else
+            diag.push({ label: '行业主力资金(新浪备源)', ok: false, raw: '解析后有效数据为空' });
+        } else {
+          diag.push({ label: '行业主力资金(新浪备源)', ok: false, raw: 'HTTP ' + sr.status + ' ' + stxt.slice(0, 120) });
+        }
+      } catch (e2) {
+        diag.push({ label: '行业主力资金(新浪备源)', ok: false, raw: e2.message });
+      }
+    }
   } catch (e) { diag.push({ label: '行业主力资金(push2)', ok: false, raw: e.message }); }
   // 2 南向资金（datacenter 沪深港通历史：003=港股通沪 004=港股通深，取最新交易日净买额，亿元）
   try {
