@@ -1669,6 +1669,30 @@ function logOp(label) {
     localStorage.setItem(OPLOG_KEY, JSON.stringify(log));
   } catch (e) { console.warn('修改日志写入失败（不影响操作）', e); }
 }
+// 两份资产副本的逐笔差异（用于「这笔钱哪来的」溯源）。返回 {rows, dTotal}
+// rows: [{name, before, after, delta, kind:'add'|'del'|'chg'}]，按变动绝对值降序
+function diffAssets(before, after) {
+  const key = a => a.id || a.code || a.name;
+  const mB = new Map((before || []).map(a => [key(a), a]));
+  const mA = new Map((after || []).map(a => [key(a), a]));
+  const fx = currentFx();
+  const rows = [];
+  let dTotal = 0;
+  const seen = new Set();
+  const push = (k, b, a) => {
+    if (seen.has(k)) return; seen.add(k);
+    const vb = b ? assetCny(b, fx) : 0, va = a ? assetCny(a, fx) : 0;
+    const d = va - vb;
+    if (Math.abs(d) < 0.5) return;
+    dTotal += d;
+    rows.push({ name: (a || b).name, cat: (a || b).category || '',
+      before: vb, after: va, delta: d, kind: !b ? 'add' : !a ? 'del' : 'chg' });
+  };
+  mB.forEach((b, k) => push(k, b, mA.get(k)));
+  mA.forEach((a, k) => push(k, mB.get(k), a));
+  rows.sort((x, y) => Math.abs(y.delta) - Math.abs(x.delta));
+  return { rows, dTotal };
+}
 function restoreOp(entry) {
   if (!entry) return false;
   STATE.assets = JSON.parse(JSON.stringify(entry.assets || []));
@@ -5773,13 +5797,35 @@ VIEWS.settings = function (app) {
     .map(sn => ({ kind: 'snap', ts: new Date(sn.date + 'T23:59:59').getTime(), label: '每日快照 ' + sn.date, nA: sn.assets.length, nP: (sn.positions || []).length, ref: sn.date }))
     .sort((a, b) => b.ts - a.ts).slice(0, 21);            // 最近3周的快照点，更早的用「数据管理→恢复到该日」
   const points = opPoints.concat(snapPoints).sort((a, b) => b.ts - a.ts);
+  // 「这笔钱哪来的」溯源：oplog[i] 存的是第 i 次操作【之前】的副本，
+  // 所以第 i 次操作造成的变化 = (更新的那份) − oplog[i]。最新一条的「之后」就是当前状态。
+  const opEffect = (i) => {
+    const before = (oplog[i] || {}).assets || [];
+    const after = i === 0 ? (STATE.assets || []) : ((oplog[i - 1] || {}).assets || []);
+    return diffAssets(before, after);
+  };
+  const effectHtml = (p) => {
+    if (p.kind !== 'op') return '<span class="inline-note">快照还原点（不逐笔比对）</span>';
+    const { rows, dTotal } = opEffect(p.ref);
+    if (!rows.length) return '<span class="inline-note">这次操作没有改变任何资产金额</span>';
+    const consistent = Math.abs(dTotal) < 1;
+    return `<div style="font-size:12.5px">
+      <div style="margin-bottom:4px">总资产变化 <strong style="color:${consistent ? 'var(--muted)' : (dTotal >= 0 ? 'var(--green-ink)' : 'var(--red-ink)')}">${dTotal >= 0 ? '+' : ''}${fmtMoney(dTotal)}</strong>
+        ${consistent ? '<span class="pill green">守恒（账户间搬钱）</span>' : '<span class="pill red">总资产被改变了</span>'}</div>
+      ${rows.map(r => `<div style="display:flex;justify-content:space-between;gap:10px;padding:2px 0">
+        <span>${r.kind === 'add' ? '<span class="pill green">新增</span> ' : r.kind === 'del' ? '<span class="pill red">删除</span> ' : ''}${escapeHtml(r.name)}</span>
+        <span class="num" style="white-space:nowrap;color:${r.delta >= 0 ? 'var(--green-ink)' : 'var(--red-ink)'}">${fmtMoney(r.before)} → ${fmtMoney(r.after)}（${r.delta >= 0 ? '+' : ''}${fmtMoney(r.delta)}）</span>
+      </div>`).join('')}</div>`;
+  };
   const logCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('book')} 修改日志 · 一键还原</h3>
     <p class="hint">每次<strong>增删改资产/持仓、赎回记账、出入金、导入/清空</strong>前，系统自动留存当时的资产+持仓+出入金副本（本设备保存最近 30 条）。更早的历史（日志功能上线前）以<strong>每日快照</strong>形式提供——一天一个还原点。误删或录错 → 点「还原」。还原只覆盖资产/持仓${''}（操作级还原另含出入金），不动设置、快照历史与评估缓存；还原本身也会先留底，可再次反悔。</p>
     ${points.length ? `<div class="table-scroll"><table class="stack-mobile">
       <thead><tr><th>时间</th><th>还原点</th><th class="num">当时资产/持仓数</th><th></th></tr></thead>
       <tbody>${points.map((p, i) => `<tr>
         <td style="white-space:nowrap">${p.kind === 'snap' ? escapeHtml(String(p.ref)) : fmtTs(p.ts)}</td>
-        <td>${p.kind === 'snap' ? '<span class="pill gray">快照</span> ' : '<span class="pill green">操作</span> '}${escapeHtml(p.label)}</td>
+        <td>${p.kind === 'snap' ? '<span class="pill gray">快照</span> ' : '<span class="pill green">操作</span> '}${escapeHtml(p.label)}
+          ${p.kind === 'op' ? `<details style="margin-top:4px"><summary style="cursor:pointer;font-size:12px;color:var(--accent-ink)">这次改了什么</summary>
+            <div style="margin-top:6px">${effectHtml(p)}</div></details>` : ''}</td>
         <td class="num">${p.nA} / ${p.nP}</td>
         <td class="num"><button class="btn secondary small" data-oprestore="${i}">还原到此${p.kind === 'snap' ? '日' : '前'}</button></td>
       </tr>`).join('')}</tbody></table></div>`
@@ -7370,7 +7416,9 @@ VIEWS.portfolio = function (app) {
         subtitle: `「${escapeHtml(name)}」金额减少了 <strong>${fmtOrig(redeemed, cur)}</strong>（赎回/卖出）。这笔钱要记到下面这个账户，总资产才守恒。`,
         footnote: `基金/理财赎回一般回到<strong>银行活期或存款</strong>，不是股票现金池——按实际到账账户选。${inTransit}`,
       });
-      creditCash(dest, redeemed, cur, name + (cat === '基金' ? ' 赎回(在途)' : ' 赎回'), editId);
+      const toName = creditCash(dest, redeemed, cur, name + (cat === '基金' ? ' 赎回(在途)' : ' 赎回'), editId);
+      // 留痕：转入哪个账户必须写进日志，否则收款方金额变了却查不出是谁转进来的
+      logOp(`赎回记账：${name} −${fmtOrig(redeemed, cur)} → ${toName || '未入账（钱已转出组合）'}`);
       if (dest && dest.mode === 'none') recordDailySnapshot();   // 选了不入账＝总资产真减少，覆盖今日快照
     }
     // 加仓结转：金额增加 → 问成交价，记一笔当日买入。不问的话，今天盘中才买的那部分
