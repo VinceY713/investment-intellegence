@@ -1172,16 +1172,20 @@ function settleToPool(deltaOrig, ccy = 'CNY', note = '') {
 }
 // 该币种下可以当「钱」接收赎回款的账户（活期/存款/理财/货基）。基金赎回回到的是银行活期，
 // 不是股票现金池——把选择权交给用户，只把上次选的记下来做默认值。
-function cashDestChoices(ccy) {
+// excludeId：赎回的来源资产必须排除。理财/定存本身也是「存款类」，会出现在自己的候选列表里，
+// 选中后赎回款原路加回来，净效果＝把你刚调小的金额又加回去（135000 → 270190 那类"凭空翻倍"）。
+function cashDestChoices(ccy, excludeId) {
   return (STATE.assets || []).filter(a => (a.currency || 'CNY') === (ccy || 'CNY')
     && !a.autoPool
+    && !(excludeId && a.id === excludeId)
     && (/现金|理财|存款/.test(a.category || '') || /现金|活期|余额|零钱|货基|存款/.test(a.name || '')));
 }
 // 资金去向选择弹窗。resolve：{mode:'asset',id} / {mode:'pool'} / {mode:'none'}（不入账）/ null（关闭）
 function pickCashDestination(o) {
   return new Promise(resolve => {
     const ccy = o.ccy || 'CNY';
-    const choices = cashDestChoices(ccy);
+    const choices = cashDestChoices(ccy, o.excludeId);
+    // 记住的默认值也要过滤：上次选的账户可能正是这次的来源资产
     const remembered = ((STATE.redeemDest || {})[ccy]) || '';
     const has = id => choices.some(a => a.id === id) || id === '__pool__';
     const def = has(remembered) ? remembered : (choices[0] ? choices[0].id : '__pool__');
@@ -1255,9 +1259,11 @@ function askBuyPrice(o) {
   });
 }
 // 把一笔现金按选择结果落账（原币）。返回落账去向名，未落账返回 null
-function creditCash(dest, amtOrig, ccy, note) {
+function creditCash(dest, amtOrig, ccy, note, srcId) {
   if (!dest || dest.mode === 'none') return null;
   if (dest.mode === 'pool') { settleToPool(amtOrig, ccy, note); return poolName(ccy); }
+  // 兜底：来源＝去向时原路加回，等于这笔赎回没发生，还会让金额看起来凭空翻倍。宁可入池，也不能加回自己。
+  if (srcId && dest.id === srcId) { settleToPool(amtOrig, ccy, note); return poolName(ccy); }
   const a = (STATE.assets || []).find(x => x.id === dest.id);
   if (!a) { settleToPool(amtOrig, ccy, note); return poolName(ccy); }
   a.amount = Math.round((num(a.amount) + amtOrig) * 100) / 100;
@@ -7359,11 +7365,12 @@ VIEWS.portfolio = function (app) {
         : '';
       const dest = await pickCashDestination({
         ccy: cur,
+        excludeId: editId,                 // 不能转回自己——否则等于把刚调小的金额加回去
         title: '赎回款转入哪个账户？',
         subtitle: `「${escapeHtml(name)}」金额减少了 <strong>${fmtOrig(redeemed, cur)}</strong>（赎回/卖出）。这笔钱要记到下面这个账户，总资产才守恒。`,
         footnote: `基金/理财赎回一般回到<strong>银行活期或存款</strong>，不是股票现金池——按实际到账账户选。${inTransit}`,
       });
-      creditCash(dest, redeemed, cur, name + (cat === '基金' ? ' 赎回(在途)' : ' 赎回'));
+      creditCash(dest, redeemed, cur, name + (cat === '基金' ? ' 赎回(在途)' : ' 赎回'), editId);
       if (dest && dest.mode === 'none') recordDailySnapshot();   // 选了不入账＝总资产真减少，覆盖今日快照
     }
     // 加仓结转：金额增加 → 问成交价，记一笔当日买入。不问的话，今天盘中才买的那部分
