@@ -7317,7 +7317,9 @@ VIEWS.portfolio = function (app) {
     <div class="grid grid-3">
       <div class="field"><label>金额（原币） <span class="req">*</span></label><input id="af-amount" type="number" step="0.01" placeholder="按币种填原币金额"/></div>
       <div class="field"><label>年利率 %（理财/存款，留空自动）</label><input id="af-rate" type="number" step="0.01" placeholder="美元自动3%/人民币按实际"/></div>
-      <div class="field"><label>浮盈亏 ¥（股票/基金/黄金，可选）</label><input id="af-pnl" type="number" step="1" placeholder="如 -44636"/></div>
+      <div class="field"><label><span id="af-pnl-lab">浮盈亏 ¥</span>（股票/基金/黄金，可选）</label>
+        <input id="af-pnl" type="number" step="0.01" placeholder="如 -44636"/>
+        <span class="inline-note" id="af-pnl-hint"></span></div>
     </div>
     <div class="grid grid-3">
       <div class="field"><label>代码（可选）</label><input id="af-code" placeholder="如 002518"/></div>
@@ -7330,7 +7332,9 @@ VIEWS.portfolio = function (app) {
       <div class="field"><label></label><span class="inline-note" style="align-self:end;display:block">跨境理财通/银行理财等无公开净值的，填这里即可随净值更新市值；留空则金额保持不变。代码为 6 位的公募债基无需手填，会自动拉。</span></div>
     </div>
     <div class="grid grid-3">
-      <div class="field"><label>累计已实现收益 ¥（赎回/卖出落袋，可选）</label><input id="af-rpnl" type="number" step="1" placeholder="如 326——历史赎回赚到手的部分"/></div>
+      <div class="field"><label><span id="af-rpnl-lab">累计已实现收益 ¥</span>（赎回/卖出落袋，可选）</label>
+        <input id="af-rpnl" type="number" step="0.01" placeholder="如 326——历史赎回赚到手的部分"/>
+        <span class="inline-note" id="af-rpnl-hint"></span></div>
     </div>
     <div class="row" style="flex-wrap:wrap"><button class="btn" id="af-add" style="flex:0 0 auto">${icon('plus')} 添加资产</button>
       <button class="btn secondary" id="af-fx" style="flex:0 0 auto">${icon('refresh')} 换汇（美元 ↔ 人民币）</button></div>
@@ -7342,6 +7346,22 @@ VIEWS.portfolio = function (app) {
   app.appendChild(mgmt);
   const $a = sel => mgmt.querySelector(sel);
   $a('#af-fx').onclick = () => showFxExchangeModal();
+  // 浮盈亏/已实现收益按所选币种标注，并实时显示折合人民币——美股照券商填美元即可，不用自己换算
+  function syncPnlCurLabel() {
+    const c = $a('#af-cur').value, isUsd = c === 'USD', fxr = currentFx();
+    $a('#af-pnl-lab').textContent = isUsd ? '浮盈亏 $（美元）' : '浮盈亏 ¥';
+    $a('#af-rpnl-lab').textContent = isUsd ? '累计已实现收益 $（美元）' : '累计已实现收益 ¥';
+    const hint = (inp, box) => {
+      const v = num($a(inp).value);
+      $a(box).textContent = (isUsd && $a(inp).value.trim() !== '' && isFinite(v))
+        ? `≈ ${fmtMoney(v * fxr)}（按汇率 ${fxr.toFixed(4)} 自动换算入账）` : '';
+    };
+    hint('#af-pnl', '#af-pnl-hint'); hint('#af-rpnl', '#af-rpnl-hint');
+  }
+  $a('#af-cur').addEventListener('change', syncPnlCurLabel);
+  $a('#af-pnl').addEventListener('input', syncPnlCurLabel);
+  $a('#af-rpnl').addEventListener('input', syncPnlCurLabel);
+  syncPnlCurLabel();
 
   $a('#af-add').onclick = async () => {
     const name = $a('#af-name').value.trim();
@@ -7369,8 +7389,11 @@ VIEWS.portfolio = function (app) {
       note: $a('#af-note').value.trim(),
     };
     if (rateStr !== '') asset.annualRate = num(rateStr) / 100;
-    if (pnlStr !== '') asset.pnl = num(pnlStr);
-    if (rpnlStr !== '') asset.realizedPnl = num(rpnlStr);
+    // 浮盈亏/已实现收益：表单按【该资产的币种】填（美股照券商填美元，不用自己换算），
+    // 内部一律存人民币——总览合计、归因、成本价反推都按人民币口径算。
+    const pnlFx = cur === 'USD' ? currentFx() : 1;
+    if (pnlStr !== '') asset.pnl = Math.round(num(pnlStr) * pnlFx * 100) / 100;
+    if (rpnlStr !== '') asset.realizedPnl = Math.round(num(rpnlStr) * pnlFx * 100) / 100;
     if (navStr !== '') asset.manualNav = num(navStr); else delete asset.manualNav;
     if (navDateStr !== '') asset.manualNavDate = navDateStr; else delete asset.manualNavDate;
     logOp((editId ? '编辑资产：' : '新增资产：') + name);
@@ -7465,8 +7488,10 @@ VIEWS.portfolio = function (app) {
     $a('#af-cur').value = a.currency || 'CNY';
     $a('#af-amount').value = a.amount != null ? a.amount : '';
     $a('#af-rate').value = a.annualRate != null ? (a.annualRate * 100) : '';
-    $a('#af-pnl').value = a.pnl != null ? a.pnl : '';
-    $a('#af-rpnl').value = a.realizedPnl != null ? a.realizedPnl : '';
+    // 存的是人民币，回填时按该资产币种换回原币显示（美股显示美元，与券商一致）
+    const efx = a.currency === 'USD' ? currentFx() : 1;
+    $a('#af-pnl').value = a.pnl != null ? Math.round(num(a.pnl) / efx * 100) / 100 : '';
+    $a('#af-rpnl').value = a.realizedPnl != null ? Math.round(num(a.realizedPnl) / efx * 100) / 100 : '';
     $a('#af-code').value = a.code || '';
     $a('#af-platform').value = a.platform || '';
     $a('#af-note').value = a.note || '';
@@ -7474,6 +7499,7 @@ VIEWS.portfolio = function (app) {
     $a('#af-navdate').value = a.manualNavDate || '';
     $a('#af-edit').value = a.id;
     $a('#af-add').innerHTML = icon('check') + ' 保存修改';
+    syncPnlCurLabel();
     mgmt.scrollIntoView({ behavior: 'smooth', block: 'center' });
   });
 
