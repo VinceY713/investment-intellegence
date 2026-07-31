@@ -4787,6 +4787,9 @@ const SCORE_ANCHORS = {
   senti: ['资金面', '8-10 主力持续净流入+机构上调评级｜5-7 资金流向不明+评级稳定｜0-4 主力持续流出+机构下调'],
   rs: ['行业/相对强弱', '相对基准(A股比沪深300/美股比标普500)的超额收益：8-10 60日与120日均大幅领先且仍在走强｜5-7 与大盘同步｜0-4 持续跑输且相对走弱。注：这是市场对赛道的定价，不等于行业基本面景气度'],
 };
+// 建卡页重绘后要自动选中的标的（如刚加入的观察标的）。render() 会重建整个视图，
+// 下拉框默认回到空选项——不带着这个值走一趟，用户加完观察标的后点任何按钮都是「请先选择标的」。
+let THESIS_PICK_AFTER_RENDER = '';
 VIEWS.thesis = function (app) {
   app.appendChild(el(`
     <div class="view-head">
@@ -5178,6 +5181,15 @@ VIEWS.thesis = function (app) {
     drawGates();
   }
   $f('#th-pick').onchange = e => loadThesis(e.target.value);
+  // 刚加入的观察标的自动选中并载入表单，让「自动评四维 / AI 起草 / 保存」立刻可用
+  if (THESIS_PICK_AFTER_RENDER) {
+    const want = THESIS_PICK_AFTER_RENDER; THESIS_PICK_AFTER_RENDER = '';
+    if (cands.some(x => thesisKeyOf(x) === want)) {
+      $f('#th-pick').value = want;
+      loadThesis(want);
+      formCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }
 
   // 加观察标的：用真实行情校验代码（A股 5–6 位数字 / 美股字母代码），拿回名称与现价
   $f('#th-watch-add').onclick = async () => {
@@ -5202,6 +5214,7 @@ VIEWS.thesis = function (app) {
         entry: +num(q.price).toFixed(4), target: null, stop: null,
         months: 12, scores: {}, conf: '中', date: todayStr(),
       };
+      THESIS_PICK_AFTER_RENDER = code;      // 重绘后自动选中它
       saveState(); render();
     } catch (e) {
       note.innerHTML = `<span style="color:var(--red-ink)">校验失败：${escapeHtml(e.message)}</span>`;
