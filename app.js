@@ -1233,7 +1233,9 @@ function applySellToPool(posId, amtCny) {
     const amtOrig = a.currency === 'USD' ? amtCny / fx : amtCny;
     a.amount = Math.max(0, Math.round((num(a.amount) - amtOrig) * 100) / 100);
     if (num(a.shares) > 0) { captureSod(a); a.shares = Math.max(0, Math.round(a.shares * (1 - ratio) * 100) / 100); }
-    if (a.pnl != null) a.pnl = Math.round(a.pnl * (1 - ratio) * 100) / 100;   // 卖出部分的浮盈亏按比例结转
+    // pnl 为「累计盈亏」口径（用户手动维护基准 + 行情自动累加 Δ市值，见 refreshOneAsset）：
+    // 卖出时【不再按比例结转】——已实现盈亏已含在累计基准里，剩余仓位浮动由行情刷新自动跟踪。
+    // 若按旧逻辑 pnl×(1−ratio)，会把已实现亏损/盈利也按比例抹掉，累计数字随调仓失真。
     a.cny = Math.round(assetCny(a, fx));
   }
   if (p) {
@@ -1390,8 +1392,8 @@ function recordDayTrade(a, type, shares, price) {
     settleToPool(-(sh * pr), a.currency === 'USD' ? 'USD' : 'CNY', '买入' + a.name);
   } else {
     a.shares = Math.max(0, oldShares - sh);
-    const ratio = oldShares > 0 ? a.shares / oldShares : 0;
-    if (a.pnl != null) a.pnl = Math.round(num(a.pnl) * ratio * 100) / 100;
+    // 卖出【不】按比例结转 pnl（累计口径）：已实现已含在累计基准中，剩余浮动由行情自动跟踪。
+    // 撤销时也对称地不回滚 pnl（仅买入撤销恢复 prevPnl），见 undoDayTrade。
     // 现金池按【实际减少的股数】结转：超卖被钳到 0 时，多报的部分不入池（账实一致）
     const effSold = oldShares - num(a.shares);
     settleToPool(effSold * pr, a.currency === 'USD' ? 'USD' : 'CNY', '卖出' + a.name);
@@ -1413,7 +1415,8 @@ function undoDayTrade(a, idx) {
   // 卖出的现金池反向额按【实际成交】算（与记录时的 effSold 对称）：超卖钳到0的部分没入过池，撤销也不出池
   const effSh = t.type === 'sell' ? Math.max(0, num(t.prevShares) - num(a.shares)) : num(t.shares);
   a.shares = num(t.prevShares);
-  if (t.prevPnl !== undefined) a.pnl = t.prevPnl;
+  // 累计口径下卖出不改 pnl → 撤销卖出也不回滚；仅买入（pnl 曾按买入价差调整过）需恢复 prevPnl
+  if (t.type === 'buy' && t.prevPnl !== undefined) a.pnl = t.prevPnl;
   settleToPool(t.type === 'buy' ? (t.shares * t.price) : -(effSh * t.price),
     a.currency === 'USD' ? 'USD' : 'CNY', '撤销' + a.name);   // 反向
   const px = num(a.lastPx) > 0 ? num(a.lastPx) : num(t.price);
@@ -1449,7 +1452,7 @@ function classRank(cat) {
 }
 const ASSET_CATEGORIES = ['A股股票', '美股股票', '基金', '债券', '理财(QDII)', '定期存款', '黄金', '人民币现金', '香港账户现金', '外汇'];
 
-// 收益：理财/存款 → 年化利息（美元按当日中间价折人民币）；其它 → 浮盈亏
+// 收益：理财/存款 → 年化利息（美元按当日中间价折人民币）；其它 → 累计盈亏（含已卖出，行情自动跟踪）
 function assetIncome(a, fx) {
   fx = fx || currentFx();
   const rate = annualRateOf(a);
@@ -2703,7 +2706,7 @@ async function fetchGold(fx) {
 /* -------------------------------------------------------------------------
    一键刷新组合估值：公募基金走天天基金，股票/ETF/美股走行情源。
    份额模型：首次刷新用「金额 ÷ 现价/净值」反推份额并存下；之后价值 = 份额 × 最新价，
-   浮盈亏随价值等额变动（Δ浮盈亏 = Δ市值），避免多天重复计算。
+   累计盈亏随价值等额变动（Δ累计盈亏 = Δ市值，pnl 为用户手动维护的「累计基准」+ 自动跟踪），避免多天重复计算。
    ------------------------------------------------------------------------- */
 function assetFetchable(a) {
   if (!a) return false;
@@ -2824,7 +2827,8 @@ VIEWS.positions = function (app) {
   const form = el(`<div class="card"><h3>添加 / 编辑持仓</h3></div>`);
   form.appendChild(el(`
     <p class="hint">输入股票代码可自动获取名称与最新价；填「持股数量」后，占比按
-      <code class="formula">持股市值 ÷ 总资产</code> 自动计算，浮盈亏按成本价与现价自动算。
+      <code class="formula">持股市值 ÷ 总资产</code> 自动计算，参考盈亏按成本价与现价估算。
+      标的的「累计盈亏」（含已卖出）在「投资组合」资产里维护，行情自动跟踪。
       当前总资产 <strong>${fmtMoney(totalAssets)}</strong>（由「投资组合」明细自动汇总，随资产变动实时更新）。</p>
     <div class="grid grid-3">
       <div class="field"><label>代码（A股 / ETF / 美股）</label>
@@ -3028,7 +3032,9 @@ VIEWS.positions = function (app) {
         a.shares = shares;
         a.amount = Math.round(shares * px * 100) / 100;
         a.lastPx = px;
-        if (cost > 0) a.pnl = Math.round(shares * (px - cost) * (a.currency === 'USD' ? fx : 1) * 100) / 100;
+        // 累计盈亏口径：资产里已手动维护过 pnl（含已卖出）就绝不覆盖，否则调仓/编辑会把累计基准冲掉；
+        // 仅当资产从未有盈亏记录（pnl 为空）时，才用成本价初始化浮动盈亏作为起点。
+        if (a.pnl == null && cost > 0) a.pnl = Math.round(shares * (px - cost) * (a.currency === 'USD' ? fx : 1) * 100) / 100;
         a.cny = Math.round(assetCny(a, fx));
       } else if (!a && !editId && shares > 0 && px > 0) {
         const isUs = isUsCode(pos.code);
@@ -3084,16 +3090,25 @@ VIEWS.positions = function (app) {
     const totalWeight = STATE.positions.reduce((a, p) => a + num(p.weight), 0);
     const scroll = el('<div class="table-scroll"></div>');
     const totalValue = totalAssets > 0 ? totalWeight / 100 * totalAssets : 0;
+    let cumTotal = 0;
     const rows = STATE.positions.map(p => {
       const ddc = Calc.drawdownContribution(num(p.weight), num(p.maxDrop));
       const pnlColor = num(p.pnl) >= 0 ? 'var(--green)' : 'var(--red)';
       const value = totalAssets > 0 ? num(p.weight) / 100 * totalAssets : 0;
+      // 累计盈亏（金额，含已卖出）：从同代码资产取 pnl（用户手动维护基准 + 行情自动跟踪）
+      const linkedA = p.code ? (STATE.assets || []).find(a => a.code === p.code) : null;
+      const cumPnl = linkedA && linkedA.pnl != null ? num(linkedA.pnl) : null;
+      if (cumPnl != null) cumTotal += cumPnl;
+      const cumPnlCell = cumPnl != null
+        ? `<td class="num" style="color:${cumPnl >= 0 ? 'var(--green)' : 'var(--red)'}" title="累计盈亏（含已卖出；行情自动跟踪）">${cumPnl >= 0 ? '+' : ''}${fmtMoney(cumPnl)}</td>`
+        : '<td class="num" title="累计盈亏（含已卖出）">—</td>';
       return `<tr>
         <td>${escapeHtml(p.name)}${p.code?`<br><span class="inline-note">${escapeHtml(p.code)}</span>`:''}</td>
         <td><span class="tag-chip">${escapeHtml(p.factor)}</span></td>
         <td class="num">${fmtPct(num(p.weight),1)}</td>
         <td class="num">${value>0?fmtMoney(value):'—'}</td>
         <td class="num">${num(p.shares)>0?Math.round(num(p.shares)).toLocaleString():'—'}</td>
+        ${cumPnlCell}
         <td class="num" style="color:${pnlColor}">${num(p.pnl)>=0?'+':''}${fmtPct(num(p.pnl),1)}</td>
         <td>${escapeHtml(p.trend||'—')}</td>
         <td class="num">${fmtPct(num(p.maxDrop),0)}</td>
@@ -3107,14 +3122,16 @@ VIEWS.positions = function (app) {
     scroll.appendChild(el(`
       <table>
         <thead><tr>
-          <th>名称</th><th>因子</th><th class="num">占比</th><th class="num">金额</th><th class="num">持股数</th><th class="num">浮盈亏</th>
+          <th>名称</th><th>因子</th><th class="num">占比</th><th class="num">金额</th><th class="num">持股数</th><th class="num" title="累计盈亏 = 该标的从买入到现在的总盈亏（含已卖出；手动维护基准 + 行情自动跟踪）">累计盈亏</th><th class="num">浮盈亏</th>
           <th>趋势</th><th class="num">最大跌幅</th><th class="num" title="潜在下行风险 = 占比 × 最大跌幅，与当前盈亏无关，恒为正">回撤贡献(潜在)</th><th></th>
         </tr></thead>
         <tbody>${rows}
           <tr class="total-row">
             <td>合计</td><td></td><td class="num">${fmtPct(totalWeight,1)}</td>
             <td class="num">${totalValue>0?fmtMoney(totalValue):'—'}</td>
-            <td></td><td></td><td></td><td></td>
+            <td></td>
+            <td class="num" style="color:${cumTotal>=0?'var(--green)':'var(--red)'}">${cumTotal>=0?'+':''}${fmtMoney(cumTotal)}</td>
+            <td></td><td></td><td></td>
             <td class="num">${fmtPct(STATE.positions.reduce((a,p)=>a+Calc.drawdownContribution(num(p.weight),num(p.maxDrop)),0),2)}</td><td></td>
           </tr>
         </tbody>
@@ -7050,9 +7067,9 @@ VIEWS.portfolio = function (app) {
       <div class="stat"><div class="label">${icon('coins')} 年化利息(估)</div>
         <div class="value" style="color:var(--green-ink);font-size:22px">+${fmtMoney(interestTotal)}</div>
         <div class="sub">美元 3% · 人民币实际</div></div>
-      <div class="stat"><div class="label">股票/基金/黄金浮盈亏</div>
+      <div class="stat"><div class="label">股票/基金/黄金累计盈亏</div>
         <div class="value" style="color:${pnlTotal>=0?'var(--green-ink)':'var(--red-ink)'};font-size:22px">${pnlTotal>=0?'+':''}${fmtMoney(pnlTotal)}</div>
-        <div class="sub">有盈亏记录部分合计${realizedTotal !== 0 ? ` · 另累计已实现 ${realizedTotal>=0?'+':''}${fmtMoney(realizedTotal)}` : ''}</div></div>
+        <div class="sub">含已卖出部分 · 行情自动跟踪${realizedTotal !== 0 ? ` · 另累计已实现 ${realizedTotal>=0?'+':''}${fmtMoney(realizedTotal)}` : ''}</div></div>
     </div>
   `));
 
@@ -7202,13 +7219,14 @@ VIEWS.portfolio = function (app) {
     <div class="grid grid-3">
       <div class="field"><label>金额（原币） <span class="req">*</span></label><input id="af-amount" type="number" step="0.01" placeholder="按币种填原币金额"/></div>
       <div class="field"><label>年利率 %（理财/存款，留空自动）</label><input id="af-rate" type="number" step="0.01" placeholder="美元自动3%/人民币按实际"/></div>
-      <div class="field"><label>浮盈亏 ¥（股票/基金/黄金，可选）</label><input id="af-pnl" type="number" step="1" placeholder="如 -44636"/></div>
+      <div class="field"><label>累计盈亏 ¥（含已卖出；股票/基金/黄金，可选）</label><input id="af-pnl" type="number" step="1" placeholder="如 -44636"/></div>
     </div>
     <div class="grid grid-3">
       <div class="field"><label>代码（可选）</label><input id="af-code" placeholder="如 002518"/></div>
       <div class="field"><label>平台/账户（可选）</label><input id="af-platform" placeholder="如 招商银行 基金"/></div>
       <div class="field"><label>备注（可选）</label><input id="af-note"/></div>
     </div>
+    <p class="inline-note">「累计盈亏」= 该标的从买入到现在的总盈亏（含已卖出的已实现部分），可从券商持仓页直接抄；填好后 App 每天按行情自动跟踪浮动，卖出不再失真。</p>
     <div class="grid grid-3">
       <div class="field"><label>手动单位净值（无公开接口产品，可选）</label><input id="af-nav" type="number" step="0.0001" placeholder="如 111.0304"/></div>
       <div class="field"><label>净值日期（可选）</label><input id="af-navdate" type="text" autocomplete="off" placeholder="如 2026-07-24"/></div>
@@ -7393,7 +7411,7 @@ VIEWS.portfolio = function (app) {
 总资产：${fmtMoney(total)}（折合人民币）。大类配置：${bigLines}。
 可用现金(已排除锁定理财/定存)：${liqPct.toFixed(1)}%（现金下限 ${s.cashFloor}%）。美元敞口：${usdPct.toFixed(0)}%（人民币口径含汇率风险）。
 股票子组合：名义 ${nStocks} 只，相关性有效持仓数 ${corrEffN?corrEffN.toFixed(1):'—'}（${corrSrc}口径），最大因子「${maxFactor||'无'}」占弹性仓 ${(maxFactorW*100).toFixed(0)}%（该风险档上限 ${level.factor}%）；弹性仓回撤贡献 ${equityDD.toFixed(1)}%（承受线 ${s.maxDrawdown}%）。
-理财/存款利息约 ${fmtMoney(interestTotal)}（注：美元固收按 3% 假设估算、非实际数）；权益/黄金浮盈亏约 ${fmtMoney(pnlTotal)}（人民币口径）。主要持仓：${topHold}。
+理财/存款利息约 ${fmtMoney(interestTotal)}（注：美元固收按 3% 假设估算、非实际数）；权益/黄金累计盈亏约 ${fmtMoney(pnlTotal)}（人民币口径，含已卖出）。主要持仓：${topHold}。
 【工具已算出的客观健康分】${health.score}/100，逐项：${health.rows.map(r=>r[1]+(r[0]==='bad'?'⚠':r[0]==='warn'?'△':'✓')).join('、')}。
 【用户目标语境】期限：${s.profileHorizon||'未填'}；风险承受：${s.profileRisk||'未填'}；流动性：${lqTxt}；目标：${s.profileGoal||'未填'}。`;
 
