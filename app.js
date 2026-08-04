@@ -39,7 +39,8 @@ const FACTORS = [
   '半导体', '机器人', '创新药', '医疗器械', '银行',
   '证券保险', '黄金', '有色金属', '能源', '公用事业',
   '化工', '消费', '食品饮料', '新能源车', '光伏风电',
-  '军工', '地产', '农业', '其它'
+  '军工', '卫星航天', '通信运营', '交通运输', '建筑基建',
+  '数字资产', '地产', '农业', '其它'
 ];
 
 // 按名称粗分类底层因子（中英双语，兼容美股/ETF 英文名），避免用户手选默认而错标。
@@ -47,6 +48,10 @@ const FACTORS = [
 function guessFactor(name) {
   const s = String(name || '');
   const rules = [
+    // 数字资产要排在最前：Coinbase 原先被「科技互联网」吃掉，MicroStrategy 直接落「其它」
+    [/比特币|以太坊|加密|数字货币|区块链|Bitcoin|Ethereum|Crypto|Blockchain|Coinbase|MicroStrategy|MSTR|\bBTC\b|\bETH\b/i, '数字资产'],
+    // 卫星/航天商业化要排在军工之前：SpaceX/星链/低轨卫星的驱动力是通信商业化，不是国防订单
+    [/卫星|星链|星网|低轨|北斗|遥感|SpaceX|Space\s*X|Starlink|Rocket\s*Lab|铱星|Iridium|SpaceMobile|中国卫通/i, '卫星航天'],
     [/银行|Bank|JPMorgan|Goldman|Morgan\s*Stanley|Citi|Wells\s*Fargo|Berkshire/i, '银行'],
     [/证券|券商|保险|Securit|Insuranc|Broker|Visa|Mastercard|PayPal/i, '证券保险'],
     [/黄金|金矿|金业|山东黄金|中金黄金|招金|赤峰|白银|Gold|Silver|Barrick|Newmont/i, '黄金'],
@@ -60,16 +65,26 @@ function guessFactor(name) {
     [/医药|生物|制药|医疗|药业|创新药|疫苗|药明|恒瑞|百济|CXO|Biotech|Pharma|Bio\b|Health|Medical|Pfizer|Merck|Lilly|Moderna|Amgen/i, '创新药'],
     [/白酒|茅台|五粮液|泸州|食品|饮料|乳业|伊利|蒙牛|Food|Beverage|Staples|Coca|Pepsi|McDonald|Nike|Starbucks|星巴克/i, '食品饮料'],
     [/家电|美的|格力|海尔|零售|免税|消费|Consumer|Retail|Discretionary|Walmart|Costco|Home\s*Depot/i, '消费'],
-    [/军工|航空|航天|兵器|船舶|国防|导弹|Defense|Aerospace|Lockheed|Boeing|Raytheon/i, '军工'],
+    // 军工只留真国防：原规则里的裸「航空」会把南方航空/春秋航空这类航司误标成军工（实测确认）
+    [/军工|航天|航空工业|兵器|船舶|国防|导弹|中航|沈飞|成飞|航发|Defense|Aerospace|Lockheed|Boeing|Raytheon|Northrop/i, '军工'],
+    // 航司/航运/快递/铁路港口 —— 与国防无关的周期性交运
+    [/航空|航运|海运|货运|快递|物流|铁路|高铁|港口|机场|中远|顺丰|圆通|申通|韵达|国航|东航|南航|海航|吉祥航|Airline|Airways|Shipping|Freight|Logistic|\bUPS\b|FedEx|Delta\s*Air|United\s*Airlines|Southwest\s*Air/i, '交通运输'],
+    // 运营商/通信设备：现金流稳、高股息，属价值周期，与卫星互联网的成长逻辑区分开
+    [/中国移动|中国电信|中国联通|运营商|通信|光通信|光纤|宽带|基站|中兴通讯|\bZTE\b|Verizon|T-?Mobile|AT&T|Telecom|Telefon|Vodafone/i, '通信运营'],
+    [/建筑|建材|水泥|工程|基建|重工|机械|盾构|海螺|中国建筑|中国中铁|中国铁建|三一|徐工|中联重科|Construct|Caterpillar|Cement/i, '建筑基建'],
     [/地产|置业|万科|保利|招商蛇口|华润置地|Real\s*Estate|REIT|Property/i, '地产'],
-    [/化工|Chemical|Dow\b|DuPont/i, '化工'],
+    [/化工|化学|化纤|塑料|橡胶|Chemical|Dow\b|DuPont|BASF/i, '化工'],
     [/有色|铜|铝|钢|稀土|锌|铅|镍|Metal|Copper|Steel|Alumin|Freeport/i, '有色金属'],
-    [/煤|石油|石化|油气|燃气|能源|矿业|Energy|\bOil\b|\bGas\b|Coal|Mining|Exxon|Chevron|埃克森|雪佛龙|Mobil|Occidental|Conoco/i, '能源'],
-    [/电网|水电|核电|公用|Utilit/i, '公用事业'],
+    // Mobil 必须限定成 Exxon Mobil：裸 Mobil 会把 T-Mobile / AST SpaceMobile 误判成能源股（实测确认）
+    [/煤|石油|石化|油气|燃气|能源|矿业|Energy|\bOil\b|\bGas\b|Coal|Mining|Exxon|Chevron|埃克森|雪佛龙|Exxon\s*Mobil|Occidental|Conoco/i, '能源'],
+    // 传统电力运营商归公用事业：原先裸「电力」规则把长江电力/国投电力这类防御型水电
+    // 划进「AI电力」→ 科技成长组，与 AI 算力仓假设 0.72 相关，严重高估科技集中度（实测确认）
+    [/电网|水电|核电|公用|发电|华能|大唐|华电|国电|国投电力|长江电力|三峡|Utilit/i, '公用事业'],
     [/农业|养殖|种业|饲料|Agri|Farm/i, '农业'],
     [/传媒|游戏|影视|Media|Game|Entertain|Netflix|奈飞|Disney|迪士尼|Spotify/i, '传媒游戏'],
     [/算力|光模块|服务器|数据中心|CPO|GPU|人工智能|英伟达|NVIDIA|NVDA|Palantir|\bAI\b/i, 'AI算力'],
-    [/电力|Power/i, 'AI电力'],
+    // AI电力只保留「算力配套供电」这层含义；泛化的「电力/Power」已由上面的公用事业接住
+    [/AI\s*电力|算力电力|数据中心供电|储能|虚拟电厂|Vertiv|Constellation\s*Energy/i, 'AI电力'],
     [/软件|云计算|互联网|SaaS|平台|科技|Tech|Internet|Software|Cloud|Nasdaq|QQQ|Apple|苹果|Microsoft|微软|Google|Alphabet|谷歌|Amazon|亚马逊|Meta|Facebook|Oracle|甲骨文|Adobe|Salesforce|Alibaba|阿里|BABA|拼多多|\bPDD\b|京东|\bJD\b|携程|Trip|Uber|Airbnb|Coinbase|百度|Baidu/i, '科技互联网'],
   ];
   for (const [re, f] of rules) if (re.test(s)) return f;
@@ -182,6 +197,11 @@ const FACTOR_GROUPS = {
   '银行': '价值周期', '证券保险': '价值周期', '地产': '价值周期', '能源': '价值周期',
   '有色金属': '价值周期', '化工': '价值周期', '公用事业': '价值周期', '农业': '价值周期',
   '军工': '主题', '其它': '其它', '黄金': '避险', '债券': '避险', '混合': '其它',
+  // 卫星航天/数字资产按「实际同涨同跌」归到科技成长——它们的日常波动由风险偏好驱动，
+  // 而不是由发射进度或链上数据驱动，归到「主题」会低估与 AI 仓的相关性（0.32 vs 0.72）。
+  '卫星航天': '科技成长', '数字资产': '科技成长',
+  // 运营商/交运/基建是典型的价值周期资产：现金流稳、估值低、与利率和经济周期挂钩。
+  '通信运营': '价值周期', '交通运输': '价值周期', '建筑基建': '价值周期',
 };
 const GROUP_CORR = 0.72;   // 同一大组（如均属科技成长）默认相关
 const CROSS_CORR = 0.32;   // 跨组默认相关（A股系统性 beta 不低，同涨同跌常见）
@@ -1152,16 +1172,20 @@ function settleToPool(deltaOrig, ccy = 'CNY', note = '') {
 }
 // 该币种下可以当「钱」接收赎回款的账户（活期/存款/理财/货基）。基金赎回回到的是银行活期，
 // 不是股票现金池——把选择权交给用户，只把上次选的记下来做默认值。
-function cashDestChoices(ccy) {
+// excludeId：赎回的来源资产必须排除。理财/定存本身也是「存款类」，会出现在自己的候选列表里，
+// 选中后赎回款原路加回来，净效果＝把你刚调小的金额又加回去（135000 → 270190 那类"凭空翻倍"）。
+function cashDestChoices(ccy, excludeId) {
   return (STATE.assets || []).filter(a => (a.currency || 'CNY') === (ccy || 'CNY')
     && !a.autoPool
+    && !(excludeId && a.id === excludeId)
     && (/现金|理财|存款/.test(a.category || '') || /现金|活期|余额|零钱|货基|存款/.test(a.name || '')));
 }
 // 资金去向选择弹窗。resolve：{mode:'asset',id} / {mode:'pool'} / {mode:'none'}（不入账）/ null（关闭）
 function pickCashDestination(o) {
   return new Promise(resolve => {
     const ccy = o.ccy || 'CNY';
-    const choices = cashDestChoices(ccy);
+    const choices = cashDestChoices(ccy, o.excludeId);
+    // 记住的默认值也要过滤：上次选的账户可能正是这次的来源资产
     const remembered = ((STATE.redeemDest || {})[ccy]) || '';
     const has = id => choices.some(a => a.id === id) || id === '__pool__';
     const def = has(remembered) ? remembered : (choices[0] ? choices[0].id : '__pool__');
@@ -1192,10 +1216,54 @@ function pickCashDestination(o) {
     document.body.appendChild(ov);
   });
 }
+// 加仓成交价询问弹窗：用「改金额」表达买入时，金额本身说不出你是几点、按什么价买的。
+// 不问清成交价，当日盈亏只能按「昨收→现价」的全天涨幅算——你盘中才买入，却被记了一整天的涨幅。
+// resolve：{price} 记一笔当日买入 / {skip:true} 只当估值修正 / null 取消
+function askBuyPrice(o) {
+  return new Promise(resolve => {
+    const px = num(o.lastPx);
+    const ov = el(`<div data-modal style="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1000;display:flex;align-items:center;justify-content:center;padding:16px">
+      <div class="card" style="max-width:520px;width:100%;max-height:84vh;overflow:auto;margin:0">
+        <div class="card-head-row"><h3 style="margin:0">这笔加仓的成交价是多少？</h3></div>
+        <p class="hint" style="margin-top:4px">「${escapeHtml(o.name)}」金额增加了 <strong>${fmtOrig(o.addedAmount, o.ccy)}</strong>，约 <strong>${(+o.addedShares).toFixed(2)}</strong> 股/份。
+          填入<strong>实际成交价</strong>，「今日」列才会按你的真实成本算，而不是按标的全天涨幅算。</p>
+        <div class="field"><label>成交价（${o.ccy}／股·份）</label>
+          <input id="bp-px" type="number" step="0.0001" value="${px > 0 ? px : ''}"/></div>
+        <p class="inline-note" id="bp-preview" style="margin-top:6px"></p>
+        <div class="row" style="margin-top:12px;flex-wrap:wrap">
+          <button class="btn" id="bp-ok" style="flex:0 0 auto">记为当日买入</button>
+          <button class="btn secondary" id="bp-skip" style="flex:0 0 auto">不是买入，只是估值修正</button>
+          <button class="btn secondary" id="bp-cancel" style="flex:0 0 auto">取消</button>
+        </div>
+        <p class="inline-note" style="margin-top:8px">此处只修正<strong>当日盈亏口径</strong>，不会自动从现金账户扣款——钱从组合内哪个账户出的，请自行调整该账户金额；
+          若希望买入自动结算现金，改用「持仓」页改持股数。</p>
+      </div></div>`);
+    const preview = () => {
+      const v = num(ov.querySelector('#bp-px').value);
+      const el2 = ov.querySelector('#bp-preview');
+      if (!(v > 0) || !(px > 0)) { el2.textContent = ''; return; }
+      const gain = o.addedShares * (px - v);
+      el2.innerHTML = `按此价买入，这部分今日盈亏 = ${(+o.addedShares).toFixed(2)} × (现价 ${px} − 成交 ${v}) = <strong style="color:${gain >= 0 ? 'var(--green-ink)' : 'var(--red-ink)'}">${gain >= 0 ? '+' : ''}${fmtOrig(gain, o.ccy)}</strong>`;
+    };
+    ov.querySelector('#bp-px').oninput = preview; preview();
+    const done = v => { ov.remove(); resolve(v); };
+    ov.querySelector('#bp-ok').onclick = () => {
+      const v = num(ov.querySelector('#bp-px').value);
+      if (!(v > 0)) { alert('请填写大于 0 的成交价'); return; }
+      done({ price: v });
+    };
+    ov.querySelector('#bp-skip').onclick = () => done({ skip: true });
+    ov.querySelector('#bp-cancel').onclick = () => done(null);
+    ov.addEventListener('click', e => { if (e.target === ov) done(null); });
+    document.body.appendChild(ov);
+  });
+}
 // 把一笔现金按选择结果落账（原币）。返回落账去向名，未落账返回 null
-function creditCash(dest, amtOrig, ccy, note) {
+function creditCash(dest, amtOrig, ccy, note, srcId) {
   if (!dest || dest.mode === 'none') return null;
   if (dest.mode === 'pool') { settleToPool(amtOrig, ccy, note); return poolName(ccy); }
+  // 兜底：来源＝去向时原路加回，等于这笔赎回没发生，还会让金额看起来凭空翻倍。宁可入池，也不能加回自己。
+  if (srcId && dest.id === srcId) { settleToPool(amtOrig, ccy, note); return poolName(ccy); }
   const a = (STATE.assets || []).find(x => x.id === dest.id);
   if (!a) { settleToPool(amtOrig, ccy, note); return poolName(ccy); }
   a.amount = Math.round((num(a.amount) + amtOrig) * 100) / 100;
@@ -1603,6 +1671,30 @@ function logOp(label) {
     while (log.length > 30) log.pop();
     localStorage.setItem(OPLOG_KEY, JSON.stringify(log));
   } catch (e) { console.warn('修改日志写入失败（不影响操作）', e); }
+}
+// 两份资产副本的逐笔差异（用于「这笔钱哪来的」溯源）。返回 {rows, dTotal}
+// rows: [{name, before, after, delta, kind:'add'|'del'|'chg'}]，按变动绝对值降序
+function diffAssets(before, after) {
+  const key = a => a.id || a.code || a.name;
+  const mB = new Map((before || []).map(a => [key(a), a]));
+  const mA = new Map((after || []).map(a => [key(a), a]));
+  const fx = currentFx();
+  const rows = [];
+  let dTotal = 0;
+  const seen = new Set();
+  const push = (k, b, a) => {
+    if (seen.has(k)) return; seen.add(k);
+    const vb = b ? assetCny(b, fx) : 0, va = a ? assetCny(a, fx) : 0;
+    const d = va - vb;
+    if (Math.abs(d) < 0.5) return;
+    dTotal += d;
+    rows.push({ name: (a || b).name, cat: (a || b).category || '',
+      before: vb, after: va, delta: d, kind: !b ? 'add' : !a ? 'del' : 'chg' });
+  };
+  mB.forEach((b, k) => push(k, b, mA.get(k)));
+  mA.forEach((a, k) => push(k, mB.get(k), a));
+  rows.sort((x, y) => Math.abs(y.delta) - Math.abs(x.delta));
+  return { rows, dTotal };
 }
 function restoreOp(entry) {
   if (!entry) return false;
@@ -4712,6 +4804,9 @@ const SCORE_ANCHORS = {
   senti: ['资金面', '8-10 主力持续净流入+机构上调评级｜5-7 资金流向不明+评级稳定｜0-4 主力持续流出+机构下调'],
   rs: ['行业/相对强弱', '相对基准(A股比沪深300/美股比标普500)的超额收益：8-10 60日与120日均大幅领先且仍在走强｜5-7 与大盘同步｜0-4 持续跑输且相对走弱。注：这是市场对赛道的定价，不等于行业基本面景气度'],
 };
+// 建卡页重绘后要自动选中的标的（如刚加入的观察标的）。render() 会重建整个视图，
+// 下拉框默认回到空选项——不带着这个值走一趟，用户加完观察标的后点任何按钮都是「请先选择标的」。
+let THESIS_PICK_AFTER_RENDER = '';
 VIEWS.thesis = function (app) {
   app.appendChild(el(`
     <div class="view-head">
@@ -5103,6 +5198,15 @@ VIEWS.thesis = function (app) {
     drawGates();
   }
   $f('#th-pick').onchange = e => loadThesis(e.target.value);
+  // 刚加入的观察标的自动选中并载入表单，让「自动评四维 / AI 起草 / 保存」立刻可用
+  if (THESIS_PICK_AFTER_RENDER) {
+    const want = THESIS_PICK_AFTER_RENDER; THESIS_PICK_AFTER_RENDER = '';
+    if (cands.some(x => thesisKeyOf(x) === want)) {
+      $f('#th-pick').value = want;
+      loadThesis(want);
+      formCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }
 
   // 加观察标的：用真实行情校验代码（A股 5–6 位数字 / 美股字母代码），拿回名称与现价
   $f('#th-watch-add').onclick = async () => {
@@ -5127,6 +5231,7 @@ VIEWS.thesis = function (app) {
         entry: +num(q.price).toFixed(4), target: null, stop: null,
         months: 12, scores: {}, conf: '中', date: todayStr(),
       };
+      THESIS_PICK_AFTER_RENDER = code;      // 重绘后自动选中它
       saveState(); render();
     } catch (e) {
       note.innerHTML = `<span style="color:var(--red-ink)">校验失败：${escapeHtml(e.message)}</span>`;
@@ -5722,13 +5827,35 @@ VIEWS.settings = function (app) {
     .map(sn => ({ kind: 'snap', ts: new Date(sn.date + 'T23:59:59').getTime(), label: '每日快照 ' + sn.date, nA: sn.assets.length, nP: (sn.positions || []).length, ref: sn.date }))
     .sort((a, b) => b.ts - a.ts).slice(0, 21);            // 最近3周的快照点，更早的用「数据管理→恢复到该日」
   const points = opPoints.concat(snapPoints).sort((a, b) => b.ts - a.ts);
+  // 「这笔钱哪来的」溯源：oplog[i] 存的是第 i 次操作【之前】的副本，
+  // 所以第 i 次操作造成的变化 = (更新的那份) − oplog[i]。最新一条的「之后」就是当前状态。
+  const opEffect = (i) => {
+    const before = (oplog[i] || {}).assets || [];
+    const after = i === 0 ? (STATE.assets || []) : ((oplog[i - 1] || {}).assets || []);
+    return diffAssets(before, after);
+  };
+  const effectHtml = (p) => {
+    if (p.kind !== 'op') return '<span class="inline-note">快照还原点（不逐笔比对）</span>';
+    const { rows, dTotal } = opEffect(p.ref);
+    if (!rows.length) return '<span class="inline-note">这次操作没有改变任何资产金额</span>';
+    const consistent = Math.abs(dTotal) < 1;
+    return `<div style="font-size:12.5px">
+      <div style="margin-bottom:4px">总资产变化 <strong style="color:${consistent ? 'var(--muted)' : (dTotal >= 0 ? 'var(--green-ink)' : 'var(--red-ink)')}">${dTotal >= 0 ? '+' : ''}${fmtMoney(dTotal)}</strong>
+        ${consistent ? '<span class="pill green">守恒（账户间搬钱）</span>' : '<span class="pill red">总资产被改变了</span>'}</div>
+      ${rows.map(r => `<div style="display:flex;justify-content:space-between;gap:10px;padding:2px 0">
+        <span>${r.kind === 'add' ? '<span class="pill green">新增</span> ' : r.kind === 'del' ? '<span class="pill red">删除</span> ' : ''}${escapeHtml(r.name)}</span>
+        <span class="num" style="white-space:nowrap;color:${r.delta >= 0 ? 'var(--green-ink)' : 'var(--red-ink)'}">${fmtMoney(r.before)} → ${fmtMoney(r.after)}（${r.delta >= 0 ? '+' : ''}${fmtMoney(r.delta)}）</span>
+      </div>`).join('')}</div>`;
+  };
   const logCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('book')} 修改日志 · 一键还原</h3>
     <p class="hint">每次<strong>增删改资产/持仓、赎回记账、出入金、导入/清空</strong>前，系统自动留存当时的资产+持仓+出入金副本（本设备保存最近 30 条）。更早的历史（日志功能上线前）以<strong>每日快照</strong>形式提供——一天一个还原点。误删或录错 → 点「还原」。还原只覆盖资产/持仓${''}（操作级还原另含出入金），不动设置、快照历史与评估缓存；还原本身也会先留底，可再次反悔。</p>
     ${points.length ? `<div class="table-scroll"><table class="stack-mobile">
       <thead><tr><th>时间</th><th>还原点</th><th class="num">当时资产/持仓数</th><th></th></tr></thead>
       <tbody>${points.map((p, i) => `<tr>
         <td style="white-space:nowrap">${p.kind === 'snap' ? escapeHtml(String(p.ref)) : fmtTs(p.ts)}</td>
-        <td>${p.kind === 'snap' ? '<span class="pill gray">快照</span> ' : '<span class="pill green">操作</span> '}${escapeHtml(p.label)}</td>
+        <td>${p.kind === 'snap' ? '<span class="pill gray">快照</span> ' : '<span class="pill green">操作</span> '}${escapeHtml(p.label)}
+          ${p.kind === 'op' ? `<details style="margin-top:4px"><summary style="cursor:pointer;font-size:12px;color:var(--accent-ink)">这次改了什么</summary>
+            <div style="margin-top:6px">${effectHtml(p)}</div></details>` : ''}</td>
         <td class="num">${p.nA} / ${p.nP}</td>
         <td class="num"><button class="btn secondary small" data-oprestore="${i}">还原到此${p.kind === 'snap' ? '日' : '前'}</button></td>
       </tr>`).join('')}</tbody></table></div>`
@@ -6829,7 +6956,8 @@ VIEWS.attribution = function (app) {
    视图：压力测试 —— 极端情景下组合会亏多少（相对最大回撤承受线）
    ========================================================================= */
 // 科技成长因子组（预设情景用）
-const STRESS_TECH = ['AI算力', 'AI电力', 'AI应用', '科技互联网', '传媒游戏', '半导体', '机器人', '新能源车', '光伏风电'];
+// 卫星航天/数字资产同样是高 beta 成长资产，科技股杀估值时一起跌，纳入同一冲击组
+const STRESS_TECH = ['AI算力', 'AI电力', 'AI应用', '科技互联网', '传媒游戏', '半导体', '机器人', '新能源车', '光伏风电', '卫星航天', '数字资产'];
 // 当前组合的风险桶：每资产归入 cn(个股A股)/us(个股美股)/fund(基金)/gold(黄金)/safe(固收理财现金)
 function stressBuckets() {
   const fx = currentFx();
@@ -7219,7 +7347,9 @@ VIEWS.portfolio = function (app) {
     <div class="grid grid-3">
       <div class="field"><label>金额（原币） <span class="req">*</span></label><input id="af-amount" type="number" step="0.01" placeholder="按币种填原币金额"/></div>
       <div class="field"><label>年利率 %（理财/存款，留空自动）</label><input id="af-rate" type="number" step="0.01" placeholder="美元自动3%/人民币按实际"/></div>
-      <div class="field"><label>累计盈亏 ¥（含已卖出；股票/基金/黄金，可选）</label><input id="af-pnl" type="number" step="1" placeholder="如 -44636"/></div>
+      <div class="field"><label><span id="af-pnl-lab">累计盈亏 ¥</span>（含已卖出；股票/基金/黄金，可选）</label>
+        <input id="af-pnl" type="number" step="0.01" placeholder="如 -44636"/>
+        <span class="inline-note" id="af-pnl-hint"></span></div>
     </div>
     <div class="grid grid-3">
       <div class="field"><label>代码（可选）</label><input id="af-code" placeholder="如 002518"/></div>
@@ -7233,7 +7363,9 @@ VIEWS.portfolio = function (app) {
       <div class="field"><label></label><span class="inline-note" style="align-self:end;display:block">跨境理财通/银行理财等无公开净值的，填这里即可随净值更新市值；留空则金额保持不变。代码为 6 位的公募债基无需手填，会自动拉。</span></div>
     </div>
     <div class="grid grid-3">
-      <div class="field"><label>累计已实现收益 ¥（赎回/卖出落袋，可选）</label><input id="af-rpnl" type="number" step="1" placeholder="如 326——历史赎回赚到手的部分"/></div>
+      <div class="field"><label><span id="af-rpnl-lab">累计已实现收益 ¥</span>（赎回/卖出落袋，可选）</label>
+        <input id="af-rpnl" type="number" step="0.01" placeholder="如 326——历史赎回赚到手的部分"/>
+        <span class="inline-note" id="af-rpnl-hint"></span></div>
     </div>
     <div class="row" style="flex-wrap:wrap"><button class="btn" id="af-add" style="flex:0 0 auto">${icon('plus')} 添加资产</button>
       <button class="btn secondary" id="af-fx" style="flex:0 0 auto">${icon('refresh')} 换汇（美元 ↔ 人民币）</button></div>
@@ -7245,6 +7377,22 @@ VIEWS.portfolio = function (app) {
   app.appendChild(mgmt);
   const $a = sel => mgmt.querySelector(sel);
   $a('#af-fx').onclick = () => showFxExchangeModal();
+  // 浮盈亏/已实现收益按所选币种标注，并实时显示折合人民币——美股照券商填美元即可，不用自己换算
+  function syncPnlCurLabel() {
+    const c = $a('#af-cur').value, isUsd = c === 'USD', fxr = currentFx();
+    $a('#af-pnl-lab').textContent = isUsd ? '累计盈亏 $（美元）' : '累计盈亏 ¥';
+    $a('#af-rpnl-lab').textContent = isUsd ? '累计已实现收益 $（美元）' : '累计已实现收益 ¥';
+    const hint = (inp, box) => {
+      const v = num($a(inp).value);
+      $a(box).textContent = (isUsd && $a(inp).value.trim() !== '' && isFinite(v))
+        ? `≈ ${fmtMoney(v * fxr)}（按汇率 ${fxr.toFixed(4)} 自动换算入账）` : '';
+    };
+    hint('#af-pnl', '#af-pnl-hint'); hint('#af-rpnl', '#af-rpnl-hint');
+  }
+  $a('#af-cur').addEventListener('change', syncPnlCurLabel);
+  $a('#af-pnl').addEventListener('input', syncPnlCurLabel);
+  $a('#af-rpnl').addEventListener('input', syncPnlCurLabel);
+  syncPnlCurLabel();
 
   $a('#af-add').onclick = async () => {
     const name = $a('#af-name').value.trim();
@@ -7261,6 +7409,10 @@ VIEWS.portfolio = function (app) {
     // 赎回检测：编辑理财/存款且金额减少 → 保存后提示把这笔钱结转进现金池，防"钱凭空消失"
     const oldAsset = editId ? STATE.assets.find(x => x.id === editId) : null;
     const oldAmount = oldAsset ? num(oldAsset.amount) : 0;
+    const oldShares = oldAsset ? num(oldAsset.shares) : 0;
+    // 改金额会连带改持股数（下面按现价校准），必须先记下当日开盘持股，
+    // 否则「今日」列会把今天才买的那部分也按昨收→现价的全天涨幅计。
+    if (oldAsset && Math.abs(amount - oldAmount) > 0.005) captureSod(oldAsset);
     const asset = {
       id: editId || uid(), name, code: $a('#af-code').value.trim(),
       platform: $a('#af-platform').value.trim(), category: cat, currency: cur,
@@ -7268,8 +7420,11 @@ VIEWS.portfolio = function (app) {
       note: $a('#af-note').value.trim(),
     };
     if (rateStr !== '') asset.annualRate = num(rateStr) / 100;
-    if (pnlStr !== '') asset.pnl = num(pnlStr);
-    if (rpnlStr !== '') asset.realizedPnl = num(rpnlStr);
+    // 浮盈亏/已实现收益：表单按【该资产的币种】填（美股照券商填美元，不用自己换算），
+    // 内部一律存人民币——总览合计、归因、成本价反推都按人民币口径算。
+    const pnlFx = cur === 'USD' ? currentFx() : 1;
+    if (pnlStr !== '') asset.pnl = Math.round(num(pnlStr) * pnlFx * 100) / 100;
+    if (rpnlStr !== '') asset.realizedPnl = Math.round(num(rpnlStr) * pnlFx * 100) / 100;
     if (navStr !== '') asset.manualNav = num(navStr); else delete asset.manualNav;
     if (navDateStr !== '') asset.manualNavDate = navDateStr; else delete asset.manualNavDate;
     logOp((editId ? '编辑资产：' : '新增资产：') + name);
@@ -7310,12 +7465,37 @@ VIEWS.portfolio = function (app) {
         : '';
       const dest = await pickCashDestination({
         ccy: cur,
+        excludeId: editId,                 // 不能转回自己——否则等于把刚调小的金额加回去
         title: '赎回款转入哪个账户？',
         subtitle: `「${escapeHtml(name)}」金额减少了 <strong>${fmtOrig(redeemed, cur)}</strong>（赎回/卖出）。这笔钱要记到下面这个账户，总资产才守恒。`,
         footnote: `基金/理财赎回一般回到<strong>银行活期或存款</strong>，不是股票现金池——按实际到账账户选。${inTransit}`,
       });
-      creditCash(dest, redeemed, cur, name + (cat === '基金' ? ' 赎回(在途)' : ' 赎回'));
+      const toName = creditCash(dest, redeemed, cur, name + (cat === '基金' ? ' 赎回(在途)' : ' 赎回'), editId);
+      // 留痕：转入哪个账户必须写进日志，否则收款方金额变了却查不出是谁转进来的
+      logOp(`赎回记账：${name} −${fmtOrig(redeemed, cur)} → ${toName || '未入账（钱已转出组合）'}`);
       if (dest && dest.mode === 'none') recordDailySnapshot();   // 选了不入账＝总资产真减少，覆盖今日快照
+    }
+    // 加仓结转：金额增加 → 问成交价，记一笔当日买入。不问的话，今天盘中才买的那部分
+    // 会被按「昨收→现价」的全天涨幅计入今日盈亏——你没吃到的那段涨幅也算成了你的收益。
+    const BUY_BY_AMOUNT = ['基金', '黄金', 'A股股票', '美股股票'];
+    const oa2 = editId ? STATE.assets.find(x => x.id === editId) : null;
+    if (oa2 && BUY_BY_AMOUNT.indexOf(cat) >= 0 && amount - oldAmount > 1 && num(oa2.lastPx) > 0) {
+      const addedShares = num(oa2.shares) - oldShares;
+      if (addedShares > 0) {
+        const r = await askBuyPrice({
+          name, ccy: cur, lastPx: num(oa2.lastPx),
+          addedAmount: amount - oldAmount, addedShares,
+        });
+        if (r && r.price > 0) {
+          const cf = cur === 'USD' ? currentFx() : 1;
+          if (oa2.tradesDate !== todayStr() || !Array.isArray(oa2.todayTrades)) { oa2.todayTrades = []; oa2.tradesDate = todayStr(); }
+          oa2.todayTrades.push({ type: 'buy', shares: addedShares, price: r.price, prevShares: oldShares, prevPnl: oa2.pnl });
+          // 用户没手填浮盈亏时，把新买这条腿的浮盈亏并进来（成交价→现价）
+          if (pnlStr === '' && oa2.pnl != null) {
+            oa2.pnl = Math.round((num(oa2.pnl) + addedShares * (num(oa2.lastPx) - r.price) * cf) * 100) / 100;
+          }
+        }
+      }
     }
     saveState(); render();
   };
@@ -7339,8 +7519,10 @@ VIEWS.portfolio = function (app) {
     $a('#af-cur').value = a.currency || 'CNY';
     $a('#af-amount').value = a.amount != null ? a.amount : '';
     $a('#af-rate').value = a.annualRate != null ? (a.annualRate * 100) : '';
-    $a('#af-pnl').value = a.pnl != null ? a.pnl : '';
-    $a('#af-rpnl').value = a.realizedPnl != null ? a.realizedPnl : '';
+    // 存的是人民币，回填时按该资产币种换回原币显示（美股显示美元，与券商一致）
+    const efx = a.currency === 'USD' ? currentFx() : 1;
+    $a('#af-pnl').value = a.pnl != null ? Math.round(num(a.pnl) / efx * 100) / 100 : '';
+    $a('#af-rpnl').value = a.realizedPnl != null ? Math.round(num(a.realizedPnl) / efx * 100) / 100 : '';
     $a('#af-code').value = a.code || '';
     $a('#af-platform').value = a.platform || '';
     $a('#af-note').value = a.note || '';
@@ -7348,6 +7530,7 @@ VIEWS.portfolio = function (app) {
     $a('#af-navdate').value = a.manualNavDate || '';
     $a('#af-edit').value = a.id;
     $a('#af-add').innerHTML = icon('check') + ' 保存修改';
+    syncPnlCurLabel();
     mgmt.scrollIntoView({ behavior: 'smooth', block: 'center' });
   });
 
