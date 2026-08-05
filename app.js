@@ -7270,22 +7270,31 @@ VIEWS.portfolio = function (app) {
   const allocCard = el(`<div class="card"><h3>${icon('pie')} 大类配置</h3></div>`);
   allocCard.appendChild(buildPie(normalize(byBig), { total }));
   app.appendChild(allocCard);
+  app.appendChild(el(`<p class="inline-note" style="margin-top:-6px">想按「期限×回撤」科学配置并生成调仓清单？见导航栏「<strong>再平衡</strong>」页。</p>`));
 
-  // 历史清仓收益账本：清仓归档的标的在此留痕，计入「累计权益盈亏」，不再影响体检/持仓列表
+  // 历史清仓收益账本（可折叠）：清仓归档的标的在此留痕，计入「累计权益盈亏」，不再影响体检/持仓列表
   const hist = STATE.realizedHistory || [];
   if (hist.length) {
-    const histCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('inbox')} 历史清仓收益（${hist.length} 笔 · 合计 ${hist.reduce((s,r)=>s+num(r.realized),0)>=0?'+':''}${fmtMoney(hist.reduce((s,r)=>s+num(r.realized),0))}）</h3>
-      <p class="inline-note">清仓标的的累计盈亏在此留痕并计入「累计权益盈亏」；不占持仓列表、不影响股票体检。误归档可「撤销」恢复资产（含累计盈亏）。</p>
-      <div class="table-scroll"><table>
-        <thead><tr><th>标的</th><th>类别</th><th>清仓日期</th><th class="num">已实现盈亏</th><th></th></tr></thead>
-        <tbody>${hist.map(r => `<tr>
-          <td>${escapeHtml(r.name)}${r.code?`<br><span class="inline-note">${escapeHtml(r.code)}</span>`:''}</td>
-          <td><span class="tag-chip">${escapeHtml(r.category || '—')}</span></td>
-          <td>${escapeHtml(r.date)}</td>
-          <td class="num" style="color:${num(r.realized)>=0?'var(--green-ink)':'var(--red-ink)'}">${num(r.realized)>=0?'+':''}${fmtMoney(r.realized)}</td>
-          <td><button class="btn danger small" data-unarch="${escapeHtml(r.id)}">撤销</button></td>
-        </tr>`).join('')}</tbody>
-      </table></div></div>`);
+    const histTotal = hist.reduce((s, r) => s + num(r.realized), 0);
+    const histCard = el(`<details class="card" style="padding:0;margin-top:16px" open>
+      <summary style="cursor:pointer;padding:16px 20px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-weight:700;font-size:16px;letter-spacing:-0.01em;user-select:none">
+        ${icon('inbox')} 历史清仓收益
+        <span class="inline-note" style="font-weight:400;font-size:12.5px">${hist.length} 笔 · 合计 <span style="color:${histTotal>=0?'var(--green-ink)':'var(--red-ink)'};font-weight:700">${histTotal>=0?'+':''}${fmtMoney(histTotal)}</span>（点此展开/收起）</span>
+      </summary>
+      <div style="padding:0 20px 18px">
+        <p class="inline-note" style="margin:0 0 10px">清仓标的的累计盈亏在此留痕并计入「累计权益盈亏」；不占持仓列表、不影响股票体检。误归档可「撤销」恢复资产（含累计盈亏）。</p>
+        <div class="table-scroll"><table>
+          <thead><tr><th>标的</th><th>类别</th><th>清仓日期</th><th class="num">已实现盈亏</th><th></th></tr></thead>
+          <tbody>${hist.map(r => `<tr>
+            <td>${escapeHtml(r.name)}${r.code?`<br><span class="inline-note">${escapeHtml(r.code)}</span>`:''}</td>
+            <td><span class="tag-chip">${escapeHtml(r.category || '—')}</span></td>
+            <td>${escapeHtml(r.date)}</td>
+            <td class="num" style="color:${num(r.realized)>=0?'var(--green-ink)':'var(--red-ink)'}">${num(r.realized)>=0?'+':''}${fmtMoney(r.realized)}</td>
+            <td><button class="btn danger small" data-unarch="${escapeHtml(r.id)}">撤销</button></td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+      </div>
+    </details>`);
     histCard.querySelectorAll('[data-unarch]').forEach(b => b.onclick = () => {
       if (confirm('撤销这条清仓归档？将从「历史清仓收益」移除，并把该资产（含累计盈亏）恢复到资产列表。')) {
         unarchiveRecord(b.dataset.unarch); render();
@@ -7293,7 +7302,6 @@ VIEWS.portfolio = function (app) {
     });
     app.appendChild(histCard);
   }
-  app.appendChild(el(`<p class="inline-note" style="margin-top:-6px">想按「期限×回撤」科学配置并生成调仓清单？见导航栏「<strong>再平衡</strong>」页。</p>`));
 
   // 明细表：按类别（按大类排序：股票→基金→理财→黄金→现金）
   const catCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('list')} 按类别明细</h3></div>`);
