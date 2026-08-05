@@ -7270,13 +7270,13 @@ VIEWS.portfolio = function (app) {
   const allocCard = el(`<div class="card"><h3>${icon('pie')} 大类配置</h3></div>`);
   allocCard.appendChild(buildPie(normalize(byBig), { total }));
   app.appendChild(allocCard);
-  app.appendChild(el(`<p class="inline-note" style="margin-top:-6px">想按「期限×回撤」科学配置并生成调仓清单？见导航栏「<strong>再平衡</strong>」页。</p>`));
+  app.appendChild(el(`<p class="inline-note" style="margin:10px 0 0">想按「期限×回撤」科学配置并生成调仓清单？见导航栏「<strong>再平衡</strong>」页。</p>`));
 
   // 历史清仓收益账本（可折叠）：清仓归档的标的在此留痕，计入「累计权益盈亏」，不再影响体检/持仓列表
   const hist = STATE.realizedHistory || [];
   if (hist.length) {
     const histTotal = hist.reduce((s, r) => s + num(r.realized), 0);
-    const histCard = el(`<details class="card" style="padding:0;margin-top:16px" open>
+    const histCard = el(`<details class="card" style="padding:0;margin-top:16px">
       <summary style="cursor:pointer;padding:16px 20px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-weight:700;font-size:16px;letter-spacing:-0.01em;user-select:none">
         ${icon('inbox')} 历史清仓收益
         <span class="inline-note" style="font-weight:400;font-size:12.5px">${hist.length} 笔 · 合计 <span style="color:${histTotal>=0?'var(--green-ink)':'var(--red-ink)'};font-weight:700">${histTotal>=0?'+':''}${fmtMoney(histTotal)}</span>（点此展开/收起）</span>
