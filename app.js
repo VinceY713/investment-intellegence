@@ -1632,6 +1632,7 @@ function applyStateDefaults(s) {
   s.settings.benchKeys = Array.isArray(s.settings.benchKeys) ? s.settings.benchKeys : [];   // 资产趋势选中的对比基准（多选）
   s.macro = Object.assign({ market: {}, ind: {}, updatedAt: null }, s.macro || {});
   s.macro.market = s.macro.market || {}; s.macro.ind = s.macro.ind || {};
+  s.realizedHistory = s.realizedHistory || [];   // 已清仓收益账本 [{id,name,code,factor,category,currency,date,realized,assetBackup}]
   return s;
 }
 
@@ -1707,6 +1708,64 @@ function restoreOp(entry) {
 
 function uid() {
   return 'p' + Math.random().toString(36).slice(2, 9);
+}
+
+/* -------------------------------------------------------------------------
+   已清仓收益账本（realizedHistory）：
+   持仓归零的标的 → 归档到历史，累计盈亏转入账本（收益不丢、可追溯），
+   并从持仓/资产移除——不占持仓列表、不污染股票体检（名义只数/深套复核）。
+   账本计入组合「累计权益盈亏」（投资组合页），可撤销恢复资产。
+   ------------------------------------------------------------------------- */
+function archiveClosedPosition(p) {
+  const a = p.code ? (STATE.assets || []).find(x => x.code === p.code) : null;
+  const realized = a && a.pnl != null ? num(a.pnl) : 0;   // 累计盈亏（人民币口径）
+  STATE.realizedHistory = STATE.realizedHistory || [];
+  STATE.realizedHistory.unshift({
+    id: uid(),
+    name: p.name || (a && a.name) || '未命名',
+    code: p.code || '',
+    factor: p.factor || '',
+    category: a ? (a.category || '') : '',
+    currency: a ? (a.currency || 'CNY') : 'CNY',
+    date: todayStr(),
+    realized: Math.round(realized * 100) / 100,
+    assetBackup: a ? JSON.parse(JSON.stringify(a)) : null,   // 供撤销恢复（含累计盈亏 pnl）
+  });
+  STATE.positions = (STATE.positions || []).filter(x => x.id !== p.id);
+  if (a) STATE.assets = (STATE.assets || []).filter(x => x.id !== a.id);
+  saveState();
+}
+// 撤销归档：从账本移除并恢复资产（pnl 累计盈亏随资产回来）；0 持仓的持仓记录不恢复
+function unarchiveRecord(id) {
+  const rec = (STATE.realizedHistory || []).find(r => r.id === id);
+  if (!rec) return;
+  if (rec.assetBackup) STATE.assets = (STATE.assets || []).concat(Object.assign({}, rec.assetBackup));
+  STATE.realizedHistory = STATE.realizedHistory.filter(r => r.id !== id);
+  saveState();
+}
+// 已清仓收益账本合计（人民币）
+function realizedHistoryTotal() {
+  return (STATE.realizedHistory || []).reduce((s, r) => s + num(r.realized), 0);
+}
+// 渲染后：存在 0 持仓的清仓标的 → 顶部提示归档（用户确认，不自动删）
+function renderArchiveBanner(app) {
+  const closed = (STATE.positions || []).filter(p => num(p.shares) <= 0);
+  if (!closed.length) return;
+  const p = closed[0];
+  const a = p.code ? (STATE.assets || []).find(x => x.code === p.code) : null;
+  const gain = a && a.pnl != null ? num(a.pnl) : 0;
+  const banner = el(`<div class="card" style="margin-top:12px;border:1px solid var(--amber);background:rgba(255,193,7,.08)">
+    <div class="row" style="gap:10px;flex-wrap:wrap;align-items:center">
+      <span>${icon('inbox')} <strong>${escapeHtml(p.name)}</strong> 已清仓（持仓 0），累计盈亏
+        <strong style="color:${gain>=0?'var(--green-ink)':'var(--red-ink)'}">${gain>=0?'+':''}${fmtMoney(gain)}</strong>
+        <span class="inline-note">归档后收益计入「历史清仓收益」账本，持仓列表与股票体检不再出现它。</span></span>
+      <button class="btn" data-arch="yes" style="flex:0 0 auto">${icon('inbox')} 归档到历史收益</button>
+      <button class="btn secondary small" data-arch="later" style="flex:0 0 auto">暂不</button>
+    </div>
+  </div>`);
+  banner.querySelector('[data-arch="yes"]').onclick = () => { archiveClosedPosition(p); render(); };
+  banner.querySelector('[data-arch="later"]').onclick = () => { banner.remove(); };
+  app.prepend(banner);
 }
 
 /* -------------------------------------------------------------------------
@@ -2151,6 +2210,7 @@ function render() {
   const app = document.getElementById('app');
   app.innerHTML = '';
   (VIEWS[currentView] || VIEWS.dashboard)(app);
+  renderArchiveBanner(app);         // 0 持仓清仓标的 → 归档提示（收益进账本，不再污染体检）
 }
 
 // 移动端：把激活标签滚动进视野（11 个标签在手机上默认只露前几个）。
@@ -3239,7 +3299,11 @@ VIEWS.positions = function (app) {
       // 否则删了持仓、资产还躺着，再当日交易买入就会叠加翻倍。
       const linkedAsset = p.code ? (STATE.assets || []).find(x => x.code === p.code) : null;
       if (linkedAsset) {
-        if (!confirm(`「${p.name}」在「当前持仓」和「全部持仓/资产」里都有。\n「确定」= 两处一起删除（不动现金池，用于清理/纠错）；「取消」= 不删。`)) return;
+        const lpnl = linkedAsset.pnl != null ? num(linkedAsset.pnl) : 0;
+        const pnlWarn = lpnl !== 0
+          ? `\n⚠️ 该标的有累计盈亏 ${lpnl>=0?'+':''}${fmtMoney(lpnl)}，删除后将一并丢失！若已清仓建议用页面顶部的「归档到历史收益」保留记录。`
+          : '';
+        if (!confirm(`「${p.name}」在「当前持仓」和「全部持仓/资产」里都有。${pnlWarn}\n「确定」= 两处一起删除（不动现金池，用于清理/纠错）；「取消」= 不删。`)) return;
         logOp('删除持仓+资产：' + p.name);
         STATE.positions = STATE.positions.filter(x => x.id !== p.id);
         STATE.assets = (STATE.assets || []).filter(x => x.id !== linkedAsset.id);
@@ -7164,6 +7228,7 @@ VIEWS.portfolio = function (app) {
     else if (inc.value != null) pnlTotal += inc.value;
     if (a.realizedPnl != null) realizedTotal += num(a.realizedPnl);
   });
+  realizedTotal += realizedHistoryTotal();   // 加上已清仓收益账本（持仓归零归档的标的）
 
   // 汇率控制条（美元/人民币中间价，每日更新）
   const fxBar = el(`<div class="card" style="padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
@@ -7196,8 +7261,8 @@ VIEWS.portfolio = function (app) {
         <div class="value" style="color:var(--green-ink);font-size:22px">+${fmtMoney(interestTotal)}</div>
         <div class="sub">美元 3% · 人民币实际</div></div>
       <div class="stat"><div class="label">股票/基金/黄金累计盈亏</div>
-        <div class="value" style="color:${pnlTotal>=0?'var(--green-ink)':'var(--red-ink)'};font-size:22px">${pnlTotal>=0?'+':''}${fmtMoney(pnlTotal)}</div>
-        <div class="sub">含已卖出部分 · 行情自动跟踪${realizedTotal !== 0 ? ` · 另累计已实现 ${realizedTotal>=0?'+':''}${fmtMoney(realizedTotal)}` : ''}</div></div>
+        <div class="value" style="color:${pnlTotal + realizedTotal>=0?'var(--green-ink)':'var(--red-ink)'};font-size:22px">${pnlTotal + realizedTotal>=0?'+':''}${fmtMoney(pnlTotal + realizedTotal)}</div>
+        <div class="sub">在持仓 ${pnlTotal>=0?'+':''}${fmtMoney(pnlTotal)} · 已清仓/已实现 ${realizedTotal>=0?'+':''}${fmtMoney(realizedTotal)}（行情自动跟踪）</div></div>
     </div>
   `));
 
@@ -7205,6 +7270,29 @@ VIEWS.portfolio = function (app) {
   const allocCard = el(`<div class="card"><h3>${icon('pie')} 大类配置</h3></div>`);
   allocCard.appendChild(buildPie(normalize(byBig), { total }));
   app.appendChild(allocCard);
+
+  // 历史清仓收益账本：清仓归档的标的在此留痕，计入「累计权益盈亏」，不再影响体检/持仓列表
+  const hist = STATE.realizedHistory || [];
+  if (hist.length) {
+    const histCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('inbox')} 历史清仓收益（${hist.length} 笔 · 合计 ${hist.reduce((s,r)=>s+num(r.realized),0)>=0?'+':''}${fmtMoney(hist.reduce((s,r)=>s+num(r.realized),0))}）</h3>
+      <p class="inline-note">清仓标的的累计盈亏在此留痕并计入「累计权益盈亏」；不占持仓列表、不影响股票体检。误归档可「撤销」恢复资产（含累计盈亏）。</p>
+      <div class="table-scroll"><table>
+        <thead><tr><th>标的</th><th>类别</th><th>清仓日期</th><th class="num">已实现盈亏</th><th></th></tr></thead>
+        <tbody>${hist.map(r => `<tr>
+          <td>${escapeHtml(r.name)}${r.code?`<br><span class="inline-note">${escapeHtml(r.code)}</span>`:''}</td>
+          <td><span class="tag-chip">${escapeHtml(r.category || '—')}</span></td>
+          <td>${escapeHtml(r.date)}</td>
+          <td class="num" style="color:${num(r.realized)>=0?'var(--green-ink)':'var(--red-ink)'}">${num(r.realized)>=0?'+':''}${fmtMoney(r.realized)}</td>
+          <td><button class="btn danger small" data-unarch="${escapeHtml(r.id)}">撤销</button></td>
+        </tr>`).join('')}</tbody>
+      </table></div></div>`);
+    histCard.querySelectorAll('[data-unarch]').forEach(b => b.onclick = () => {
+      if (confirm('撤销这条清仓归档？将从「历史清仓收益」移除，并把该资产（含累计盈亏）恢复到资产列表。')) {
+        unarchiveRecord(b.dataset.unarch); render();
+      }
+    });
+    app.appendChild(histCard);
+  }
   app.appendChild(el(`<p class="inline-note" style="margin-top:-6px">想按「期限×回撤」科学配置并生成调仓清单？见导航栏「<strong>再平衡</strong>」页。</p>`));
 
   // 明细表：按类别（按大类排序：股票→基金→理财→黄金→现金）
