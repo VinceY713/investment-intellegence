@@ -35,6 +35,16 @@ def today_str():
     return time.strftime('%Y-%m-%d', time.localtime())
 
 
+def last_trading_day_str():
+    # 最近交易日（周末回退到周五；法定节假日不覆盖，属已知简化）——与前端 lastTradingDayStr 同口径
+    y, m, d = (int(x) for x in today_str().split('-'))
+    import datetime as _dt
+    cur = _dt.date(y, m, d)
+    while cur.weekday() >= 5:
+        cur -= _dt.timedelta(days=1)
+    return cur.isoformat()
+
+
 def http_get(url, encoding, referer=None):
     req = urllib.request.Request(url, headers={'User-Agent': UA})
     if referer:
@@ -92,15 +102,34 @@ def asset_income(a, fx):
     return ('pnl', num(a.get('pnl')) if a.get('pnl') is not None else None)
 
 
-def big_class_of(cat):
-    if cat in ('A股股票', '美股股票', '基金'):
+def big_class_of(cat, name=''):
+    # 与前端 bigClassOf（分类中枢 classifyAsset）同口径：名称感知的基金细分。
+    # 两端必须同步修改——快照由浏览器/cron 交替写入，口径漂移会让趋势图大类逐日横跳。
+    n = str(name or '')
+    if cat == '黄金':
+        return '黄金'
+    if cat == '债券':
+        return '债券'
+    if cat == '基金':
+        if re.search(r'黄金(ETF|联接|现货)|Gold', n, re.I) and not re.search(r'黄金股|金矿|黄金矿业', n, re.I):
+            return '黄金'
+        if re.search(r'货币|货基|现金|余额宝|朝朝宝', n, re.I):
+            return '现金'
+        if re.search(r'债|债券|纯债|中短债|长债|信用债|利率债|转债', n, re.I):
+            return '债券'
+        if re.search(r'偏债', n):
+            return '债券'
+        if re.search(r'偏股', n) and re.search(r'混合', n):
+            return '权益'
+        if re.search(r'混合', n):
+            return '混合'
+        return '权益'
+    if cat in ('A股股票', '美股股票'):
         return '权益'
     if cat in ('理财(QDII)', '定期存款'):
         return '固收/理财'
-    if cat in ('人民币现金', '香港账户现金'):
+    if cat in ('人民币现金', '香港账户现金', '外汇'):
         return '现金'
-    if cat == '黄金':
-        return '黄金'
     return '其它'
 
 
@@ -143,7 +172,7 @@ def fetch_fund_confirmed(code):
     prev = num(lst[1].get('DWJZ')) if len(lst) > 1 else 0
     if nav <= 0:
         raise ValueError('nav<=0')
-    return nav, (prev if prev > 0 else None), day
+    return nav, (prev if prev > 0 else None), day, str(lst[0].get('FSRQ') or '')[:10]
 
 
 def fetch_fund(code):
@@ -163,7 +192,7 @@ def fetch_fund(code):
     day = num(o.get('gszzl'))
     if nav <= 0:
         raise ValueError('nav<=0')
-    return nav, (prev if prev > 0 else None), day
+    return nav, (prev if prev > 0 else None), day, str(o.get('gztime') or '')[:10]
 
 
 def fetch_quote(code):
@@ -224,7 +253,7 @@ def asset_fetchable(a):
     code = a.get('code') or ''
     if not code:
         return False
-    if a.get('category') == '基金':
+    if a.get('category') in ('基金', '债券'):   # 债券 6 位标准码（国债ETF/纯债基金）走净值通道，与前端一致
         return bool(re.match(r'^\d{6}$', code))
     if a.get('category') in ('A股股票', '美股股票'):
         return is_us_code(code) or bool(re.match(r'^\d{5,6}$', code))
@@ -235,10 +264,21 @@ def refresh_asset(a, fx):
     if a.get('category') == '黄金':
         px, day = fetch_gold(fx)
         prev = None
-    elif a.get('category') == '基金':
-        px, prev, day = fetch_fund(a['code'])
+        px_date = last_trading_day_str()
+    elif num(a.get('manualNav')) > 0 and not asset_fetchable(a):
+        # 手动单位净值（无公开接口的产品）：pxDate 取用户填的净值日期
+        px = num(a.get('manualNav'))
+        prev = None
+        day = None
+        nd = str(a.get('manualNavDate') or '')[:10]
+        px_date = nd if re.match(r'^\d{4}-\d{2}-\d{2}$', nd) else today_str()
+    elif a.get('category') in ('基金', '债券'):
+        px, prev, day, nav_date = fetch_fund(a['code'])
+        # 基金多为 T-1 确认净值（QDII 更滞后）：pxDate 用净值日期，不冒充「今日」
+        px_date = nav_date if re.match(r'^\d{4}-\d{2}-\d{2}$', nav_date or '') else last_trading_day_str()
     else:
         px, prev, day = fetch_quote(a['code'])
+        px_date = last_trading_day_str()
     if px <= 0:
         raise ValueError('bad price')
     # 首次校准份额一律用现价（份额 = 金额 ÷ 现价），首次不跳变、不依赖易错的昨收字段
@@ -253,7 +293,7 @@ def refresh_asset(a, fx):
         a['lastPx'] = px
         if day_ok is not None:
             a['dayPct'] = day_ok
-        a['pxDate'] = today_str()
+        a['pxDate'] = px_date
         return False
     delta_cny = (new - old) * (fx if a.get('currency') == 'USD' else 1)
     a['amount'] = round(new, 2)
@@ -263,7 +303,7 @@ def refresh_asset(a, fx):
     a['lastPx'] = px
     if day_ok is not None:
         a['dayPct'] = day_ok
-    a['pxDate'] = today_str()
+    a['pxDate'] = px_date
     return True
 
 
@@ -276,7 +316,7 @@ def make_snapshot(state, date):
     pnl = 0.0
     for a in assets:
         v = asset_cny(a, fx)
-        k = big_class_of(a.get('category'))
+        k = big_class_of(a.get('category'), a.get('name'))
         by_big[k] = by_big.get(k, 0) + v
         c = a.get('category')
         by_cat[c] = by_cat.get(c, 0) + v
@@ -320,7 +360,7 @@ def main():
     fail = 0
     skip = 0
     for a in assets:
-        if not asset_fetchable(a):
+        if not asset_fetchable(a) and num(a.get('manualNav')) <= 0:   # 手动净值资产也刷新（与前端口径一致）
             continue
         try:
             if refresh_asset(a, fx):
