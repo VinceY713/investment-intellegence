@@ -1191,7 +1191,11 @@ function stockCashPoolBalance(ccy = 'CNY') {
 function poolName(ccy = 'CNY') { return ccy === 'USD' ? STOCK_CASH_POOL_NAME_USD : STOCK_CASH_POOL_NAME; }
 // 原币金额显示（美元加 $，人民币加 ¥）
 function fmtOrig(v, ccy = 'CNY') {
-  return (ccy === 'USD' ? '$' : '¥') + Math.abs(v).toLocaleString('zh-CN', { maximumFractionDigits: 0 });
+  return (ccy === 'USD' ? '$' : '¥') + Math.abs(v).toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+}
+// 带符号原币金额：+$5,000 / -¥20,000（fmtOrig 取绝对值，需要符号时用它）
+function fmtSigned(v, ccy = 'CNY') {
+  return (v >= 0 ? '+' : '-') + fmtOrig(v, ccy);
 }
 // 现金池结算：deltaOrig > 0 入池（卖出盈余），< 0 出池（买入动用）。允许为负——负数代表动用了池外资金
 function settleToPool(deltaOrig, ccy = 'CNY', note = '') {
@@ -1664,7 +1668,7 @@ function applyStateDefaults(s) {
   s.snapshots = s.snapshots || [];
   s.forecasts = s.forecasts || [];
   s.corrCache = s.corrCache || null;
-  s.cashflows = s.cashflows || [];              // 出入金登记 [{id,date,amount,note}]，正=入金 负=出金（人民币）
+  s.cashflows = s.cashflows || [];              // 出入金登记 [{id,date,amount,ccy,amountCny,note}]，正=入金 负=出金；amount=原币，amountCny=人民币折算（USD 登记时锁定）
   s.targetAlloc = s.targetAlloc || null;        // 再平衡目标配置 {buckets:{...}, threshold}，null=未设置
   s.layerOverrides = s.layerOverrides || {};    // 再平衡分层手动改层 {code||name: layerKey}，覆盖自动识别
   s.thesisFlags = s.thesisFlags || {};          // 「逻辑已破」标记 {code||name: true}，卖出排序最高优先
@@ -1899,14 +1903,20 @@ function recordDailySnapshot() {
   saveState();
 }
 
+// 出入金折算人民币口径：USD 流水登记时已按当时汇率算好 amountCny（避免汇率漂移影响 TWR），
+// 旧数据/CNY 流水按原值；缺 amountCny 的 USD 旧记录按当前汇率兜底折算。
+function cashflowCny(c) {
+  if (c.amountCny != null) return num(c.amountCny);
+  return (c.ccy === 'USD') ? num(c.amount) * currentFx() : num(c.amount);
+}
 // 某天的出入金合计（人民币，正=入金 负=出金）
 function cashflowOn(dateStr) {
-  return (STATE.cashflows || []).filter(c => c.date === dateStr).reduce((s, c) => s + num(c.amount), 0);
+  return (STATE.cashflows || []).filter(c => c.date === dateStr).reduce((s, c) => s + cashflowCny(c), 0);
 }
 // 区间出入金合计：fromExcl < 流水日期 ≤ toIncl。快照非连续（周末/漏记）时，
 // 落在快照间隙里的流水也要计入，否则 TWR/归因把转入当收益（只看"恰好有快照那天"会漏）
 function cashflowBetween(fromExcl, toIncl) {
-  return (STATE.cashflows || []).filter(c => c.date > fromExcl && c.date <= toIncl).reduce((s, c) => s + num(c.amount), 0);
+  return (STATE.cashflows || []).filter(c => c.date > fromExcl && c.date <= toIncl).reduce((s, c) => s + cashflowCny(c), 0);
 }
 // 时间加权收益率(TWR)：相邻快照逐日收益率连乘，剔除出入金——
 // r_i = (T_i − CF_i − T_{i-1}) / T_{i-1}（当日流水按开盘前到账近似）。
@@ -6281,9 +6291,11 @@ VIEWS.trends = function (app) {
   // 出入金登记：修正「净值变化 ≠ 真实收益率」——转入转出会让趋势/归因失真，登记后 TWR 自动剔除
   const cfCard = el(`<div class="card" style="margin-top:16px">
     <h3>${icon('wallet')} 出入金登记</h3>
-    <p class="hint">转入/转出资金会让「净值变化」失真（多出来的钱可能只是你新加的仓，不是赚的）。在这里登记后，上方「收益率(TWR)」会自动剔除这些流水，反映真实投资表现。<strong>正数 = 入金，负数 = 出金</strong>（人民币）。</p>
+    <p class="hint">转入/转出资金会让「净值变化」失真（多出来的钱可能只是你新加的仓，不是赚的）。在这里登记后，上方「收益率(TWR)」会自动剔除这些流水，反映真实投资表现。<strong>正数 = 入金，负数 = 出金</strong>。支持人民币与美元，美元按登记当日汇率折算入收益率口径。</p>
     <div class="grid grid-3">
       <div class="field"><label>日期</label><input id="cf-date" type="date" value="${todayStr()}"/></div>
+      <div class="field"><label>币种</label><select id="cf-ccy">
+        <option value="CNY">人民币 ¥</option><option value="USD">美元 $</option></select></div>
       <div class="field"><label>金额（+入金 / −出金）</label><input id="cf-amount" type="number" step="100" placeholder="如 50000 或 -20000"/></div>
       <div class="field"><label>备注（可选）</label><input id="cf-note" placeholder="如 工资加仓"/></div>
     </div>
@@ -6305,7 +6317,7 @@ VIEWS.trends = function (app) {
     t.innerHTML = list.length
       ? `<thead><tr><th>日期</th><th class="num">金额</th><th>是否动总资产</th><th>备注</th><th class="num"></th></tr></thead><tbody>${list.map(c => `<tr>
           <td>${escapeHtml(c.date)}</td>
-          <td class="num" style="color:${num(c.amount)>=0?'var(--green-ink)':'var(--red-ink)'}">${num(c.amount)>=0?'+':''}${fmtMoney(c.amount)}</td>
+          <td class="num" style="color:${num(c.amount)>=0?'var(--green-ink)':'var(--red-ink)'}">${fmtSigned(c.amount, c.ccy || 'CNY')}${c.ccy === 'USD' ? `<br><span class="inline-note">≈${fmtMoney(cashflowCny(c))}</span>` : ''}</td>
           <td>${c.synced
               ? `<span class="tag-chip">已同步 ${escapeHtml(c.syncTo || '资产')}</span>`
               : '<span class="inline-note">仅算收益率</span>'}</td>
@@ -6320,13 +6332,19 @@ VIEWS.trends = function (app) {
       saveState(); await pushCloudNow(); render();
     });
   }
-  // 同步目标：人民币现金/理财类资产（出入金登记的金额口径是人民币，故只列 CNY 资产）
-  // ＋一个「新建/并入股票现金池」兜底选项，避免一个可用目标都没有。
-  const syncTargets = (STATE.assets || []).filter(a => a.currency !== 'USD'
-    && (/现金|理财|存款/.test(a.category || '') || /现金|活期|余额|零钱|货基/.test(a.name || '')));
+  // 同步目标：按所选币种列出 现金/理财/存款 类资产（含美元账户），
+  // ＋一个「该币种现金池」兜底选项，避免一个可用目标都没有。
+  const ccySel = cfCard.querySelector('#cf-ccy');
   const syncSel = cfCard.querySelector('#cf-sync-to');
-  syncSel.innerHTML = syncTargets.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name)}（当前 ${fmtMoney(num(a.amount))}）</option>`).join('')
-    + `<option value="__pool__">${escapeHtml(poolName('CNY'))}（自动现金池，没有则新建）</option>`;
+  function drawSyncTargets() {
+    const ccy = ccySel.value;
+    const targets = (STATE.assets || []).filter(a => (a.currency || 'CNY') === ccy
+      && (/现金|理财|存款/.test(a.category || '') || /现金|活期|余额|零钱|货基/.test(a.name || '')));
+    syncSel.innerHTML = targets.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name)}（当前 ${fmtOrig(num(a.amount), ccy)}）</option>`).join('')
+      + `<option value="__pool__">${escapeHtml(poolName(ccy))}（自动现金池，没有则新建）</option>`;
+  }
+  drawSyncTargets();
+  ccySel.onchange = drawSyncTargets;
   const syncCb = cfCard.querySelector('#cf-sync');
   syncCb.onchange = () => {
     syncSel.style.display = syncCb.checked ? '' : 'none';
@@ -6338,33 +6356,36 @@ VIEWS.trends = function (app) {
   cfCard.querySelector('#cf-add').onclick = async () => {
     const date = cfCard.querySelector('#cf-date').value;
     const amount = num(cfCard.querySelector('#cf-amount').value);
+    const ccy = ccySel.value || 'CNY';
     const note = cfCard.querySelector('#cf-note').value.trim();
     if (!date) { alert('请选择日期'); return; }
     if (!(isFinite(amount) && amount !== 0)) { alert('请填写非零金额（正=入金，负=出金）'); return; }
+    // 人民币口径折算：USD 按当前汇率换算，登记时锁定（TWR/归因统一用人民币剔除）
+    const amountCny = ccy === 'USD' ? Math.round(amount * currentFx()) : amount;
     const doSync = syncCb.checked;
     const target = syncSel.value;
     const tgtAsset = target === '__pool__' ? null : (STATE.assets || []).find(a => a.id === target);
-    const tgtName = target === '__pool__' ? poolName('CNY') : (tgtAsset || {}).name || '所选资产';
+    const tgtName = target === '__pool__' ? poolName(ccy) : (tgtAsset || {}).name || '所选资产';
     if (doSync) {
       // 出金必须扣得动：余额不足时宁可拒绝，也不能截断到 0——那会让「流水记了 3424、总资产只少 1000」，
       // 差额凭空消失，之后 TWR 会把这块当成亏损。
-      const avail = target === '__pool__' ? stockCashPoolBalance('CNY') : num((tgtAsset || {}).amount);
+      const avail = target === '__pool__' ? stockCashPoolBalance(ccy) : num((tgtAsset || {}).amount);
       if (amount < 0 && -amount > avail + 0.005) {
-        alert(`「${tgtName}」当前只有 ${fmtMoney(avail)}，扣不出 ${fmtMoney(-amount)}。\n\n`
+        alert(`「${tgtName}」当前只有 ${fmtOrig(avail, ccy)}，扣不出 ${fmtOrig(-amount, ccy)}。\n\n`
           + `请改选余额足够的账户，或先在「投资组合」把钱归到正确的账户再登记；\n`
-          + `若这笔钱本就是从别处转出的，就选那个账户。（强行扣会让总资产少算 ${fmtMoney(-amount - avail)}）`);
+          + `若这笔钱本就是从别处转出的，就选那个账户。（强行扣会让总资产少算 ${fmtOrig(-amount - avail, ccy)}）`);
         return;
       }
-      if (!confirm(`登记出入金 ${fmtMoney(amount)}，并${amount >= 0 ? '增加' : '减少'}资产「${tgtName}」${fmtMoney(Math.abs(amount))}。\n\n`
+      if (!confirm(`登记出入金 ${fmtSigned(amount, ccy)}，并${amount >= 0 ? '增加' : '减少'}资产「${tgtName}」${fmtOrig(Math.abs(amount), ccy)}。\n\n`
         + `若这笔钱你已经在「投资组合」里改过金额了，请点取消——否则会重复计算。\n确认同步？`)) return;
     }
-    logOp('登记出入金：' + date + ' ' + fmtMoney(amount) + (doSync ? '（同步资产）' : ''));
+    logOp('登记出入金：' + date + ' ' + fmtSigned(amount, ccy) + (ccy === 'USD' ? `（${fmtMoney(amountCny)}）` : '') + (doSync ? '（同步资产）' : ''));
     // synced/syncTo 只作留痕：流水表里标出来，一眼看得出这笔钱动没动总资产（不勾就只改收益率口径）
-    (STATE.cashflows = STATE.cashflows || []).push({ id: uid(), date, amount, note,
+    (STATE.cashflows = STATE.cashflows || []).push({ id: uid(), date, amount, ccy, amountCny, note,
       synced: !!doSync, syncTo: doSync ? tgtName : '' });
     if (doSync) {
       if (target === '__pool__') {
-        settleToPool(amount, 'CNY', (amount >= 0 ? '入金' : '出金') + (note ? '·' + note : ''));
+        settleToPool(amount, ccy, (amount >= 0 ? '入金' : '出金') + (note ? '·' + note : ''));
       } else if (tgtAsset) {
         tgtAsset.amount = Math.max(0, Math.round((num(tgtAsset.amount) + amount) * 100) / 100);
         tgtAsset.cny = Math.round(assetCny(tgtAsset, currentFx()));
