@@ -1791,12 +1791,37 @@ function unarchiveRecord(id) {
   STATE.realizedHistory = STATE.realizedHistory.filter(r => r.id !== id);
   saveState();
 }
+// 资产清仓归档（基金/黄金等按金额管理的资产）：金额归零且还有收益记录 → 收益进账本、资产移除。
+// 与持仓归档同构：realized = 累计盈亏 pnl + 手填已实现 realizedPnl，assetBackup 供撤销恢复。
+// 注意：只处理「真清仓」——金额 ≈ 0（用户把金额改成 0 即清仓）；有 pnl/realizedPnl 才有归档价值。
+function archiveClosedAsset(a) {
+  const realized = num(a.pnl) + num(a.realizedPnl);
+  STATE.realizedHistory = STATE.realizedHistory || [];
+  STATE.realizedHistory.unshift({
+    id: uid(),
+    name: a.name || '未命名',
+    code: a.code || '',
+    factor: a.factor || '',
+    category: a.category || '',
+    currency: a.currency || 'CNY',
+    date: todayStr(),
+    realized: Math.round(realized * 100) / 100,
+    assetBackup: JSON.parse(JSON.stringify(a)),   // 供撤销恢复（含累计盈亏 pnl）
+    extraCount: 0,
+  });
+  STATE.assets = (STATE.assets || []).filter(x => x.id !== a.id);
+  saveState();
+}
 // 已清仓收益账本合计（人民币）
 function realizedHistoryTotal() {
   return (STATE.realizedHistory || []).reduce((s, r) => s + num(r.realized), 0);
 }
-// 渲染后：存在 0 持仓的清仓标的 → 顶部提示归档（用户确认，不自动删）
-// 触发条件收紧：关联资产必须「市值≈0」——持仓页允许只填占比不填股数，这类仍在持的仓位不能误伤
+// 渲染后：存在清仓标的 → 顶部提示归档（用户确认，不自动删）。
+// 两类清仓都识别：
+//  ① 0 持仓的持仓记录（触发条件收紧：关联资产必须「市值≈0」——持仓页允许只填占比不填股数，
+//     这类仍在持的仓位不能误伤）
+//  ② 金额归零的资产（基金/黄金等按金额管理的品类：用户把金额改成 0 即清仓，收益仍挂在 pnl 上）
+// 每类只提示第一条，归档/暂不后下次渲染再提示下一条，避免提示条堆叠。
 function renderArchiveBanner(app) {
   const fx = currentFx();
   const closed = (STATE.positions || []).filter(p => {
@@ -1805,20 +1830,44 @@ function renderArchiveBanner(app) {
     if (!linked.length) return num(p.weight) <= 0;                 // 无关联资产且占比也为 0 → 视为已清仓
     return linked.every(x => assetCny(x, fx) < 1);                 // 关联资产市值≈0 才是真清仓
   });
-  if (!closed.length) return;
-  const p = closed[0];
-  const a = p.code ? (STATE.assets || []).find(x => x.code === p.code) : null;
-  const gain = a ? num(a.pnl) + num(a.realizedPnl) : 0;
+  if (closed.length) {
+    const p = closed[0];
+    const a = p.code ? (STATE.assets || []).find(x => x.code === p.code) : null;
+    const gain = a ? num(a.pnl) + num(a.realizedPnl) : 0;
+    const banner = el(`<div class="card" style="margin-top:12px;border:1px solid var(--amber);background:rgba(255,193,7,.08)">
+      <div class="row" style="gap:10px;flex-wrap:wrap;align-items:center">
+        <span>${icon('inbox')} <strong>${escapeHtml(p.name)}</strong> 已清仓（持仓 0），累计盈亏
+          <strong style="color:${gain>=0?'var(--green-ink)':'var(--red-ink)'}">${gain>=0?'+':''}${fmtMoney(gain)}</strong>
+          <span class="inline-note">归档后收益计入「历史清仓收益」账本，持仓列表与股票体检不再出现它。</span></span>
+        <button class="btn" data-arch="yes" style="flex:0 0 auto">${icon('inbox')} 归档到历史收益</button>
+        <button class="btn secondary small" data-arch="later" style="flex:0 0 auto">暂不</button>
+      </div>
+    </div>`);
+    banner.querySelector('[data-arch="yes"]').onclick = () => { archiveClosedPosition(p); render(); };
+    banner.querySelector('[data-arch="later"]').onclick = () => { banner.remove(); };
+    app.prepend(banner);
+    return;
+  }
+  // ② 金额归零的资产（基金/黄金/理财等）：只挑「按金额管理」的品类，且金额≈0、还有收益记录
+  // （pnl 或 realizedPnl 非空）才提示——纯 0 金额无收益的资产直接提示删除即可，不占账本。
+  const closedAssets = (STATE.assets || []).filter(a => {
+    if (assetCny(a, fx) >= 1) return false;
+    if (a.pnl == null && a.realizedPnl == null) return false;
+    return /基金|黄金|理财|定存/.test(a.category || '') && !/现金/.test(a.category || '');
+  });
+  if (!closedAssets.length) return;
+  const a = closedAssets[0];
+  const gain = num(a.pnl) + num(a.realizedPnl);
   const banner = el(`<div class="card" style="margin-top:12px;border:1px solid var(--amber);background:rgba(255,193,7,.08)">
     <div class="row" style="gap:10px;flex-wrap:wrap;align-items:center">
-      <span>${icon('inbox')} <strong>${escapeHtml(p.name)}</strong> 已清仓（持仓 0），累计盈亏
+      <span>${icon('inbox')} <strong>${escapeHtml(a.name)}</strong> 已清仓（金额 0），累计盈亏
         <strong style="color:${gain>=0?'var(--green-ink)':'var(--red-ink)'}">${gain>=0?'+':''}${fmtMoney(gain)}</strong>
-        <span class="inline-note">归档后收益计入「历史清仓收益」账本，持仓列表与股票体检不再出现它。</span></span>
+        <span class="inline-note">归档后收益计入「历史清仓收益」账本，资产列表不再出现它（撤销可恢复）。</span></span>
       <button class="btn" data-arch="yes" style="flex:0 0 auto">${icon('inbox')} 归档到历史收益</button>
       <button class="btn secondary small" data-arch="later" style="flex:0 0 auto">暂不</button>
     </div>
   </div>`);
-  banner.querySelector('[data-arch="yes"]').onclick = () => { archiveClosedPosition(p); render(); };
+  banner.querySelector('[data-arch="yes"]').onclick = () => { archiveClosedAsset(a); render(); };
   banner.querySelector('[data-arch="later"]').onclick = () => { banner.remove(); };
   app.prepend(banner);
 }
