@@ -110,6 +110,23 @@ jobs:
 
                 location / { try_files $uri $uri/ /index.html; }
 
+                # 子路径入口：/personal/investmentmgm/ → 同一个站点（2026-08-21 起对外访问地址）
+                # 前端资源（styles.css/app.js/version.json）是相对路径，会请求 /personal/investmentmgm/xxx；
+                # rewrite 剥掉前缀后由 root 解析到 /var/www/investment-intelligence 下的同名文件。
+                # 用 ^~ 阻止后面的正则缓存 location 拦截，避免它用 server root 找错文件路径。
+                location ^~ /personal/investmentmgm/ {
+                    rewrite ^/personal/investmentmgm/(.*)$ /$1 break;
+                    root /var/www/investment-intelligence;
+                    index index.html;
+                    try_files $uri $uri/ /index.html;
+                    add_header Cache-Control "no-store, must-revalidate";
+                    expires -1;
+                }
+                # 无尾斜杠访问（/personal/investmentmgm）→ 301 补斜杠，避免相对资源路径解析错乱
+                location = /personal/investmentmgm {
+                    return 301 /personal/investmentmgm/;
+                }
+
                 location ~* \.(?:html|css|js)$ {
                     add_header Cache-Control "no-store, must-revalidate";
                     expires -1;
