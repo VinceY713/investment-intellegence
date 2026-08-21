@@ -42,6 +42,18 @@ jobs:
           overwrite: true
 
       # 根路径占位页（KEHU Platform）：/var/www/kehu-platform/index.html，未来 KEHU 在此开发
+      # 先确保目录存在（/var/www 归 root 所有，ubuntu 用户无写权限，SCP 无法自建目录）
+      - name: Prepare KEHU platform dir (SSH)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.ECS_HOST }}
+          username: ${{ secrets.ECS_USERNAME }}
+          key: ${{ secrets.ECS_SSH_KEY }}
+          port: ${{ secrets.ECS_PORT || '22' }}
+          script: |
+            sudo mkdir -p /var/www/kehu-platform
+            sudo chown $USER:$USER /var/www/kehu-platform
+
       - name: Copy KEHU platform placeholder (SCP)
         uses: appleboy/scp-action@v0.1.7
         with:
