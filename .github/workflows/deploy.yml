@@ -64,6 +64,9 @@ jobs:
           source: "kehu-platform/index.html"
           target: "/var/www/kehu-platform"
           overwrite: true
+          # 剥掉 source 的 kehu-platform/ 层级：否则文件会被传成
+          # /var/www/kehu-platform/kehu-platform/index.html，nginx root 找不到 index.html → 403
+          strip_components: 1
 
       - name: Configure password gate, nginx & reload (SSH)
         uses: appleboy/ssh-action@v1.0.3
