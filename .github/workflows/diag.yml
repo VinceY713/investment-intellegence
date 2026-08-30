@@ -139,6 +139,36 @@ jobs:
             curl -s -m 15 -u "$AUTH" "http://127.0.0.1/api/quote?code=usNVDA" 2>/dev/null | head -c 200; echo ""
             echo ""
 
+            echo "########## 8i. 红利策略数据源：股息率 / 波动率 / 基金分红"
+            echo "--- 8i-1 估值分析表全字段（找股息率字段名，601088 中国神华）"
+            probe "dc 估值 601088 ALL" "/api/emmacro?reportName=RPT_VALUEANALYSIS_DET&columns=ALL&filter=%28SECURITY_CODE%3D%22601088%22%29&pageSize=1&source=WEB&client=WEB" 1800
+            echo ""
+            echo "--- 8i-2 候选：分红派息专表"
+            for RN in RPT_SHAREBONUS_DET RPT_DIVIDEND_DET RPT_F10_DIVIDEND RPT_DMSK_STOCK_FN; do
+              probe "dc $RN" "/api/emmacro?reportName=$RN&columns=ALL&filter=%28SECURITY_CODE%3D%22601088%22%29&pageSize=2&source=WEB&client=WEB" 500
+            done
+            echo ""
+            echo "--- 8i-3 红利类 ETF 报价（腾讯，已知可用）：510880红利ETF 512890红利低波 515180红利低波100"
+            for C in sh510880 sh512890 sh515180 sh563020 sz159525; do
+              echo "    $C → $(curl -s -m 12 -u "$AUTH" "http://127.0.0.1/api/quote?code=$C" 2>/dev/null | head -c 120)"
+            done
+            echo ""
+            echo "--- 8i-4 红利 ETF 日K行数（算波动率用，腾讯 fqkline）"
+            for C in sh510880 sh512890 sh515180; do
+              RESP=$(curl -s -m 15 -u "$AUTH" "http://127.0.0.1/api/kline?param=$C%2Cday%2C%2C%2C300%2Cqfq" 2>/dev/null)
+              echo "    $C → 日期行数=$(printf '%s' "$RESP" | grep -o '\["20[0-9][0-9]-' | wc -l)"
+            done
+            echo ""
+            echo "--- 8i-5 场外红利基金分红记录（api.fund 分红送配 f10）"
+            probe "fund 分红 F10 (008163)" "/api/fundhist?fundCode=008163&pageIndex=1&pageSize=5" 400
+            curl -s -m 15 -A "Mozilla/5.0" -e "http://fundf10.eastmoney.com/" \
+              "http://api.fund.eastmoney.com/f10/lsjz?fundCode=008163&pageIndex=1&pageSize=3" 2>&1 | head -c 300; echo ""
+            echo "--- 8i-6 中证指数官网（股息率官方口径，能否直连）"
+            curl -s -m 15 -o /dev/null -w "csindex closeweight http=%{http_code}\n" \
+              "https://csi-web-dev.oss-cn-shanghai-finance-1-pub.aliyuncs.com/static/html/csindex/public/uploads/file/autofile/indicator/000922indicator.xls" 2>&1 | head -c 200
+            curl -s -m 15 "https://www.csindex.com.cn/csindex-home/index-list/query-index-item" -X POST -H "Content-Type: application/json" -d '{"sorter":{"sortField":"null","sortOrder":null},"pager":{"pageNum":1,"pageSize":5},"indexFilter":{"ifCustomized":null,"ifTracked":null,"ifWeightCapped":null,"indexCompliance":null,"hotSpot":null,"indexClassify":null,"currency":null,"region":null,"indexSeries":null,"undefined":null}}' 2>&1 | head -c 300; echo ""
+            echo ""
+
             echo "########## 9. nginx 错误日志（尾部 40 行）"
             sudo tail -n 40 /var/log/nginx/error.log 2>/dev/null || tail -n 40 /var/log/nginx/error.log 2>/dev/null || echo "(读不到 error.log)"
             echo ""
