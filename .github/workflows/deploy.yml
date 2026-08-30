@@ -41,6 +41,33 @@ jobs:
           target: "/var/www/investment-intelligence"
           overwrite: true
 
+      # 根路径占位页（KEHU Platform）：/var/www/kehu-platform/index.html，未来 KEHU 在此开发
+      # 先确保目录存在（/var/www 归 root 所有，ubuntu 用户无写权限，SCP 无法自建目录）
+      - name: Prepare KEHU platform dir (SSH)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.ECS_HOST }}
+          username: ${{ secrets.ECS_USERNAME }}
+          key: ${{ secrets.ECS_SSH_KEY }}
+          port: ${{ secrets.ECS_PORT || '22' }}
+          script: |
+            sudo mkdir -p /var/www/kehu-platform
+            sudo chown $USER:$USER /var/www/kehu-platform
+
+      - name: Copy KEHU platform placeholder (SCP)
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.ECS_HOST }}
+          username: ${{ secrets.ECS_USERNAME }}
+          key: ${{ secrets.ECS_SSH_KEY }}
+          port: ${{ secrets.ECS_PORT || '22' }}
+          source: "kehu-platform/index.html"
+          target: "/var/www/kehu-platform"
+          overwrite: true
+          # 剥掉 source 的 kehu-platform/ 层级：否则文件会被传成
+          # /var/www/kehu-platform/kehu-platform/index.html，nginx root 找不到 index.html → 403
+          strip_components: 1
+
       - name: Configure password gate, nginx & reload (SSH)
         uses: appleboy/ssh-action@v1.0.3
         env:
@@ -108,11 +135,31 @@ jobs:
                 auth_basic "请输入访问密码";
                 auth_basic_user_file /etc/nginx/.htpasswd;
 
-                location / { try_files $uri $uri/ /index.html; }
+                # 根路径：KEHU Platform 占位页（公开可见，无密码）；投资智能已迁至 /personal/investmentmgm/
+                location / {
+                    auth_basic off;
+                    root /var/www/kehu-platform;
+                    index index.html;
+                    try_files $uri $uri/ /index.html;
+                }
 
-                location ~* \.(?:html|css|js)$ {
+                # 子路径入口：/personal/investmentmgm/ → 投资智能站点
+                # 前端资源（styles.css/app.js/version.json）是相对路径，会请求 /personal/investmentmgm/xxx；
+                # rewrite 剥掉前缀后由 root 解析到 /var/www/investment-intelligence 下的同名文件。
+                # ⚠️ try_files 不能用 $uri/ + index 指令：rewrite 后 $uri=/ 命中目录 → index 内部跳转
+                # /index.html 会重新匹配 location，落进根路径 KEHU 占位页 → 显示错误页面。
+                # 因此：fallback 用带前缀的 /personal/investmentmgm/index.html（内部跳转重新进入本
+                # location，rewrite 后正确解析）；不用 index 指令、不匹配目录。
+                location ^~ /personal/investmentmgm/ {
+                    rewrite ^/personal/investmentmgm/(.*)$ /$1 break;
+                    root /var/www/investment-intelligence;
+                    try_files $uri /personal/investmentmgm/index.html;
                     add_header Cache-Control "no-store, must-revalidate";
                     expires -1;
+                }
+                # 无尾斜杠访问（/personal/investmentmgm）→ 301 补斜杠，避免相对资源路径解析错乱
+                location = /personal/investmentmgm {
+                    return 301 /personal/investmentmgm/;
                 }
 
                 # 行情代理（主）：浏览器同源 /api/quote?code=sh600000 → 腾讯行情
