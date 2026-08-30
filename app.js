@@ -40,8 +40,9 @@ const FACTORS = [
   '证券保险', '黄金', '有色金属', '能源', '公用事业',
   '化工', '消费', '食品饮料', '新能源车', '光伏风电',
   '军工', '卫星航天', '通信运营', '交通运输', '建筑基建',
-  '数字资产', '地产', '农业', '其它'
+  '数字资产', '地产', '农业', '债券', '混合', '其它'
 ];
+// 注意：FACTORS 增删键时必须同步 FACTOR_SECTOR_HINTS 与 STRESS_TECH，否则资金流联动/压力测试静默失效
 
 // 按名称粗分类底层因子（中英双语，兼容美股/ETF 英文名），避免用户手选默认而错标。
 // 规则按“先具体后宽泛”顺序，命中即返回，否则「其它」。
@@ -420,7 +421,7 @@ function techScore(rows) {
   // ④ RSI 0-1.5
   let rPt = 0, rTxt = '数据不足';
   if (rsi != null) {
-    rPt = rsi >= 50 && rsi <= 70 ? 1.5 : (rsi > 70 && rsi <= 80) ? 1 : rsi > 80 ? 0.3 : (rsi >= 40 ? 1 : rsi >= 30 ? 0.5 : 0.8);
+    rPt = rsi >= 50 && rsi <= 70 ? 1.5 : (rsi > 70 && rsi <= 80) ? 1 : rsi > 80 ? 0.3 : (rsi >= 40 ? 1 : rsi >= 30 ? 0.5 : 0.3);   // 超卖(<30)在趋势跟随口径下同样是弱势，与超买同档 0.3
     rTxt = rsi.toFixed(1) + (rsi > 80 ? '（超买）' : rsi < 30 ? '（超卖）' : rsi >= 50 ? '（强势区）' : '（弱势区）');
   }
   score += rPt;
@@ -562,6 +563,10 @@ function fundScore(f) {
     f.profitYoy == null ? '' : (f.profitYoy >= 0 ? '+' : '') + f.profitYoy.toFixed(1) + '%');
   add('资产负债率', f.debt, f.debt == null ? 0 : (f.debt < 40 ? 1.5 : f.debt < 60 ? 1 : f.debt < 75 ? 0.4 : 0), 1.5,
     f.debt == null ? '' : f.debt.toFixed(1) + '%' + (f.debt < 40 ? '（健康）' : f.debt < 60 ? '（正常）' : '（偏高）'));
+  add('毛利率', f.gross, f.gross == null ? 0 : (f.gross > 40 ? 1 : f.gross >= 25 ? 0.7 : f.gross >= 10 ? 0.4 : 0), 1,
+    f.gross == null ? '' : f.gross.toFixed(1) + '%' + (f.gross > 40 ? '（强定价权）' : f.gross >= 25 ? '（尚可）' : '（偏薄）'));
+  add('净利率', f.netMargin, f.netMargin == null ? 0 : (f.netMargin > 20 ? 1 : f.netMargin >= 8 ? 0.7 : f.netMargin >= 2 ? 0.4 : 0), 1,
+    f.netMargin == null ? '' : f.netMargin.toFixed(1) + '%');
   // 估值：PE 缺失（如亏损公司常无 PE_TTM）时用 PB 兜底，否则整项被跳过、PB 白取了
   const valHas = (f.pe != null || f.pb != null) ? 1 : null;
   const valPts = f.pe != null
@@ -638,7 +643,7 @@ function flowScore(sf, sectorHit) {
     const y = sectorHit.today;
     const p = y > 5 ? 2 : y > 0 ? 1.4 : y > -5 ? 0.7 : 0;
     score += p; got += 2;
-    parts.push({ k: '所属板块「' + sectorHit.name + '」', v: (y >= 0 ? '+' : '') + y.toFixed(1) + ' 亿（5日 ' + (sectorHit.d5 >= 0 ? '+' : '') + sectorHit.d5.toFixed(1) + '）', p, max: 2 });
+    parts.push({ k: '所属板块「' + sectorHit.name + '」', v: (y >= 0 ? '+' : '') + y.toFixed(1) + ' 亿' + (sectorHit.d5 != null ? '（5日 ' + (sectorHit.d5 >= 0 ? '+' : '') + sectorHit.d5.toFixed(1) + '）' : ''), p, max: 2 });
   }
   if (!got) return { ok: false };
   return { ok: true, score: Math.round(score / got * 10 * 10) / 10, parts, coverage: got };
@@ -724,7 +729,8 @@ function rsScore(stockSeries, benchSeries, benchName) {
   }
   score += momPts;
   parts.push({ k: 'RS 动能(20日变化)', v: momTxt, p: +momPts.toFixed(2), max: maxMom });
-  const gotMax = 4 + (d120 != null ? 3 : 0) + maxMom;
+  // 动能项缺样本时不计入分母（与 d120 项同规则——否则新股/短样本被系统性压分）
+  const gotMax = 4 + (d120 != null ? 3 : 0) + (p.length > 81 ? maxMom : 0);
   return { ok: true, score: Math.round(score / gotMax * 10 * 10) / 10, parts, benchName, days: p.length, d60, d120 };
 }
 
@@ -1083,20 +1089,55 @@ const SEED_POSITIONS = [
 // 关键修正：category='基金' 不再一刀切并入「权益」——纯债/固收基金落到「债券」，
 // 混合基金落「混合」，货币基金落「现金」，只把宽基/指数/行业/主题/红利/低波算「权益」。
 // 此前所有基金都算权益，导致债券敞口被吞进股票篮子、组合看似“零债券”。
+/* -------------------------------------------------------------------------
+   资产分类中枢（全系统唯一归属口径，2026-07-25 系统复查后建立）。
+   总览大类 / 再平衡层 / 压力测试桶 / 美元经济敞口 / 凯利角色 全部从这里出，
+   消除「同一资产在不同模块进不同桶」：黄金ETF≠宽基、转债/固收+≠纯债、货基≠危机-30%、
+   CNY计价QDII 也算美元经济敞口、美债ETF≠美股个股、外汇≈现金。
+   返回 { big, layer, stress, role, usdEcon }；各模块的 bigClassOf/layerOf/stressBuckets 等
+   全部委托到这里——改识别规则只改这一处。
+   ------------------------------------------------------------------------- */
+function classifyAsset(a) {
+  const cat = (a && a.category) || '', n = String((a && a.name) || ''), usd = a.currency === 'USD';
+  const isFund = cat === '基金';
+  // 细分识别（顺序即优先级）
+  const isGoldCommodity = cat === '黄金'
+    || (isFund && /黄金(ETF|联接|现货)|Gold/i.test(n) && !/黄金股|金矿|黄金矿业/i.test(n));
+  const isBondPlus = (isFund || cat === '债券') && /转债|双债|增强|固收\+|固收加/i.test(n);   // 含权债基
+  const isUsBond = (cat === '美股股票' || isFund) && /Treasury|Bond|SGOV|BIL|SHV|TLT|美债/i.test(n);
+  const isPureBond = !isBondPlus && (cat === '债券' || isUsBond
+    || (isFund && /债|债券|纯债|中短债|长债|信用债|利率债/i.test(n)));
+  const isOverseas = isFund && /标普|纳斯达克|纳指|美国|海外|全球|S&P|QDII/i.test(n);
+  const isMixedEq = isFund && /混合/i.test(n) && /偏股/i.test(n) && !isBondPlus;
+  const isMixedBd = isFund && /混合/i.test(n) && /偏债/i.test(n) && !isBondPlus;
+  const isMixed = isFund && /混合/i.test(n) && !isBondPlus;
+  // 货基/余额宝类现金等价物：只认基金类（理财(QDII)/定存 即使每日可赎也保持固收层——
+  // 流动性（isCashLikeAsset）与危机回撤是两个维度，可赎美元固收危机时仍会亏 ~8%）
+  const isMoney = isFund && isCashLikeAsset(a);
+  const isFx = cat === '外汇';
+  const isLowVolFund = isFund && /红利|低波|高股息|价值/i.test(n);
+
+  let big, layer, stress, role;
+  if (isGoldCommodity) { big = '黄金'; layer = 'gold'; stress = 'gold'; role = 'core'; }
+  else if (isMoney || cat === '人民币现金' || cat === '香港账户现金' || isFx) { big = '现金'; layer = 'cash'; stress = 'safe'; role = 'core'; }
+  else if (cat === '理财(QDII)') { big = '固收/理财'; layer = 'oseas'; stress = 'oseas'; role = 'core'; }
+  else if (cat === '定期存款') { big = '固收/理财'; layer = usd ? 'oseas' : 'safe'; stress = usd ? 'oseas' : 'safe'; role = 'core'; }
+  else if (isBondPlus || isMixedBd) { big = '债券'; layer = 'ballast'; stress = 'bondplus'; role = 'bond'; }  // 含权债基/偏债混合：15% 档
+  else if (isPureBond) { big = '债券'; layer = 'bond'; stress = 'bond'; role = 'bond'; }
+  else if (isOverseas) { big = '权益'; layer = 'us'; stress = 'us'; role = 'core'; }
+  else if (isMixedEq) { big = '权益'; layer = 'broad'; stress = 'fund'; role = 'core'; }
+  else if (isMixed) { big = '混合'; layer = 'ballast'; stress = 'fund'; role = 'core'; }
+  else if (isLowVolFund) { big = '权益'; layer = 'ballast'; stress = 'fund'; role = 'core'; }
+  else if (isFund) { big = '权益'; layer = 'broad'; stress = 'fund'; role = 'core'; }
+  else if (cat === 'A股股票') { big = '权益'; layer = 'single'; stress = 'cn'; role = 'stock'; }
+  else if (cat === '美股股票') { big = '权益'; layer = 'us'; stress = 'us'; role = 'stock'; }
+  else { big = '其它'; layer = usd ? 'oseas' : 'safe'; stress = 'safe'; role = 'core'; }
+  // 经济美元敞口：USD 计价 或 层在 海外固收/美股（含 CNY 计价的 QDII 海外基金）
+  const usdEcon = usd || layer === 'us' || layer === 'oseas';
+  return { big, layer, stress, role, usdEcon };
+}
 function bigClassOf(cat, name) {
-  if (cat === 'A股股票' || cat === '美股股票') return '权益';
-  if (cat === '债券') return '债券';
-  if (cat === '基金') {
-    const n = String(name || '');
-    if (/债|债券|纯债|中短债|长债|信用债|利率债|转债/i.test(n)) return '债券';
-    if (/货币|货基|现金|余额宝|朝朝宝/i.test(n)) return '现金';
-    if (/混合/i.test(n)) return '混合';
-    return '权益';
-  }
-  if (cat === '理财(QDII)' || cat === '定期存款') return '固收/理财';
-  if (cat === '人民币现金' || cat === '香港账户现金') return '现金';
-  if (cat === '黄金') return '黄金';
-  return '其它';
+  return classifyAsset({ category: cat, name: name }).big;
 }
 
 /* -------------------------------------------------------------------------
@@ -1301,7 +1342,9 @@ function applySellToPool(posId, amtCny) {
     const amtOrig = a.currency === 'USD' ? amtCny / fx : amtCny;
     a.amount = Math.max(0, Math.round((num(a.amount) - amtOrig) * 100) / 100);
     if (num(a.shares) > 0) { captureSod(a); a.shares = Math.max(0, Math.round(a.shares * (1 - ratio) * 100) / 100); }
-    if (a.pnl != null) a.pnl = Math.round(a.pnl * (1 - ratio) * 100) / 100;   // 卖出部分的浮盈亏按比例结转
+    // pnl 为「累计盈亏」口径（用户手动维护基准 + 行情自动累加 Δ市值，见 refreshOneAsset）：
+    // 卖出时【不再按比例结转】——已实现盈亏已含在累计基准里，剩余仓位浮动由行情刷新自动跟踪。
+    // 若按旧逻辑 pnl×(1−ratio)，会把已实现亏损/盈利也按比例抹掉，累计数字随调仓失真。
     a.cny = Math.round(assetCny(a, fx));
   }
   if (p) {
@@ -1458,8 +1501,8 @@ function recordDayTrade(a, type, shares, price) {
     settleToPool(-(sh * pr), a.currency === 'USD' ? 'USD' : 'CNY', '买入' + a.name);
   } else {
     a.shares = Math.max(0, oldShares - sh);
-    const ratio = oldShares > 0 ? a.shares / oldShares : 0;
-    if (a.pnl != null) a.pnl = Math.round(num(a.pnl) * ratio * 100) / 100;
+    // 卖出【不】按比例结转 pnl（累计口径）：已实现已含在累计基准中，剩余浮动由行情自动跟踪。
+    // 撤销时也对称地不回滚 pnl（仅买入撤销恢复 prevPnl），见 undoDayTrade。
     // 现金池按【实际减少的股数】结转：超卖被钳到 0 时，多报的部分不入池（账实一致）
     const effSold = oldShares - num(a.shares);
     settleToPool(effSold * pr, a.currency === 'USD' ? 'USD' : 'CNY', '卖出' + a.name);
@@ -1481,7 +1524,8 @@ function undoDayTrade(a, idx) {
   // 卖出的现金池反向额按【实际成交】算（与记录时的 effSold 对称）：超卖钳到0的部分没入过池，撤销也不出池
   const effSh = t.type === 'sell' ? Math.max(0, num(t.prevShares) - num(a.shares)) : num(t.shares);
   a.shares = num(t.prevShares);
-  if (t.prevPnl !== undefined) a.pnl = t.prevPnl;
+  // 累计口径下卖出不改 pnl → 撤销卖出也不回滚；仅买入（pnl 曾按买入价差调整过）需恢复 prevPnl
+  if (t.type === 'buy' && t.prevPnl !== undefined) a.pnl = t.prevPnl;
   settleToPool(t.type === 'buy' ? (t.shares * t.price) : -(effSh * t.price),
     a.currency === 'USD' ? 'USD' : 'CNY', '撤销' + a.name);   // 反向
   const px = num(a.lastPx) > 0 ? num(a.lastPx) : num(t.price);
@@ -1517,7 +1561,7 @@ function classRank(cat) {
 }
 const ASSET_CATEGORIES = ['A股股票', '美股股票', '基金', '债券', '理财(QDII)', '定期存款', '黄金', '人民币现金', '香港账户现金', '外汇'];
 
-// 收益：理财/存款 → 年化利息（美元按当日中间价折人民币）；其它 → 浮盈亏
+// 收益：理财/存款 → 年化利息（美元按当日中间价折人民币）；其它 → 累计盈亏（含已卖出，行情自动跟踪）
 function assetIncome(a, fx) {
   fx = fx || currentFx();
   const rate = annualRateOf(a);
@@ -1629,6 +1673,7 @@ function applyStateDefaults(s) {
   s.settings.benchKeys = Array.isArray(s.settings.benchKeys) ? s.settings.benchKeys : [];   // 资产趋势选中的对比基准（多选）
   s.macro = Object.assign({ market: {}, ind: {}, updatedAt: null }, s.macro || {});
   s.macro.market = s.macro.market || {}; s.macro.ind = s.macro.ind || {};
+  s.realizedHistory = s.realizedHistory || [];   // 已清仓收益账本 [{id,name,code,factor,category,currency,date,realized,assetBackup}]
   return s;
 }
 
@@ -1704,6 +1749,74 @@ function restoreOp(entry) {
 
 function uid() {
   return 'p' + Math.random().toString(36).slice(2, 9);
+}
+
+/* -------------------------------------------------------------------------
+   已清仓收益账本（realizedHistory）：
+   持仓归零的标的 → 归档到历史，累计盈亏转入账本（收益不丢、可追溯），
+   并从持仓/资产移除——不占持仓列表、不污染股票体检（名义只数/深套复核）。
+   账本计入组合「累计权益盈亏」（投资组合页），可撤销恢复资产。
+   ------------------------------------------------------------------------- */
+function archiveClosedPosition(p) {
+  // 同代码多账户：全量聚合（而非只取第一笔）；累计盈亏 = 浮盈亏 pnl + 手填已实现 realizedPnl，两者都进账本
+  const matches = p.code ? (STATE.assets || []).filter(x => x.code === p.code) : [];
+  const a = matches[0] || null;
+  const realized = matches.reduce((s, x) => s + num(x.pnl) + num(x.realizedPnl), 0);
+  STATE.realizedHistory = STATE.realizedHistory || [];
+  STATE.realizedHistory.unshift({
+    id: uid(),
+    name: p.name || (a && a.name) || '未命名',
+    code: p.code || '',
+    factor: p.factor || '',
+    category: a ? (a.category || '') : '',
+    currency: a ? (a.currency || 'CNY') : 'CNY',
+    date: todayStr(),
+    realized: Math.round(realized * 100) / 100,
+    assetBackup: a ? JSON.parse(JSON.stringify(a)) : null,   // 供撤销恢复（含累计盈亏 pnl）
+    extraCount: matches.length - 1,                          // 多账户合并归档的附加笔数（撤销只恢复第一笔，见注释）
+  });
+  STATE.positions = (STATE.positions || []).filter(x => x.id !== p.id);
+  if (matches.length) STATE.assets = (STATE.assets || []).filter(x => x.code !== p.code);
+  saveState();
+}
+// 撤销归档：从账本移除并恢复资产（pnl 累计盈亏随资产回来）；0 持仓的持仓记录不恢复
+function unarchiveRecord(id) {
+  const rec = (STATE.realizedHistory || []).find(r => r.id === id);
+  if (!rec) return;
+  if (rec.assetBackup) STATE.assets = (STATE.assets || []).concat(Object.assign({}, rec.assetBackup));
+  STATE.realizedHistory = STATE.realizedHistory.filter(r => r.id !== id);
+  saveState();
+}
+// 已清仓收益账本合计（人民币）
+function realizedHistoryTotal() {
+  return (STATE.realizedHistory || []).reduce((s, r) => s + num(r.realized), 0);
+}
+// 渲染后：存在 0 持仓的清仓标的 → 顶部提示归档（用户确认，不自动删）
+// 触发条件收紧：关联资产必须「市值≈0」——持仓页允许只填占比不填股数，这类仍在持的仓位不能误伤
+function renderArchiveBanner(app) {
+  const fx = currentFx();
+  const closed = (STATE.positions || []).filter(p => {
+    if (num(p.shares) > 0) return false;
+    const linked = p.code ? (STATE.assets || []).filter(x => x.code === p.code) : [];
+    if (!linked.length) return num(p.weight) <= 0;                 // 无关联资产且占比也为 0 → 视为已清仓
+    return linked.every(x => assetCny(x, fx) < 1);                 // 关联资产市值≈0 才是真清仓
+  });
+  if (!closed.length) return;
+  const p = closed[0];
+  const a = p.code ? (STATE.assets || []).find(x => x.code === p.code) : null;
+  const gain = a ? num(a.pnl) + num(a.realizedPnl) : 0;
+  const banner = el(`<div class="card" style="margin-top:12px;border:1px solid var(--amber);background:rgba(255,193,7,.08)">
+    <div class="row" style="gap:10px;flex-wrap:wrap;align-items:center">
+      <span>${icon('inbox')} <strong>${escapeHtml(p.name)}</strong> 已清仓（持仓 0），累计盈亏
+        <strong style="color:${gain>=0?'var(--green-ink)':'var(--red-ink)'}">${gain>=0?'+':''}${fmtMoney(gain)}</strong>
+        <span class="inline-note">归档后收益计入「历史清仓收益」账本，持仓列表与股票体检不再出现它。</span></span>
+      <button class="btn" data-arch="yes" style="flex:0 0 auto">${icon('inbox')} 归档到历史收益</button>
+      <button class="btn secondary small" data-arch="later" style="flex:0 0 auto">暂不</button>
+    </div>
+  </div>`);
+  banner.querySelector('[data-arch="yes"]').onclick = () => { archiveClosedPosition(p); render(); };
+  banner.querySelector('[data-arch="later"]').onclick = () => { banner.remove(); };
+  app.prepend(banner);
 }
 
 /* -------------------------------------------------------------------------
@@ -1866,7 +1979,8 @@ async function pushCloudNow() {
           if (!sn || !sn.date) return;
           const i = byDate.get(sn.date);
           if (i == null) { STATE.snapshots.push(sn); changed++; }
-          else if (num(STATE.snapshots[i].ts) < cloud.savedAt && (sn.assets || []).length) { STATE.snapshots[i] = sn; changed++; }
+          // 同日取采集时刻较新者：优先比快照自身 ts（采集时刻），无 ts 再退云端整文件写入时刻
+          else if ((num(STATE.snapshots[i].ts) || 0) < (num(sn.ts) || cloud.savedAt || 0) && (sn.assets || []).length) { STATE.snapshots[i] = sn; changed++; }
         });
         if (changed) {
           STATE.snapshots.sort((a, b) => a.date.localeCompare(b.date));
@@ -2148,6 +2262,7 @@ function render() {
   const app = document.getElementById('app');
   app.innerHTML = '';
   (VIEWS[currentView] || VIEWS.dashboard)(app);
+  renderArchiveBanner(app);         // 0 持仓清仓标的 → 归档提示（收益进账本，不再污染体检）
 }
 
 // 移动端：把激活标签滚动进视野（11 个标签在手机上默认只露前几个）。
@@ -2203,8 +2318,8 @@ VIEWS.dashboard = function (app) {
   const factorCap = level.factor / 100;
   const concentrationOk = maxFactorW <= factorCap;
 
-  // 单股占弹性仓 % 上限（配置角色，可比整体上限宽）
-  const overSingle = positions.filter(p => equityPct > 0 && (num(p.weight) / equityPct * 100) > level.single + 1e-9);
+  // 单股上限：总资产口径（s.singleCap），与铁律/凯利/四道闸/减仓全系统一致
+  const overSingle = positions.filter(p => num(p.weight) > num(s.singleCap, 10) + 1e-9);
 
   // 深套需复核逻辑的股（不是自动卖）
   const deep = positions.filter(p => num(p.pnl) <= -num(s.deepLossAdd, 20));
@@ -2240,7 +2355,7 @@ VIEWS.dashboard = function (app) {
         <div class="sub">名义 ${nHoldings} 只 · 标签口径 ${effN?effN.toFixed(1):'—'}</div></div>
       <div class="stat"><div class="label">${icon('trenddown')} 弹性仓回撤(最坏/现实)</div>
         <div class="value" style="color:${ddOk?'var(--green-ink)':'var(--red-ink)'}">${fmtPct(equityDD,1)}</div>
-        <div class="sub">现实约 ${fmtPct(equityDDReal,1)} · 承受 ${s.maxDrawdown}%</div></div>
+        <div class="sub">现实约 ${fmtPct(equityDDReal,1)} · 承受 ${s.maxDrawdown}% · 仅弹性仓口径（全组合压力回撤见「再平衡」）</div></div>
     </div>
   `));
   if (usdExp > 0 && totForFx > 0) app.appendChild(el(`<div class="card"><div class="alert blue"><span class="icon">${icon('globe')}</span><div>
@@ -2257,7 +2372,7 @@ VIEWS.dashboard = function (app) {
   const checks = [];
   if (!ddOk) checks.push(['red', `弹性仓回撤贡献 ${fmtPct(equityDD,1)} > 全组合承受 ${s.maxDrawdown}%——见「③ 回撤控制」降高波动持仓`]);
   if (!concentrationOk && maxFactor) checks.push(['red', `因子「${maxFactor}」占弹性仓 ${fmtPct(maxFactorW*100,0)} > ${level.label}档上限 ${level.factor}%——过度押单一 beta`]);
-  overSingle.forEach(p => checks.push(['amber', `${escapeHtml(p.name||'未命名')} 占弹性仓 ${fmtPct(num(p.weight)/equityPct*100,0)} > ${level.label}档单股上限 ${level.single}%`]));
+  overSingle.forEach(p => checks.push(['amber', `${escapeHtml(p.name||'未命名')} 占总资产 ${fmtPct(num(p.weight),1)} > 单股上限 ${num(s.singleCap,10)}%（总资产口径,与铁律/减仓一致）`]));
   if (nHoldings >= 3 && corrEffN > 0 && corrEffN < nHoldings * 0.6) checks.push(['amber', `持 ${nHoldings} 只但相关性调整后有效持仓数仅 ${corrEffN.toFixed(1)}——假分散(多只押同一方向)`]);
   // 隐藏集中度：标签口径显示分散、但按真实相关性缩水 —— 这才是 README 承诺的「戳破假分散」
   if (nHoldings >= 3 && effN > 0 && corrEffN > 0 && (effN - corrEffN) >= 0.8)
@@ -2405,13 +2520,15 @@ function renderRealCorrCard(app, positions) {
     const staleHint = (avail > n) ? `<div class="alert amber" style="margin-top:10px"><span class="icon">${icon('warn')}</span><div>下面是<strong>上次缓存</strong>的结果（${n} 个标的）。当前可纳入 <strong>${avail}</strong> 个（含基金/美股），点上方蓝色<strong>「拉取历史序列」</strong>重算即可纳入。</div></div>` : '';
     const sigHint = sigMismatch ? `<div class="alert amber" style="margin-top:10px"><span class="icon">${icon('warn')}</span><div>组合已变动（新增/删除了标的），上方缓存是 <strong>${escapeHtml(c.date)}</strong> 算的旧组合结果，<strong>不再跟随当前持仓</strong>。点上方蓝色<strong>「拉取历史序列」</strong>重算，以反映当前真实相关性。</div></div>` : '';
     const roles = c.roles || c.codes.map(() => 'stock');
-    const dot = i => roles[i] === 'fund' ? '<span title="压舱基金" style="color:var(--accent)">◆</span>' : '<span title="个股/美股弹性" style="color:var(--muted)">●</span>';
+    const dot = i => roles[i] === 'fund' ? '<span title="压舱基金" style="color:var(--accent)">◆</span>'
+      : roles[i] === 'bond' ? '<span title="债券/固收" style="color:var(--green)">■</span>'
+      : '<span title="个股/美股弹性" style="color:var(--muted)">●</span>';
     const shortN = c.names.map(nm => (nm || '').slice(0, 4));
     const head = '<th></th>' + shortN.map((nm, i) => `<th class="num" style="font-size:11px">${dot(i)}${escapeHtml(nm)}</th>`).join('');
     const body = c.matrix.map((row, i) => `<tr><td style="font-size:11px;white-space:nowrap">${dot(i)}${escapeHtml(shortN[i])}</td>` +
       row.map((v, j) => `<td class="num" style="background:${i===j?'var(--surface-soft)':heat(v)};color:${i===j?'var(--muted)':'#fff'};font-size:11px">${i===j?'1.00':(v==null?'—':v.toFixed(2))}</td>`).join('') + '</tr>').join('');
-    const statRows = c.stats.map(st => `<tr><td>${st.role==='fund'?'<span style="color:var(--accent)">◆</span>':'<span style="color:var(--muted)">●</span>'}${escapeHtml(st.name)}${st.prior?'<span class="inline-note"> · 因子先验</span>':''}</td>
-      <td class="num" style="font-size:11px;color:var(--muted)">${st.role==='fund'?'基金':'个股/美股'}</td><td class="num">${st.days||'—'}</td>
+    const statRows = c.stats.map(st => `<tr><td>${st.role==='fund'?'<span style="color:var(--accent)">◆</span>':st.role==='bond'?'<span style="color:var(--green)">■</span>':'<span style="color:var(--muted)">●</span>'}${escapeHtml(st.name)}${st.prior?'<span class="inline-note"> · 因子先验</span>':''}</td>
+      <td class="num" style="font-size:11px;color:var(--muted)">${st.role==='fund'?'基金':st.role==='bond'?'债券':'个股/美股'}</td><td class="num">${st.days||'—'}</td>
       <td class="num">${st.vol!=null?fmtPct(st.vol,0):'—'}</td>
       <td class="num" style="color:var(--red-ink)">${st.mdd!=null?fmtPct(st.mdd,0):'—'}</td></tr>`).join('');
     // 失败诊断：带出每只的错误原因，方便定位是接口没通还是代码不支持
@@ -2795,7 +2912,7 @@ async function fetchGold(fx) {
 /* -------------------------------------------------------------------------
    一键刷新组合估值：公募基金走天天基金，股票/ETF/美股走行情源。
    份额模型：首次刷新用「金额 ÷ 现价/净值」反推份额并存下；之后价值 = 份额 × 最新价，
-   浮盈亏随价值等额变动（Δ浮盈亏 = Δ市值），避免多天重复计算。
+   累计盈亏随价值等额变动（Δ累计盈亏 = Δ市值，pnl 为用户手动维护的「累计基准」+ 自动跟踪），避免多天重复计算。
    ------------------------------------------------------------------------- */
 function assetFetchable(a) {
   if (!a) return false;
@@ -2916,7 +3033,8 @@ VIEWS.positions = function (app) {
   const form = el(`<div class="card"><h3>添加 / 编辑持仓</h3></div>`);
   form.appendChild(el(`
     <p class="hint">输入股票代码可自动获取名称与最新价；填「持股数量」后，占比按
-      <code class="formula">持股市值 ÷ 总资产</code> 自动计算，浮盈亏按成本价与现价自动算。
+      <code class="formula">持股市值 ÷ 总资产</code> 自动计算，参考盈亏按成本价与现价估算。
+      标的的「累计盈亏」（含已卖出）在「投资组合」资产里维护，行情自动跟踪。
       当前总资产 <strong>${fmtMoney(totalAssets)}</strong>（由「投资组合」明细自动汇总，随资产变动实时更新）。</p>
     <div class="grid grid-3">
       <div class="field"><label>代码（A股 / ETF / 美股）</label>
@@ -3120,7 +3238,9 @@ VIEWS.positions = function (app) {
         a.shares = shares;
         a.amount = Math.round(shares * px * 100) / 100;
         a.lastPx = px;
-        if (cost > 0) a.pnl = Math.round(shares * (px - cost) * (a.currency === 'USD' ? fx : 1) * 100) / 100;
+        // 累计盈亏口径：资产里已手动维护过 pnl（含已卖出）就绝不覆盖，否则调仓/编辑会把累计基准冲掉；
+        // 仅当资产从未有盈亏记录（pnl 为空）时，才用成本价初始化浮动盈亏作为起点。
+        if (a.pnl == null && cost > 0) a.pnl = Math.round(shares * (px - cost) * (a.currency === 'USD' ? fx : 1) * 100) / 100;
         a.cny = Math.round(assetCny(a, fx));
       } else if (!a && !editId && shares > 0 && px > 0) {
         const isUs = isUsCode(pos.code);
@@ -3176,16 +3296,25 @@ VIEWS.positions = function (app) {
     const totalWeight = STATE.positions.reduce((a, p) => a + num(p.weight), 0);
     const scroll = el('<div class="table-scroll"></div>');
     const totalValue = totalAssets > 0 ? totalWeight / 100 * totalAssets : 0;
+    let cumTotal = 0;
     const rows = STATE.positions.map(p => {
       const ddc = Calc.drawdownContribution(num(p.weight), num(p.maxDrop));
       const pnlColor = num(p.pnl) >= 0 ? 'var(--green)' : 'var(--red)';
       const value = totalAssets > 0 ? num(p.weight) / 100 * totalAssets : 0;
+      // 累计盈亏（金额，含已卖出）：从同代码资产取 pnl（用户手动维护基准 + 行情自动跟踪）
+      const linkedA = p.code ? (STATE.assets || []).find(a => a.code === p.code) : null;
+      const cumPnl = linkedA && linkedA.pnl != null ? num(linkedA.pnl) : null;
+      if (cumPnl != null) cumTotal += cumPnl;
+      const cumPnlCell = cumPnl != null
+        ? `<td class="num" style="color:${cumPnl >= 0 ? 'var(--green)' : 'var(--red)'}" title="累计盈亏（含已卖出；行情自动跟踪）">${cumPnl >= 0 ? '+' : ''}${fmtMoney(cumPnl)}</td>`
+        : '<td class="num" title="累计盈亏（含已卖出）">—</td>';
       return `<tr>
         <td>${escapeHtml(p.name)}${p.code?`<br><span class="inline-note">${escapeHtml(p.code)}</span>`:''}</td>
         <td><span class="tag-chip">${escapeHtml(p.factor)}</span></td>
         <td class="num">${fmtPct(num(p.weight),1)}</td>
         <td class="num">${value>0?fmtMoney(value):'—'}</td>
         <td class="num">${num(p.shares)>0?Math.round(num(p.shares)).toLocaleString():'—'}</td>
+        ${cumPnlCell}
         <td class="num" style="color:${pnlColor}">${num(p.pnl)>=0?'+':''}${fmtPct(num(p.pnl),1)}</td>
         <td>${escapeHtml(p.trend||'—')}</td>
         <td class="num">${fmtPct(num(p.maxDrop),0)}</td>
@@ -3199,14 +3328,16 @@ VIEWS.positions = function (app) {
     scroll.appendChild(el(`
       <table>
         <thead><tr>
-          <th>名称</th><th>因子</th><th class="num">占比</th><th class="num">金额</th><th class="num">持股数</th><th class="num">浮盈亏</th>
+          <th>名称</th><th>因子</th><th class="num">占比</th><th class="num">金额</th><th class="num">持股数</th><th class="num" title="累计盈亏 = 该标的从买入到现在的总盈亏（含已卖出；手动维护基准 + 行情自动跟踪）">累计盈亏</th><th class="num">浮盈亏</th>
           <th>趋势</th><th class="num">最大跌幅</th><th class="num" title="潜在下行风险 = 占比 × 最大跌幅，与当前盈亏无关，恒为正">回撤贡献(潜在)</th><th></th>
         </tr></thead>
         <tbody>${rows}
           <tr class="total-row">
             <td>合计</td><td></td><td class="num">${fmtPct(totalWeight,1)}</td>
             <td class="num">${totalValue>0?fmtMoney(totalValue):'—'}</td>
-            <td></td><td></td><td></td><td></td>
+            <td></td>
+            <td class="num" style="color:${cumTotal>=0?'var(--green)':'var(--red)'}">${cumTotal>=0?'+':''}${fmtMoney(cumTotal)}</td>
+            <td></td><td></td><td></td>
             <td class="num">${fmtPct(STATE.positions.reduce((a,p)=>a+Calc.drawdownContribution(num(p.weight),num(p.maxDrop)),0),2)}</td><td></td>
           </tr>
         </tbody>
@@ -3222,7 +3353,11 @@ VIEWS.positions = function (app) {
       // 否则删了持仓、资产还躺着，再当日交易买入就会叠加翻倍。
       const linkedAsset = p.code ? (STATE.assets || []).find(x => x.code === p.code) : null;
       if (linkedAsset) {
-        if (!confirm(`「${p.name}」在「当前持仓」和「全部持仓/资产」里都有。\n「确定」= 两处一起删除（不动现金池，用于清理/纠错）；「取消」= 不删。`)) return;
+        const lpnl = linkedAsset.pnl != null ? num(linkedAsset.pnl) : 0;
+        const pnlWarn = lpnl !== 0
+          ? `\n⚠️ 该标的有累计盈亏 ${lpnl>=0?'+':''}${fmtMoney(lpnl)}，删除后将一并丢失！若已清仓建议用页面顶部的「归档到历史收益」保留记录。`
+          : '';
+        if (!confirm(`「${p.name}」在「当前持仓」和「全部持仓/资产」里都有。${pnlWarn}\n「确定」= 两处一起删除（不动现金池，用于清理/纠错）；「取消」= 不删。`)) return;
         logOp('删除持仓+资产：' + p.name);
         STATE.positions = STATE.positions.filter(x => x.id !== p.id);
         STATE.assets = (STATE.assets || []).filter(x => x.id !== linkedAsset.id);
@@ -3418,7 +3553,7 @@ VIEWS.kelly = function (app) {
         sizing = `<div class="result-box"><div class="metric-row"><span class="k">${fracTxt} 凯利目标仓位（≤单股上限 ${s.singleCap}%）</span><span class="v" style="color:var(--accent-ink)">${capped.toFixed(1)}%${total > 0 ? '（约 ' + fmtMoney(capped / 100 * total) + '）' : ''} <span class="pill ${robust.verdict==='pos'?'green':'red'}" style="font-size:11px">稳健${robust.verdict==='pos'?'为正':'为负'}·胜率±5不翻号</span></span></div></div>`;
         if (ev < 0) advice = `<div class="alert red"><span class="icon">${icon('danger')}</span><div><strong>EV 为负（${ev.toFixed(1)}%）且稳健（胜率+5个点仍不为正）· 数学上不值得下注</strong><br>纪律做法：不加仓，考虑减仓或离场；当前占 ${cur.toFixed(1)}%。此结论会同步给「再平衡」卖出排序。</div></div>`;
         else if (f <= 0) advice = `<div class="alert amber"><span class="icon">${icon('warn')}</span><div><strong>期望值恰为零（EV=0）</strong>：凯利仓位为 0，数学上不值得下注，建议观望。</div></div>`;
-        else if (diff > 0.5) advice = `<div class="alert green"><span class="icon">${icon('check')}</span><div><strong>目标 ${capped.toFixed(1)}% vs 当前 ${cur.toFixed(1)}% → 有 ${diff.toFixed(1)} 个百分点空间（约 ${fmtMoney(diffMoney)}）</strong><br>加仓前必须过「⑤ 铁律校验」。</div></div>`;
+        else if (diff > 0.5) advice = `<div class="alert green"><span class="icon">${icon('check')}</span><div><strong>目标 ${capped.toFixed(1)}% vs 当前 ${cur.toFixed(1)}% → 有 ${diff.toFixed(1)} 个百分点空间（约 ${fmtMoney(diffMoney)}）</strong><br>加仓前必须过「② 铁律校验」，并注意分层剩余与回撤预算（见决策卡四道闸）。</div></div>`;
         else if (diff < -0.5) advice = `<div class="alert amber"><span class="icon">${icon('warn')}</span><div><strong>目标 ${capped.toFixed(1)}% vs 当前 ${cur.toFixed(1)}% → 超配 ${(-diff).toFixed(1)} 个百分点（约 ${fmtMoney(diffMoney)}）</strong><br>按凯利纪律应逐步减到目标附近，别一次性调仓。</div></div>`;
         else advice = `<div class="alert green"><span class="icon">${icon('check')}</span><div><strong>当前 ${cur.toFixed(1)}% ≈ 目标 ${capped.toFixed(1)}%，仓位基本合理</strong>，保持并按纪律跟踪即可。</div></div>`;
         }
@@ -3785,7 +3920,7 @@ function kellyCandidates() {
     if (p.code) seen.add(p.code);
   });
   (STATE.assets || []).forEach(a => {
-    if (a.category !== '基金') return;
+    if (a.category !== '基金' && a.category !== '债券') return;   // 债券类别（如国债ETF）也纳入角色评估
     if (a.code && seen.has(a.code)) return;
     const vCny = assetCny(a, fx);
     let pnlPct = 0;
@@ -3802,17 +3937,16 @@ function kellyCandidates() {
 // 判定持仓的风险角色：个股(凯利适用) / 配置型债券 / 配置型核心(宽基·低波·红利·货币) / 主题卫星
 function holdingRiskType(cand) {
   if (!cand) return 'stock';
-  // 显式「债券」类别 → 直接返回 bond（不再依赖名称正则）
-  if (cand.category === '债券') return 'bond';
+  const cls = classifyAsset(cand);
+  if (cls.role === 'bond') return 'bond';      // 纯债/含权债基/美债ETF——分类中枢统一口径
+  if (cls.role === 'stock') return 'stock';
   if (cand.kind !== '基金') return 'stock';
   const n = cand.name || '';
-  // 纯债/固收基金独立为「债券」角色——此前被 core 正则里的 债券? 误并入宽基核心
-  if (/债|债券|纯债|中短债|长债|信用债|利率债|转债/i.test(n)) return 'bond';
   if (/红利|低波|沪深\s*300|中证\s*(500|800|1000|A?500|100)|上证\s*50|A50|标普|纳斯达克|道琼斯|宽基|指数|货币|余额|MSCI|全球|恒生(?!科技)/.test(n)) return 'core';
   return 'theme';
 }
 // 配置型资产的建议策略权重区间（%），凯利不适用它们
-const ROLE_BAND = { core: [8, 30], theme: [3, 12], bond: [8, 40] };
+const ROLE_BAND = { core: [8, 30], theme: [3, 12], bond: [3, 10] };   // bond 与再平衡债券层目标(5%)对齐，带缓冲
 
 /* -------------------------------------------------------------------------
    战略再平衡：按「期限 × 最大回撤」预设匹配科学目标盘
@@ -3828,7 +3962,7 @@ const LAYER_NAME = {
 };
 // 压力情景（危机）下各层的假设回撤%——用于"这套配置最多能亏多少"的估算，透明可调
 const LAYER_DD = { safe: 0, cash: 0, oseas: 8, ballast: 15, bond: 5, broad: 32, single: 45, us: 35, gold: 5 };
-const USD_LAYERS = { oseas: 1, us: 1 };   // 计入美元敞口的层（美元现金另按币种实算）
+// 美元经济敞口的统一判定在 classifyAsset().usdEcon（含 CNY 计价 QDII），勿再另建口径
 // 预设：每档目标权重求和=100，压力回撤≤该档 maxDD；期限只影响兜底/现金厚度（流动性），回撤预算决定风险档
 const REBAL_PRESETS = [
   { id: '3y15', years: 3, maxDD: 15, label: '3年·回撤≤15%', tone: '保守', t: { safe: 18, cash: 18, oseas: 12, ballast: 10, bond: 5, broad: 8, single: 12, us: 7, gold: 10 } },
@@ -3913,43 +4047,34 @@ function thesisStatus(x, px) {
    风险预算法（Van Tharp 2% 规则）的正确形式极简：仓位% = 单笔风险% ÷ 止损幅度%
    （常见资料把公式写错成再除以入场价，量纲就不对——这里按正确式实现）。
    注意：跳空/跌停时止损不在设定价成交，"最多亏 X%" 不是保证，故只作上限之一。 */
-function sizingGates(entry, stop, total, layerRoomCny) {
+function sizingGates(entry, stop, total, layerRoomCny, riskLayer) {
   const s = STATE.settings || {};
   const riskPct = num(s.perTradeRisk, 2) || 2;
   const cap = num(s.singleCap, 10) || 10;
-  const out = { riskPct, stopPct: null, byRisk: null, byLayer: layerRoomCny != null ? Math.max(0, layerRoomCny) : null, byCap: total > 0 ? total * cap / 100 : null, cap };
+  const out = { riskPct, stopPct: null, byRisk: null, byLayer: layerRoomCny != null ? Math.max(0, layerRoomCny) : null, byCap: total > 0 ? total * cap / 100 : null, cap, byDD: null };
   if (entry > 0 && stop > 0 && stop < entry) {
     out.stopPct = (entry - stop) / entry * 100;
     if (total > 0) out.byRisk = total * (riskPct / 100) / (out.stopPct / 100);   // = 总资产 × 风险% ÷ 止损幅度%
   }
-  const cands = [out.byRisk, out.byLayer, out.byCap].filter(v => v != null && isFinite(v));
+  // 第四道闸（回撤预算闸）：全组合压力回撤已超预算时，风险层（单股/美股/宽基/压舱）禁止加仓。
+  // 与「再平衡」「③回撤控制」共用 s.maxDrawdown 这一预算口径，避免"一边让减、一边放行加"。
+  if (riskLayer) {
+    try {
+      const budget = num(s.maxDrawdown, 15);
+      const st = currentLayerState();
+      if (st.total > 0 && estStressDD(st.frac) >= budget) out.byDD = 0;
+    } catch (e) {}
+  }
+  const cands = [out.byRisk, out.byLayer, out.byCap, out.byDD].filter(v => v != null && isFinite(v));
   out.final = cands.length ? Math.min.apply(null, cands) : null;
   out.binding = out.final == null ? null
-    : (out.final === out.byRisk ? 'risk' : out.final === out.byLayer ? 'layer' : 'cap');
+    : (out.final === out.byRisk ? 'risk' : out.final === out.byDD ? 'dd' : out.final === out.byLayer ? 'layer' : 'cap');
   return out;
 }
 function layerOf(a) {
   const ov = STATE && STATE.layerOverrides && STATE.layerOverrides[layerKeyOfAsset(a)];
   if (ov && LAYER_NAME[ov]) return ov;
-  const cat = a.category, name = a.name || '', usd = a.currency === 'USD';
-  if (cat === '黄金') return 'gold';
-  if (cat === '美股股票') return 'us';
-  if (cat === '理财(QDII)') return 'oseas';
-  if (cat === '定期存款') return usd ? 'oseas' : 'safe';   // 美元定存有汇率→海外固收；人民币定存→兜底
-  if (cat === '人民币现金') return 'cash';
-  if (cat === '香港账户现金') return 'cash';               // 美元现金：机动（币种敞口另算）
-  if (cat === '债券') return 'bond';                          // 显式标记的债券资产 → bond 层
-  if (cat === '基金') {
-    if (/标普|纳斯达克|纳指|美国|海外|全球|S&P|QDII/i.test(name)) return 'us';   // 美元海外基金
-    // 纯债/固收基金：独立的「债券」层（此前被 债券? 误并入 ballast 低波股票层）
-    if (/债|债券|纯债|中短债|长债|信用债|利率债|转债/i.test(name)) return 'bond';
-    if (/货币|货基|现金|余额宝|朝朝宝/i.test(name)) return 'cash';               // 货币基金=现金等价物
-    if (/混合/i.test(name)) return 'ballast';                                         // 混合基金：低波压舱（含债袖口，非纯宽基）
-    if (/红利|低波|高股息|价值/i.test(name)) return 'ballast';
-    return 'broad';                                        // 宽基/指数
-  }
-  if (cat === 'A股股票') return 'single';                  // 个股 + 行业主题ETF = 卫星弹性
-  return 'cash';
+  return classifyAsset(a).layer;      // 自动识别全部走分类中枢（黄金ETF→gold、转债/固收+→ballast、美债ETF→bond…）
 }
 // 锁定资产（不能自由调仓，只能用活钱/新钱平衡）：定存 + 未到期赎回期的QDII
 // 注意："2027-06-03可赎"这种是【锁定】——只有明确"每日/随时/活期/T+0"才算可自由赎回
@@ -3974,7 +4099,7 @@ function currentLayerState() {
     const v = assetCny(a, fx), L = layerOf(a);
     byLayer[L] = (byLayer[L] || 0) + v;
     if (isLockedAsset(a)) lockedByLayer[L] = (lockedByLayer[L] || 0) + v;
-    if (a.currency === 'USD') usdCny += v;
+    if (classifyAsset(a).usdEcon) usdCny += v;      // 经济美元敞口：USD 计价 或 us/oseas 层（含 CNY 计价 QDII）
   });
   const pct = {}, frac = {};
   LAYER_ORDER.forEach(k => { pct[k] = total > 0 ? (byLayer[k] || 0) / total * 100 : 0; frac[k] = total > 0 ? (byLayer[k] || 0) / total : 0; });
@@ -4653,6 +4778,12 @@ VIEWS.planner = function (app) {
       let cost = num(p.cost) > 0 ? num(p.cost) : null;
       if (cost == null && num(p.price) > 0 && num(p.pnl) !== 0) cost = num(p.price) / (1 + num(p.pnl) / 100);
       card.querySelector('#rd-cost').value = cost ? (+cost).toFixed(cost >= 100 ? 2 : 3) : '';
+      // 联动决策卡：带入止损价；已证伪/已破止损时默认「逻辑已破坏」，避免一个模块亮红、另一个默认放行
+      const ts = thesisStatus(p, num(p.price));
+      if (ts.has) {
+        if (num(ts.t.stop) > 0) card.querySelector('#rd-stop').value = ts.t.stop;
+        if (ts.broken || ts.stop) card.querySelector('#rd-thesis').value = 'no';
+      }
     };
     fillFrom(positions[0]);
     card.querySelector('#rd-pos').onchange = (e) => fillFrom(positions.find(x => x.id === e.target.value));
@@ -4675,7 +4806,9 @@ VIEWS.planner = function (app) {
 
       // 客观触发
       const stopBroken = stop > 0 && price > 0 && price < stop;
-      const overCap = sleeveW > level.single + 1e-9;             // 超弹性仓单股上限
+      // 单股上限统一为「总资产口径」s.singleCap（与铁律/凯利/四道闸一致，不再按弹性仓%另算）
+      const capTot = num(s.singleCap, 10) || 10;
+      const overCap = w > capTot + 1e-9;                         // 超单股上限（占总资产%）
       const deep = pnl <= -num(s.deepLossAdd, 20);
 
       // 决策
@@ -4684,8 +4817,8 @@ VIEWS.planner = function (app) {
         decision = '计划性退出'; targetW = 0; tone = 'red'; mode = 'exit';
         reason = stopBroken ? `已跌破你的计划止损价 ${stop}(现价 ${price})——纪律止损,不找理由拖延。` : '你判断买入逻辑已破坏。逻辑没了就没有持有理由,认赔=买回选择权,不是"亏钱"。';
       } else if (overCap) {
-        decision = '减到合规'; targetW = w * (level.single / sleeveW); tone = 'amber'; mode = 'trim';
-        reason = `逻辑仍成立,但它占弹性仓 ${fmtPct(sleeveW,0)} 超「${level.label}」档单股上限 ${level.single}%——只减超出部分,留下核心。`;
+        decision = '减到合规'; targetW = capTot; tone = 'amber'; mode = 'trim';
+        reason = `逻辑仍成立,但它占总资产 ${fmtPct(w,1)} 超单股上限 ${capTot}%（总资产口径,与铁律/四道闸一致）——只减超出部分,留下核心。`;
       } else if (buyToday === 'no') {
         decision = '减仓(处置效应警示)'; targetW = w * 0.6; tone = 'amber'; mode = 'trim';
         reason = '逻辑没超预算,但你"今天不会按现价买它"——说明你持有的理由已偏向"不甘心/等回本"(处置效应)。至少减到你真正舒服的仓位。';
@@ -4804,7 +4937,10 @@ VIEWS.thesis = function (app) {
   // 候选标的 = 持仓里的股票类资产 ＋ 只在观察名单里（尚未买入）的决策卡标的。
   // 观察标的没有对应资产，用「类资产对象」参与后续所有计算（分层、状态、相对强弱…），
   // 现价取上次拉 K 线时缓存的 watchPx，不污染 STATE.assets（不会计入总资产/再平衡）。
-  const heldCands = (STATE.assets || []).filter(a => a.category === 'A股股票' || a.category === '美股股票' || (a.category === '基金' && /主题|行业|科技|医药|军工|消费|芯片|新能源/.test(a.name || '')));
+  // 决策卡候选：个股 + 主题/行业类基金（判定复用 guessFactor——归到「其它/债券/混合」之外即为主题性资产，
+  // 不再另维护一套与 guessFactor 词表不一致的正则）
+  const heldCands = (STATE.assets || []).filter(a => a.category === 'A股股票' || a.category === '美股股票'
+    || (a.category === '基金' && ['其它', '债券', '混合'].indexOf(guessFactor(a.name)) < 0));
   const watchOnly = Object.keys(theses)
     .filter(k => theses[k].watch && !heldCands.some(a => thesisKeyOf(a) === k))
     .map(k => {
@@ -4907,7 +5043,7 @@ VIEWS.thesis = function (app) {
       <div class="field"></div>
     </div>
     <div class="row" style="gap:8px;flex-wrap:wrap;margin:4px 0 8px">
-      <button class="btn secondary small" id="th-tech" style="flex:0 0 auto">${icon('calc')} 自动评四维（真实数据）</button>
+      <button class="btn secondary small" id="th-tech" style="flex:0 0 auto">${icon('calc')} 自动评五维（真实数据）</button>
       <span class="inline-note" style="align-self:center">技术/基本/资金面按真实数据机械打分；消息面拉真实公告后由 AI 只做分类——见下方说明</span>
     </div>
     <div id="th-tech-out"></div>
@@ -4922,7 +5058,7 @@ VIEWS.thesis = function (app) {
   </div>`);
   app.appendChild(formCard);
 
-  // 四维评分（只记录，不做加权裁决——加权打分是假精确）
+  // 五维评分（只记录，不做加权裁决——加权打分是假精确）
   const scoreBox = formCard.querySelector('#th-scores');
   const SCORE_HOW = { tech: '自动算', fund: '自动算', news: '拉真实公告后 AI 分类', senti: '自动算', rs: '自动算' };
   scoreBox.innerHTML = Object.keys(SCORE_ANCHORS).map(k => {
@@ -4933,7 +5069,7 @@ VIEWS.thesis = function (app) {
   formCard.querySelector('#th-gates').insertAdjacentHTML('beforebegin',
     `<details style="margin:6px 0"><summary style="cursor:pointer;font-size:12px;color:var(--muted);list-style:revert">为什么不用 AI 自动打这四个分？— 点击展开</summary>
       <div style="font-size:12.5px;line-height:1.6;margin-top:6px">
-      <p style="margin:0 0 6px">分界不在「公式 vs AI」，而在<strong>有没有可核对的真实数据作输入</strong>。AI 对<strong>检索到的真实数据</strong>做判断是可靠的；AI 凭<strong>记忆回忆</strong>数据才是幻觉的来源。四维都走前者：</p>
+      <p style="margin:0 0 6px">分界不在「公式 vs AI」，而在<strong>有没有可核对的真实数据作输入</strong>。AI 对<strong>检索到的真实数据</strong>做判断是可靠的；AI 凭<strong>记忆回忆</strong>数据才是幻觉的来源。五维都走前者：</p>
       <p style="margin:0 0 6px"><strong>技术面 → 纯公式。</strong>均线排列/MACD/RSI/动量都有确定算法，连模型都不需要。同样的行情永远得同样的分，每一分都列出出处可逐项核对。</p>
       <p style="margin:0 0 6px"><strong>基本面 → 真实数据 + 机械打分。</strong>ROE、毛利率、负债率、营收/净利同比、PE/PB 全部取自东财行情接口的真实字段，再按方法论的锚点表打分——<strong>锚点表本身就是规则，不需要模型</strong>。缺项不摊分（按实际取到的项归一），取不到就留空不猜。局限：<strong>估值只有绝对 PE/PB，没有历史分位</strong>（需长序列财报库），故权重最低。</p>
       <p style="margin:0 0 6px"><strong>资金面 → 真实数据 + 机械打分。</strong>个股主力净额与净占比来自行情接口；所属板块资金流来自「市场指标 → 资金流向」已拉的真实数据。个股龙虎榜/北向持股暂无可靠免key源，未纳入。</p>
@@ -4942,7 +5078,7 @@ VIEWS.thesis = function (app) {
       </div></details>`);
 
   const $f = sel => formCard.querySelector(sel);
-  // 「自动评四维」拉到的真实数据暂存于此，供 AI 起草时作为唯一事实来源（不给它别的信息）
+  // 「自动评五维」拉到的真实数据暂存于此，供 AI 起草时作为唯一事实来源（不给它别的信息）
   let lastData = { tech: null, fund: null, ann: null, rs: null, code: '', name: '' };
   // 三道闸预览：入场/止损变动时实时算
   // 第三道闸：该标的所属层级在当前再平衡预设下还剩多少空间（超配则为 0，不该再加）
@@ -4961,20 +5097,22 @@ VIEWS.thesis = function (app) {
     const entry = num($f('#th-entry').value), stop = num($f('#th-stop').value);
     const a0 = cands.find(x => thesisKeyOf(x) === $f('#th-pick').value);
     const lr = layerRoomOf(a0);
-    const g = sizingGates(entry, stop, total, lr ? lr.room : null);
+    const isRiskLayer = a0 && ['single', 'us', 'broad', 'ballast'].indexOf(layerOf(a0)) >= 0;
+    const g = sizingGates(entry, stop, total, lr ? lr.room : null, isRiskLayer);
     const box = $f('#th-gates');
     if (!(g.byRisk > 0)) {
       box.innerHTML = `<p class="inline-note">${!(total > 0) ? '总资产为 0，无法反推仓位（先到「投资组合」录入资产）。'
         : '填入<strong>入场价</strong>与<strong>止损价</strong>（止损&lt;入场）即可算出「这笔最多能买多少」——点上方「自动算技术面评分」会顺带给出技术止损参考位。'}</p>`;
       return;
     }
-    const bindName = { risk: '风险预算', layer: '分层剩余', cap: '单标的上限' }[g.binding] || '';
-    box.innerHTML = `<div class="alert blue" style="margin-top:6px"><span class="icon">${icon('calc')}</span><div>
-      <strong>加仓三道闸</strong>：止损幅度 ${g.stopPct.toFixed(1)}%，按单笔风险 ${g.riskPct}% 反推
+    const bindName = { risk: '风险预算', layer: '分层剩余', cap: '单标的上限', dd: '回撤预算' }[g.binding] || '';
+    box.innerHTML = `<div class="alert ${g.byDD === 0 ? 'red' : 'blue'}" style="margin-top:6px"><span class="icon">${icon('calc')}</span><div>
+      <strong>加仓四道闸</strong>：止损幅度 ${g.stopPct.toFixed(1)}%，按单笔风险 ${g.riskPct}% 反推
       → ① 风险预算上限 <strong>${fmtMoney(g.byRisk)}</strong>（占总资产 ${(g.byRisk / total * 100).toFixed(1)}%）；
       ② 单标的集中度上限 ${g.cap}% = ${fmtMoney(g.byCap)}；
-      ③ ${lr ? `分层剩余（${escapeHtml(lr.layer)} 目标 ${lr.tgt}% / 当前 ${lr.cur.toFixed(1)}%，按「${escapeHtml(lr.preset)}」）= <strong>${fmtMoney(lr.room)}</strong>${lr.room <= 0 ? '（该层已超配，按纪律不该再加）' : ''}` : '分层剩余（取不到分层数据，本次未参与取小）'}。
-      <br><strong>三者取小：${fmtMoney(g.final)}</strong>（受「${bindName}」约束）。
+      ③ ${lr ? `分层剩余（${escapeHtml(lr.layer)} 目标 ${lr.tgt}% / 当前 ${lr.cur.toFixed(1)}%，按「${escapeHtml(lr.preset)}」）= <strong>${fmtMoney(lr.room)}</strong>${lr.room <= 0 ? '（该层已超配，按纪律不该再加）' : ''}` : '分层剩余（取不到分层数据，本次未参与取小）'}；
+      ④ 回撤预算：${g.byDD === 0 ? '<strong>全组合压力回撤已超预算 → 风险层禁止加仓（0）</strong>' : '在预算内，不限'}
+      <br><strong>取小：${fmtMoney(g.final)}</strong>（受「${bindName}」约束）。
       <br><span style="color:var(--amber-ink)">注意：A股跌停/美股跳空时止损不在设定价成交，"最多亏 ${g.riskPct}%" 不是保证——这是上限不是承诺。</span></div></div>`;
   }
   ['#th-entry', '#th-stop'].forEach(s => { $f(s).oninput = drawGates; });
@@ -5181,7 +5319,7 @@ VIEWS.thesis = function (app) {
     drawGates();
   }
   $f('#th-pick').onchange = e => loadThesis(e.target.value);
-  // 刚加入的观察标的自动选中并载入表单，让「自动评四维 / AI 起草 / 保存」立刻可用
+  // 刚加入的观察标的自动选中并载入表单，让「自动评五维 / AI 起草 / 保存」立刻可用
   if (THESIS_PICK_AFTER_RENDER) {
     const want = THESIS_PICK_AFTER_RENDER; THESIS_PICK_AFTER_RENDER = '';
     if (cands.some(x => thesisKeyOf(x) === want)) {
@@ -5261,7 +5399,7 @@ VIEWS.thesis = function (app) {
     delete theses[k]; saveState(); render();
   };
 
-  // AI 起草正反方 + 证伪条件：把「自动评四维」刚拉到的真实数据作为唯一事实来源喂进去。
+  // AI 起草正反方 + 证伪条件：把「自动评五维」刚拉到的真实数据作为唯一事实来源喂进去。
   // 有你自己的看多逻辑时它做针对性反驳；没有时它也起草一版正方——但那只是「按数据能讲出的故事」，
   // 不等于你的判断，必须改写后再存。
   $f('#th-ai').onclick = async () => {
@@ -5273,7 +5411,7 @@ VIEWS.thesis = function (app) {
     btn.disabled = true; const old = btn.innerHTML; btn.innerHTML = icon('refresh', 'spin') + ' 生成中…';
     out.innerHTML = '<div class="inline-note">正在起草（约 10–30 秒）…</div>';
     try {
-      // 还没点过「自动评四维」就先补拉一次，保证 AI 拿到的是真实数据而不是空手推理
+      // 还没点过「自动评五维」就先补拉一次，保证 AI 拿到的是真实数据而不是空手推理
       if (lastData.code !== code) lastData = { tech: null, fund: null, ann: null, rs: null, code, name: (a && a.name) || '' };
       if (!lastData.fund && code) { try { const f0 = await fetchFundamentals(code); if (f0.ok) lastData.fund = f0; } catch (e) {} }
       if (!lastData.ann && code) { try { const a0 = await fetchAnnouncements(code, 20); if (a0.ok) lastData.ann = a0.list; } catch (e) {} }
@@ -5450,7 +5588,7 @@ VIEWS.thesis = function (app) {
         <div class="field"><label>建卡日期</label><input id="tm-date" type="date" value="${escapeHtml(t.date || '')}"/></div>
         <div class="field"><label>信心</label><select id="tm-conf">${['高', '中', '低'].map(x => `<option${x === (t.conf || '中') ? ' selected' : ''}>${x}</option>`).join('')}</select></div>
       </div>
-      <details style="margin:6px 0"><summary style="cursor:pointer;font-size:12px;color:var(--muted);list-style:revert">四维评分（只做记录，不参与自动裁决）</summary>
+      <details style="margin:6px 0"><summary style="cursor:pointer;font-size:12px;color:var(--muted);list-style:revert">五维评分（只做记录，不参与自动裁决）</summary>
         <div class="table-scroll"><table><tbody>${scRows}</tbody></table></div></details>
       <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:10px">
         <button class="btn" id="tm-save" style="flex:0 0 auto">${icon('check')} 保存修改</button>
@@ -6483,7 +6621,7 @@ VIEWS.trends = function (app) {
 };
 
 /* =========================================================================
-   视图：再平衡 —— 期限×回撤预设 → 科学目标盘（8层）→ 偏离对照 + 具体调仓执行清单
+   视图：再平衡 —— 期限×回撤预设 → 科学目标盘（9层）→ 偏离对照 + 具体调仓执行清单
    ========================================================================= */
 VIEWS.rebalance = function (app) {
   const s = STATE.settings;
@@ -6495,12 +6633,12 @@ VIEWS.rebalance = function (app) {
   app.appendChild(el(`
     <div class="view-head">
       <h2>再平衡</h2>
-      <p>选一档你能接受的「投资期限 × 最大回撤」，系统按<strong>压力情景回撤预算</strong>反推科学目标盘（8层），算出当前离目标差多少钱，并生成<strong>具体调仓清单</strong>（卖哪只、几股；补哪层）。再平衡的本质是被动的高卖低买，让风险结构回到你设定的样子。</p>
+      <p>选一档你能接受的「投资期限 × 最大回撤」，系统按<strong>压力情景回撤预算</strong>反推科学目标盘（9层），算出当前离目标差多少钱，并生成<strong>具体调仓清单</strong>（卖哪只、几股；补哪层）。再平衡的本质是被动的高卖低买，让风险结构回到你设定的样子。</p>
     </div>`));
   if (!(total > 0)) { app.appendChild(el('<div class="card"><div class="empty"><p>暂无持仓数据。</p></div></div>')); return; }
 
   const card = el(`<div class="card"><h3>${icon('target')} 战略目标盘（按 期限×回撤 科学校准）</h3>
-    <p class="hint">你的三层策略（股票博弹性 / 基金压舱 / 理财兜底）在这里被拆成 8 层对照，美元敞口单列。</p></div>`);
+    <p class="hint">你的三层策略（股票博弹性 / 基金压舱 / 理财兜底）在这里被拆成 9 层对照，美元敞口单列。</p></div>`);
 
   // 预设选择
   const segRow = el('<div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:4px"></div>');
@@ -6511,20 +6649,21 @@ VIEWS.rebalance = function (app) {
     segRow.appendChild(btn);
   });
   card.appendChild(segRow);
-  card.appendChild(el(`<p class="inline-note">选中后会同步把「③回撤控制」的可承受回撤设为 <strong>${preset.maxDD}%</strong>，各模块口径一致。期限主要决定兜底/现金厚度（流动性），回撤预算决定风险档。</p>`));
+  card.appendChild(el(`<p class="inline-note">选中后会同步把「③回撤控制」的可承受回撤设为 <strong>${preset.maxDD}%</strong>；在「③回撤控制」或「设置」里手动改阈值后，<strong>本页预算以手动值为准</strong>（唯一真源 = 设置里的 maxDrawdown），各模块不再分裂。</p>`));
 
-  // 压力回撤对照：当前 vs 目标 vs 预算
+  // 压力回撤对照：当前 vs 目标 vs 预算（预算唯一真源 = s.maxDrawdown；选预设会写入它）
   const curDD = estStressDD(st.frac);
   const tgtFrac = {}; LAYER_ORDER.forEach(k => tgtFrac[k] = (preset.t[k] || 0) / 100);
   const tgtDD = estStressDD(tgtFrac);
-  const over = curDD > preset.maxDD;
+  const budget = num(s.maxDrawdown, preset.maxDD);
+  const over = curDD > budget;
   card.appendChild(el(`<div class="stat-grid" style="margin:12px 0">
-    <div class="stat"><div class="label">当前组合·压力回撤估算</div><div class="value" style="font-size:22px;color:${over ? 'var(--red-ink)' : 'var(--green-ink)'}">${curDD.toFixed(1)}%</div><div class="sub">${over ? '超出预算 ' + (curDD - preset.maxDD).toFixed(1) + '%，需减风险' : '在预算内'}</div></div>
-    <div class="stat"><div class="label">你的回撤预算</div><div class="value" style="font-size:22px">${preset.maxDD}%</div><div class="sub">${escapeHtml(preset.label)}</div></div>
+    <div class="stat"><div class="label">当前组合·压力回撤估算</div><div class="value" style="font-size:22px;color:${over ? 'var(--red-ink)' : 'var(--green-ink)'}">${curDD.toFixed(1)}%</div><div class="sub">${over ? '超出预算 ' + (curDD - budget).toFixed(1) + '%，需减风险' : '在预算内'}</div></div>
+    <div class="stat"><div class="label">你的回撤预算</div><div class="value" style="font-size:22px">${budget}%</div><div class="sub">${escapeHtml(preset.label)}${budget !== preset.maxDD ? '（已手动调整）' : ''}</div></div>
     <div class="stat"><div class="label">目标盘·压力回撤估算</div><div class="value" style="font-size:22px;color:var(--green-ink)">${tgtDD.toFixed(1)}%</div><div class="sub">已按预算校准</div></div>
-    <div class="stat"><div class="label">美元敞口</div><div class="value" style="font-size:22px;color:${st.usdPct > (preset.t.oseas + preset.t.us + 6) ? 'var(--amber-ink)' : 'inherit'}">${st.usdPct.toFixed(0)}%</div><div class="sub">目标约 ${preset.t.oseas + preset.t.us}%（海外固收+美股）</div></div>
+    <div class="stat"><div class="label">美元敞口</div><div class="value" style="font-size:22px;color:${st.usdPct > (preset.t.oseas + preset.t.us + 6) ? 'var(--amber-ink)' : 'inherit'}">${st.usdPct.toFixed(0)}%</div><div class="sub">经济敞口口径 · 目标约 ${preset.t.oseas + preset.t.us}%（海外固收+美股）</div></div>
   </div>`));
-  if (over) card.appendChild(el(`<div class="alert red"><span class="icon">${icon('danger')}</span><div><strong>当前配置的压力回撤 ${curDD.toFixed(1)}% 已超过你 ${preset.maxDD}% 的预算</strong>——按下表减权益、去集中、补兜底，把它压回预算内。</div></div>`));
+  if (over) card.appendChild(el(`<div class="alert red"><span class="icon">${icon('danger')}</span><div><strong>当前配置的压力回撤 ${curDD.toFixed(1)}% 已超过你 ${budget}% 的预算</strong>——按下表减权益、去集中、补兜底，把它压回预算内。</div></div>`));
 
   // 目标 vs 当前 逐层对照表
   const rows = LAYER_ORDER.map(k => {
@@ -6532,8 +6671,8 @@ VIEWS.rebalance = function (app) {
     const diffMoney = total > 0 ? dev / 100 * total : 0;
     const locked = st.locked[k] || 0;
     const need = Math.abs(dev) >= 5;                       // 漂移带 ±5%
-    const action = dev > 0.5 ? `减 ${fmtMoney(Math.abs(diffMoney))}` : dev < -0.5 ? `补 ${fmtMoney(Math.abs(diffMoney))}` : '基本到位';
-    const actColor = dev > 0.5 ? 'var(--amber-ink)' : dev < -0.5 ? 'var(--green-ink)' : 'var(--muted)';
+    const action = need ? (dev > 0 ? `减 ${fmtMoney(Math.abs(diffMoney))}` : `补 ${fmtMoney(Math.abs(diffMoney))}`) : '—';   // 带内不出动作数
+    const actColor = !need ? 'var(--muted)' : dev > 0 ? 'var(--amber-ink)' : 'var(--green-ink)';
     const badge = need ? `<span class="pill ${dev > 0 ? 'amber' : 'green'}">需调整</span>` : `<span class="pill green">✓</span>`;
     const lockNote = locked > 0 ? `<br><span class="inline-note" style="color:var(--muted)">其中锁定 ${fmtMoney(locked)}</span>` : '';
     return `<tr>
@@ -6549,13 +6688,32 @@ VIEWS.rebalance = function (app) {
     <thead><tr><th>层</th><th class="num">目标</th><th class="num">当前</th><th class="num">偏离</th><th class="num">该调金额</th><th class="num">漂移带±5%</th></tr></thead>
     <tbody>${rows}</tbody></table></div>`));
 
+  // —— 纪律通道（不受层偏离闸门限制）：证伪条件触发/已破止损/手动标记逻辑已破的标的，
+  // 即使各层都在漂移带内（下方显示「无需调仓」）也必须优先处理——否则决策卡的警报在执行侧悬空。
+  {
+    const fx0 = currentFx();
+    const urgent = [];
+    (STATE.assets || []).forEach(a => {
+      const v = assetCny(a, fx0);
+      if (!(v > 0)) return;
+      const ts = thesisStatus(a, num(a.lastPx));
+      const flagged = !!STATE.thesisFlags[layerKeyOfAsset(a)];
+      if (ts.broken || ts.stop || flagged) urgent.push({ a, v, ts, flagged });
+    });
+    if (urgent.length) {
+      card.appendChild(el(`<div class="alert red" style="margin-top:10px"><span class="icon">${icon('danger')}</span><div>
+        <strong>纪律通道：以下标的应立即处理（与层偏离无关）</strong>
+        <ul style="margin:6px 0 0 18px;line-height:1.9">${urgent.map(u => `<li><strong>${escapeHtml(u.a.name)}</strong>（约 ${fmtMoney(u.v)}）——${u.ts.broken ? '决策卡证伪条件已触发' : u.ts.stop ? '已破止损价' : '已手动标记逻辑已破'}；建议到「<a href="?view=planner">⑤ 加减仓计划</a>」走退出决策树并一键记账</li>`).join('')}</ul></div></div>`));
+    }
+  }
+
   // 锁定资产提示
   const lockedTotal = Object.values(st.locked).reduce((a, b) => a + b, 0);
   if (lockedTotal > 0) card.appendChild(el(`<div class="alert blue" style="margin-top:10px"><span class="icon">${icon('lock')}</span><div><strong>锁定资产约 ${fmtMoney(lockedTotal)}（${(lockedTotal / total * 100).toFixed(0)}%）</strong>：定存/未到期QDII 不能自由调仓。补兜底、减美元优先用<strong>活钱 + 新增资金 + 每日可赎的QDII</strong>，锁定部分到期再归位，别提前赎回吃罚息。</div></div>`));
 
   // 科学口径脚注
   card.appendChild(el(`<div class="alert amber" style="margin-top:10px"><span class="icon">${icon('info')}</span><div style="font-size:12px;line-height:1.7">
-    <strong>「压力回撤」怎么算的？</strong>给每层设危机情景回撤假设：兜底/现金 0%、海外固收 8%、压舱低波 15%、宽基 32%、单股 45%、美股 35%、黄金 5%（危机中风险资产同向下跌，故按占比加权<strong>线性求和</strong>作保守上界）。各预设的目标权重都已校准到"压力回撤 ≤ 该档预算"。假设偏保守（把黄金/债的对冲作用打折），实际回撤通常小于此值——宁可高估风险。</div></div>`));
+    <strong>「压力回撤」怎么算的？</strong>给每层设危机情景回撤假设：兜底/现金 0%、海外固收 8%、压舱低波 15%、债券 5%、宽基 32%、单股 45%、美股 35%、黄金 5%（危机中风险资产同向下跌，故按占比加权<strong>线性求和</strong>作保守上界）。各预设的目标权重都已校准到"压力回撤 ≤ 该档预算"。假设偏保守（把黄金/债的对冲作用打折），实际回撤通常小于此值——宁可高估风险。</div></div>`));
 
   app.appendChild(card);
 
@@ -6576,19 +6734,24 @@ VIEWS.rebalance = function (app) {
 
   // —— 卖出候选打分（科学排序：逻辑已破 > 冗余度(实测ρ̄) > 回撤贡献 > 市值）——
   const cc = STATE.corrCache;
-  const avgRhoOf = (code) => {                              // 与组合其余标的的平均实测相关；不在矩阵→null
-    if (!cc || !cc.matrix || !cc.index || cc.index[code] == null) return null;
+  const ccValid = !!(cc && !(cc._sig && cc._sig !== corrSig()));   // 签名失效=组合已变，旧矩阵不参与排序（与体检同规则）
+  const avgRhoOf = (code) => {                              // 与组合其余标的的平均实测相关；不在矩阵/缓存失效→null
+    if (!ccValid || !cc.matrix || !cc.index || cc.index[code] == null) return null;
     const i = cc.index[code]; let sum = 0, n = 0;
     (cc.matrix[i] || []).forEach((v, j) => { if (j !== i && v != null && isFinite(v)) { sum += v; n++; } });
     return n ? sum / n : null;
   };
   const posOf = (code) => (STATE.positions || []).find(p => p.code === code);
-  // 凯利稳健判定（读①的持久评估，30天内有效）：稳健为负→提前卖；稳健为正→层内保护后卖；不稳健→忽略
+  // 凯利稳健判定（读①的持久评估）：稳健为负→提前卖；稳健为正→层内保护后卖；不稳健→忽略。
+  // 只对个股生效（凯利页明示：配置型基金/债不必据凯利清仓）；有效期与①统一为 7 天，非法日期直接失效。
   const kellyVerdictOf = (a) => {
+    if (classifyAsset(a).role !== 'stock') return null;
     const ev = STATE.kellyEvals[(a.code || a.name || '').toLowerCase()];
     if (!ev || !ev.date) return null;
-    const days = Math.floor((Date.now() - new Date(ev.date).getTime()) / 864e5);
-    if (days > 30) return null;
+    const t0 = new Date(ev.date).getTime();
+    if (!isFinite(t0)) return null;
+    const days = Math.floor((Date.now() - t0) / 864e5);
+    if (days < 0 || days > 7) return null;
     const r = Calc.kellyRobust(ev.win, ev.up, ev.down);
     return { verdict: r.verdict, evPct: Calc.ev(ev.win / 100, ev.up, ev.down), date: ev.date };
   };
@@ -6600,7 +6763,7 @@ VIEWS.rebalance = function (app) {
     const rho = x.a.code ? avgRhoOf(x.a.code) : null;
     const p = x.a.code ? posOf(x.a.code) : null;
     const w = total > 0 ? x.v / total * 100 : 0;
-    const ddC = p ? w * num(p.maxDrop) / 100 : w * (LAYER_DD[layerOf(x.a)] || 0) / 100;  // 回撤贡献pp
+    const ddC = p ? w * (num(p.maxDrop) || 40) / 100 : w * (LAYER_DD[layerOf(x.a)] || 0) / 100;  // 回撤贡献pp（maxDrop 未填兜底 40）
     const kv = kellyVerdictOf(x.a);
     const chips = [];
     if (broken) chips.push(ts.broken
@@ -6612,6 +6775,8 @@ VIEWS.rebalance = function (app) {
       if (kv.verdict === 'neg') chips.push(`<span class="pill red">凯利稳健为负 EV${kv.evPct.toFixed(1)}%·提前卖</span>`);
       else if (kv.verdict === 'pos') chips.push(`<span class="pill green">凯利稳健为正·层内后卖</span>`);
       else chips.push('<span class="pill gray">凯利不稳健·不参与排序</span>');
+    } else if (['single', 'us'].indexOf(layerOf(x.a)) >= 0) {
+      chips.push('<span class="pill gray">凯利未评估·不参与排序</span>');   // 无缓存/超期/非个股：明示而非静默跳过
     }
     if (rho != null) chips.push(`<span class="pill ${rho >= 0.5 ? 'amber' : 'gray'}">ρ̄ ${rho.toFixed(2)}${rho >= 0.5 ? '·冗余' : ''}</span>`);
     if (ddC > 0) chips.push(`<span class="pill gray">回撤贡献 ${ddC.toFixed(1)}pp</span>`);
@@ -6668,6 +6833,15 @@ VIEWS.rebalance = function (app) {
       html += `<li>补入 <strong>${LAYER_NAME[g.k]}</strong> 约 <strong>${fmtMoney(-g.devCny)}</strong> <span class="inline-note">[低配 ${(-g.devPct).toFixed(1)}pp；建议方向：${HINT[g.k] || '该层现有品种'}]</span></li>`;
     });
     html += '</ol>';
+    // 净卖出/净买入差额指示：截断后两侧不一定相等，差额落入/取自机动现金层——避免"卖完的钱去哪"没有交代
+    {
+      const sellSum = overL.reduce((a2, g) => a2 + g.devCny, 0);
+      const buySum = underL.reduce((a2, g) => a2 - g.devCny, 0);
+      const net = sellSum - buySum;
+      if (Math.abs(net) > total * 0.005) {
+        html += `<li class="inline-note" style="list-style:none;margin-left:-18px">资金去向：本次净${net > 0 ? '卖出' : '买入'}约 <strong>${fmtMoney(Math.abs(net))}</strong>，${net > 0 ? '差额先落入「机动现金」层（下次偏离超线时再配置）' : '差额从「机动现金」层/新增资金支付'}。</li>`;
+      }
+    }
     execCard.appendChild(el(`<div>${html}</div>`));
     execCard.appendChild(el(`<p class="inline-note" style="margin-top:10px">先卖后买、金额≈值，分 2–3 批执行别一次到位。「⚠趋势上涨」只是提醒（动量效应），不改变风险排序；「深套」先过「⑤ 加减仓 → 减仓/退出」确认逻辑是否真破。基金持有<strong>不足 7 天赎回费 1.5%</strong>，短期刚买的別动。A股按 100 股整手取整。<strong>锁定资产（定存/未到期QDII）不参与卖出</strong>。</p>`));
     // 「逻辑已破」标记切换
@@ -6879,9 +7053,13 @@ VIEWS.attribution = function (app) {
   function renderPeriod(key) {
     let list = detailed;
     if (key !== 'all') {
-      const cutoff = key === 'month'
-        ? todayStr().slice(0, 7) + '-01'
-        : new Date(Date.now() - parseInt(key, 10) * 864e5).toISOString().slice(0, 10);
+      let cutoff;
+      if (key === 'month') cutoff = todayStr().slice(0, 7) + '-01';
+      else {
+        // 本地时区拼串（toISOString 是 UTC，东八区凌晨会偏差一天）
+        const d = new Date(Date.now() - parseInt(key, 10) * 864e5);
+        cutoff = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      }
       list = detailed.filter(s => s.date >= cutoff);
       if (list.length < 2) list = detailed.slice(-2);     // 区间内不足两天 → 用最近两天兜底
     }
@@ -6890,11 +7068,13 @@ VIEWS.attribution = function (app) {
     const totalChange = num(last.total) - num(first.total) - flows;
     const chgCol = totalChange >= 0 ? 'var(--green-ink)' : 'var(--red-ink)';
 
-    // 汇总：大类 / 个股因子（仅 A股/美股股票）
+    // 汇总：大类 / 因子（个股 + 基金都进因子视图，基金标注后缀区分口径——科技敞口大头在基金里，只算个股会误判）
     const byBig = new Map(), byFactor = new Map();
     byAsset.forEach(r => {
       byBig.set(r.cat, (byBig.get(r.cat) || 0) + r.contrib);
-      if (r.rawCat === 'A股股票' || r.rawCat === '美股股票') byFactor.set(r.factor, (byFactor.get(r.factor) || 0) + r.contrib);
+      const isStock = r.rawCat === 'A股股票' || r.rawCat === '美股股票';
+      const fkey = isStock ? r.factor : r.factor + '（基金）';
+      byFactor.set(fkey, (byFactor.get(fkey) || 0) + r.contrib);
     });
     const bigRows = [...byBig.entries()].sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
     if (Math.abs(residual) > 0.5) bigRows.push(['残差（利息/手动调整/调仓）', residual]);
@@ -6948,19 +7128,18 @@ function stressBuckets() {
   (STATE.assets || []).forEach(a => {
     const v = assetCny(a, fx);
     if (!(v > 0)) return;
-    let bucket = 'safe', factor = null;
-    if (a.category === 'A股股票' || a.category === '美股股票') {
+    const cls = classifyAsset(a);
+    // 因子：个股取持仓标注；基金按名称粗判（让「科技成长 -30%」能命中科技主题基金，不再一律 -12%）
+    let factor = null;
+    if (cls.stress === 'cn' || cls.stress === 'us' || cls.stress === 'fund') {
       const p = (STATE.positions || []).find(x => x.code && x.code === a.code);
       factor = (p && p.factor) || guessFactor(a.name) || '其它';
-      bucket = a.category === '美股股票' ? 'us' : 'cn';
-    } else if (a.category === '基金') bucket = 'fund';
-    else if (a.category === '债券') bucket = 'bond';
-    else if (bigClassOf(a.category, a.name) === '黄金') bucket = 'gold';
-    rows.push({ name: a.name, code: a.code, cat: a.category, bucket, factor, usd: a.currency === 'USD', v });
+    }
+    rows.push({ name: a.name, code: a.code, cat: a.category, bucket: cls.stress, factor, usd: a.currency === 'USD', usdEcon: cls.usdEcon, v });
   });
   return rows;
 }
-// 一条冲击规则命中哪些资产；scope: factor:X / factorGroup:tech / cn / cnOther / us / fund / gold / usd-fx
+// 一条冲击规则命中哪些资产；scope: factor:X / factorGroup:tech / cn / cnOther / us / fund / bond / bondplus / oseas / gold / usd-fx
 function shockOf(row, rules) {
   let s = 0;
   rules.forEach(r => {
@@ -6974,23 +7153,25 @@ function shockOf(row, rules) {
     else if (kind === 'us' && row.bucket === 'us') s += r.shock;
     else if (kind === 'fund' && row.bucket === 'fund') s += r.shock;
     else if (kind === 'bond' && row.bucket === 'bond') s += r.shock;
+    else if (kind === 'bondplus' && row.bucket === 'bondplus') s += r.shock;
+    else if (kind === 'oseas' && row.bucket === 'oseas') s += r.shock;
     else if (kind === 'gold' && row.bucket === 'gold') s += r.shock;
-    else if (kind === 'usd-fx' && row.usd) s += r.shock;   // 汇率冲击：美元资产的人民币折算损失
+    else if (kind === 'usd-fx' && row.usdEcon) s += r.shock;   // 汇率冲击：按经济美元敞口（含 CNY 计价 QDII）
   });
   return s;
 }
 const STRESS_PRESETS = [
-  { name: '中国科技成长 −30%', rules: [{ scope: 'factorGroup:tech', shock: -30 }, { scope: 'cnOther', shock: -10 }, { scope: 'fund', shock: -12 }] },
-  { name: 'A股系统性 −15%', rules: [{ scope: 'cn', shock: -15 }, { scope: 'fund', shock: -12 }] },
+  { name: '中国科技成长 −30%', rules: [{ scope: 'factorGroup:tech', shock: -30 }, { scope: 'cnOther', shock: -10 }, { scope: 'fund', shock: -12 }, { scope: 'bondplus', shock: -5 }] },
+  { name: 'A股系统性 −15%', rules: [{ scope: 'cn', shock: -15 }, { scope: 'fund', shock: -12 }, { scope: 'bondplus', shock: -5 }, { scope: 'bond', shock: -1 }] },
   { name: '美股 −20%', rules: [{ scope: 'us', shock: -20 }] },
   { name: '黄金 −15%', rules: [{ scope: 'gold', shock: -15 }] },
   { name: '美元贬值 5%', rules: [{ scope: 'usd-fx', shock: -5 }] },
-  { name: '利率上行·债券 −8%（信用利差走阔）', rules: [{ scope: 'bond', shock: -8 }, { scope: 'fund', shock: -5 }] },
-  { name: '全面危机：权益−35% 黄金+5%', rules: [{ scope: 'cn', shock: -35 }, { scope: 'us', shock: -35 }, { scope: 'fund', shock: -30 }, { scope: 'gold', shock: 5 }] },
+  { name: '利率上行·债券 −8%（信用利差走阔）', rules: [{ scope: 'bond', shock: -8 }, { scope: 'bondplus', shock: -10 }, { scope: 'fund', shock: -5 }] },
+  { name: '全面危机：权益−35% 债券−5% 黄金−5%', rules: [{ scope: 'cn', shock: -35 }, { scope: 'us', shock: -35 }, { scope: 'fund', shock: -30 }, { scope: 'bondplus', shock: -15 }, { scope: 'bond', shock: -5 }, { scope: 'oseas', shock: -8 }, { scope: 'gold', shock: -5 }] },
 ];
 // 自定义情景可选的冲击对象
 const STRESS_SCOPES = [
-  ['cn', '全部 A股个股'], ['us', '全部 美股个股'], ['fund', '全部 基金'], ['bond', '债券（利率/信用）'], ['gold', '黄金'], ['usd-fx', '美元资产（汇率）'],
+  ['cn', '全部 A股个股'], ['us', '全部 美股/海外基金'], ['fund', '全部 基金'], ['bond', '纯债/利率债'], ['bondplus', '含权债基/转债'], ['oseas', '海外固收（美元理财/定存）'], ['gold', '黄金'], ['usd-fx', '美元资产（汇率）'],
 ].concat(FACTORS.map(f => ['factor:' + f, '因子 · ' + f]));
 
 VIEWS.stress = function (app) {
@@ -7139,6 +7320,9 @@ VIEWS.portfolio = function (app) {
     byCur[a.currency] = (byCur[a.currency] || 0) + v;
   });
   const usdCny = byCur['USD'] || 0;
+  // 经济美元敞口（健康分/风险判定用）：USD 计价资产 ＋ CNY 计价的海外基金（us/oseas 层）——
+  // 与币种口径（上方 byCur，仅展示用）区分开：CNY 计价 QDII 的净值同样随美元波动
+  const usdEconCny = assets.reduce((s, a) => s + (classifyAsset(a).usdEcon ? cnyOf(a) : 0), 0);
   const pct = v => (v / total * 100);
   let interestTotal = 0, pnlTotal = 0, realizedTotal = 0;
   assets.forEach(a => {
@@ -7147,6 +7331,7 @@ VIEWS.portfolio = function (app) {
     else if (inc.value != null) pnlTotal += inc.value;
     if (a.realizedPnl != null) realizedTotal += num(a.realizedPnl);
   });
+  realizedTotal += realizedHistoryTotal();   // 加上已清仓收益账本（持仓归零归档的标的）
 
   // 汇率控制条（美元/人民币中间价，每日更新）
   const fxBar = el(`<div class="card" style="padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
@@ -7178,9 +7363,9 @@ VIEWS.portfolio = function (app) {
       <div class="stat"><div class="label">${icon('coins')} 年化利息(估)</div>
         <div class="value" style="color:var(--green-ink);font-size:22px">+${fmtMoney(interestTotal)}</div>
         <div class="sub">美元 3% · 人民币实际</div></div>
-      <div class="stat"><div class="label">股票/基金/黄金浮盈亏</div>
-        <div class="value" style="color:${pnlTotal>=0?'var(--green-ink)':'var(--red-ink)'};font-size:22px">${pnlTotal>=0?'+':''}${fmtMoney(pnlTotal)}</div>
-        <div class="sub">有盈亏记录部分合计${realizedTotal !== 0 ? ` · 另累计已实现 ${realizedTotal>=0?'+':''}${fmtMoney(realizedTotal)}` : ''}</div></div>
+      <div class="stat"><div class="label">股票/基金/黄金累计盈亏</div>
+        <div class="value" style="color:${pnlTotal + realizedTotal>=0?'var(--green-ink)':'var(--red-ink)'};font-size:22px">${pnlTotal + realizedTotal>=0?'+':''}${fmtMoney(pnlTotal + realizedTotal)}</div>
+        <div class="sub">在持仓 ${pnlTotal>=0?'+':''}${fmtMoney(pnlTotal)} · 已清仓/已实现 ${realizedTotal>=0?'+':''}${fmtMoney(realizedTotal)}（行情自动跟踪）</div></div>
     </div>
   `));
 
@@ -7188,7 +7373,38 @@ VIEWS.portfolio = function (app) {
   const allocCard = el(`<div class="card"><h3>${icon('pie')} 大类配置</h3></div>`);
   allocCard.appendChild(buildPie(normalize(byBig), { total }));
   app.appendChild(allocCard);
-  app.appendChild(el(`<p class="inline-note" style="margin-top:-6px">想按「期限×回撤」科学配置并生成调仓清单？见导航栏「<strong>再平衡</strong>」页。</p>`));
+  app.appendChild(el(`<p class="inline-note" style="margin:10px 0 0">想按「期限×回撤」科学配置并生成调仓清单？见导航栏「<strong>再平衡</strong>」页。</p>`));
+
+  // 历史清仓收益账本（可折叠）：清仓归档的标的在此留痕，计入「累计权益盈亏」，不再影响体检/持仓列表
+  const hist = STATE.realizedHistory || [];
+  if (hist.length) {
+    const histTotal = hist.reduce((s, r) => s + num(r.realized), 0);
+    const histCard = el(`<details class="card" style="padding:0;margin-top:16px">
+      <summary style="cursor:pointer;padding:16px 20px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-weight:700;font-size:16px;letter-spacing:-0.01em;user-select:none">
+        ${icon('inbox')} 历史清仓收益
+        <span class="inline-note" style="font-weight:400;font-size:12.5px">${hist.length} 笔 · 合计 <span style="color:${histTotal>=0?'var(--green-ink)':'var(--red-ink)'};font-weight:700">${histTotal>=0?'+':''}${fmtMoney(histTotal)}</span>（点此展开/收起）</span>
+      </summary>
+      <div style="padding:0 20px 18px">
+        <p class="inline-note" style="margin:0 0 10px">清仓标的的累计盈亏在此留痕并计入「累计权益盈亏」；不占持仓列表、不影响股票体检。误归档可「撤销」恢复资产（含累计盈亏）。</p>
+        <div class="table-scroll"><table>
+          <thead><tr><th>标的</th><th>类别</th><th>清仓日期</th><th class="num">已实现盈亏</th><th></th></tr></thead>
+          <tbody>${hist.map(r => `<tr>
+            <td>${escapeHtml(r.name)}${r.code?`<br><span class="inline-note">${escapeHtml(r.code)}</span>`:''}</td>
+            <td><span class="tag-chip">${escapeHtml(r.category || '—')}</span></td>
+            <td>${escapeHtml(r.date)}</td>
+            <td class="num" style="color:${num(r.realized)>=0?'var(--green-ink)':'var(--red-ink)'}">${num(r.realized)>=0?'+':''}${fmtMoney(r.realized)}</td>
+            <td><button class="btn danger small" data-unarch="${escapeHtml(r.id)}">撤销</button></td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+      </div>
+    </details>`);
+    histCard.querySelectorAll('[data-unarch]').forEach(b => b.onclick = () => {
+      if (confirm('撤销这条清仓归档？将从「历史清仓收益」移除，并把该资产（含累计盈亏）恢复到资产列表。')) {
+        unarchiveRecord(b.dataset.unarch); render();
+      }
+    });
+    app.appendChild(histCard);
+  }
 
   // 明细表：按类别（按大类排序：股票→基金→理财→黄金→现金）
   const catCard = el(`<div class="card" style="margin-top:16px"><h3>${icon('list')} 按类别明细</h3></div>`);
@@ -7330,7 +7546,7 @@ VIEWS.portfolio = function (app) {
     <div class="grid grid-3">
       <div class="field"><label>金额（原币） <span class="req">*</span></label><input id="af-amount" type="number" step="0.01" placeholder="按币种填原币金额"/></div>
       <div class="field"><label>年利率 %（理财/存款，留空自动）</label><input id="af-rate" type="number" step="0.01" placeholder="美元自动3%/人民币按实际"/></div>
-      <div class="field"><label><span id="af-pnl-lab">浮盈亏 ¥</span>（股票/基金/黄金，可选）</label>
+      <div class="field"><label><span id="af-pnl-lab">累计盈亏 ¥</span>（含已卖出；股票/基金/黄金，可选）</label>
         <input id="af-pnl" type="number" step="0.01" placeholder="如 -44636"/>
         <span class="inline-note" id="af-pnl-hint"></span></div>
     </div>
@@ -7339,6 +7555,7 @@ VIEWS.portfolio = function (app) {
       <div class="field"><label>平台/账户（可选）</label><input id="af-platform" placeholder="如 招商银行 基金"/></div>
       <div class="field"><label>备注（可选）</label><input id="af-note"/></div>
     </div>
+    <p class="inline-note">「累计盈亏」= 该标的从买入到现在的总盈亏（含已卖出的已实现部分），可从券商持仓页直接抄；填好后 App 每天按行情自动跟踪浮动，卖出不再失真。</p>
     <div class="grid grid-3">
       <div class="field"><label>手动单位净值（无公开接口产品，可选）</label><input id="af-nav" type="number" step="0.0001" placeholder="如 111.0304"/></div>
       <div class="field"><label>净值日期（可选）</label><input id="af-navdate" type="text" autocomplete="off" placeholder="如 2026-07-24"/></div>
@@ -7362,7 +7579,7 @@ VIEWS.portfolio = function (app) {
   // 浮盈亏/已实现收益按所选币种标注，并实时显示折合人民币——美股照券商填美元即可，不用自己换算
   function syncPnlCurLabel() {
     const c = $a('#af-cur').value, isUsd = c === 'USD', fxr = currentFx();
-    $a('#af-pnl-lab').textContent = isUsd ? '浮盈亏 $（美元）' : '浮盈亏 ¥';
+    $a('#af-pnl-lab').textContent = isUsd ? '累计盈亏 $（美元）' : '累计盈亏 ¥';
     $a('#af-rpnl-lab').textContent = isUsd ? '累计已实现收益 $（美元）' : '累计已实现收益 ¥';
     const hint = (inp, box) => {
       const v = num($a(inp).value);
@@ -7530,7 +7747,7 @@ VIEWS.portfolio = function (app) {
   const cashLiquid = cashAssetsCny();
   const liqPct = total > 0 ? cashLiquid / total * 100 : 0;
   const maxBigPct = Object.values(byBig).length ? Math.max.apply(null, Object.values(byBig)) / total * 100 : 0;
-  const usdPct = pct(usdCny);
+  const usdPct = pct(usdEconCny);
   const nStocks = positions.length;
   const health = computePortfolioHealth({ cashFloor: s.cashFloor, liqPct, maxBigPct, corrEffN, corrSrc, nStocks, equityDD, maxDD: num(s.maxDrawdown, 15), maxFactorW, factorCap: level.factor, usdPct });
 
@@ -7576,7 +7793,7 @@ VIEWS.portfolio = function (app) {
 总资产：${fmtMoney(total)}（折合人民币）。大类配置：${bigLines}。
 可用现金(已排除锁定理财/定存)：${liqPct.toFixed(1)}%（现金下限 ${s.cashFloor}%）。美元敞口：${usdPct.toFixed(0)}%（人民币口径含汇率风险）。
 股票子组合：名义 ${nStocks} 只，相关性有效持仓数 ${corrEffN?corrEffN.toFixed(1):'—'}（${corrSrc}口径），最大因子「${maxFactor||'无'}」占弹性仓 ${(maxFactorW*100).toFixed(0)}%（该风险档上限 ${level.factor}%）；弹性仓回撤贡献 ${equityDD.toFixed(1)}%（承受线 ${s.maxDrawdown}%）。
-理财/存款利息约 ${fmtMoney(interestTotal)}（注：美元固收按 3% 假设估算、非实际数）；权益/黄金浮盈亏约 ${fmtMoney(pnlTotal)}（人民币口径）。主要持仓：${topHold}。
+理财/存款利息约 ${fmtMoney(interestTotal)}（注：美元固收按 3% 假设估算、非实际数）；权益/黄金累计盈亏约 ${fmtMoney(pnlTotal)}（人民币口径，含已卖出）。主要持仓：${topHold}。
 【工具已算出的客观健康分】${health.score}/100，逐项：${health.rows.map(r=>r[1]+(r[0]==='bad'?'⚠':r[0]==='warn'?'△':'✓')).join('、')}。
 【用户目标语境】期限：${s.profileHorizon||'未填'}；风险承受：${s.profileRisk||'未填'}；流动性：${lqTxt}；目标：${s.profileGoal||'未填'}。`;
 
@@ -8009,7 +8226,7 @@ function macroSignals() {
   }
   const vix = g('vix');
   if (vix != null) {
-    if (vix >= 25) out.push({ t: 'red', tag: 'VIX恐慌', msg: `市场恐慌（VIX ${vix}）：波动放大，最容易情绪化操作——正是「铁律校验/止损防御」该发挥作用的时候，别追跌杀跌。` });
+    if (vix >= 25) out.push({ t: 'red', tag: 'VIX恐慌', msg: `市场恐慌（VIX ${vix}）：波动放大，最容易情绪化操作——建议到「② 铁律校验/④ 止损防御」过一遍纪律再动手（提示仅供参考，不自动联动）。` });
     else if (vix <= 13) out.push({ t: 'amber', tag: '低波自满', msg: `波动极低（VIX ${vix}）：市场自满，警惕尾部风险与拥挤交易，别在低波中过度加杠杆/加仓。` });
   }
   const cpiCN = g('cnCPI');
@@ -8022,9 +8239,9 @@ function macroSignals() {
   }
   // 国内债配置缺口（币种错配视角）：海外债超配、国内债不足时提示
   const fx = currentFx(), tot = portfolioTotal();
-  const domBond = (STATE.assets || []).filter(a => a.category === '债券' && a.currency !== 'USD').reduce((s, a) => s + assetCny(a, fx), 0);
+  const domBond = (STATE.assets || []).filter(a => layerOf(a) === 'bond' && a.currency !== 'USD').reduce((s, a) => s + assetCny(a, fx), 0);
   const domBondPct = tot > 0 ? domBond / tot * 100 : 0;
-  if (domBondPct < 5) out.push({ t: 'info', tag: '国内债偏低', msg: `国内债（人民币纯债）占组合约 ${domBondPct.toFixed(1)}%，低于 5%：你当前债券敞口集中在美元（汇率+美债利率风险），本币避险主仓缺失。利率下行周期里国内债基能提供「债涨+对冲 A 股回撤」这条腿，建议在再平衡目标盘里补国内债层。` });
+  if (domBondPct < 5) out.push({ t: 'blue', tag: '国内债偏低', msg: `国内债（人民币纯债/利率债基）占组合约 ${domBondPct.toFixed(1)}%，低于 5%：你当前债券敞口集中在美元（汇率+美债利率风险），本币避险主仓缺失。利率下行周期里国内债基能提供「债涨+对冲 A 股回撤」这条腿，建议在再平衡目标盘里补国内债层（债基按名称自动归入债券层）。` });
   const cpiUS = g('usCPI');
   if (cpiUS != null && cpiUS >= 3) out.push({ t: 'amber', tag: '美通胀偏高', msg: `美国通胀仍偏高（CPI ${cpiUS}%）：美联储降息受限，短期压制估值与黄金。` });
   const pmiCN = g('cnPMI');
@@ -8201,7 +8418,11 @@ const FACTOR_SECTOR_HINTS = {
   '消费': ['旅游', '酒店', '零售', '食品', '饮料', '白酒', '家电', '商业'],
   '食品饮料': ['食品', '饮料', '白酒', '啤酒', '乳'], '新能源车': ['汽车', '电池', '整车'],
   '光伏风电': ['光伏', '风电', '电池', '电网'], '军工': ['军工', '航天', '航空', '船舶'],
+  '军工': ['军工', '航天', '航空', '船舶'], '卫星航天': ['航天', '航空', '卫星', '军工'],
+  '通信运营': ['通信服务', '电信运营', '通信运营', '运营商'], '交通运输': ['物流', '航运', '港口', '机场', '铁路', '公路'],
+  '建筑基建': ['建筑', '基建', '工程建设', '水泥', '工程机械'], '数字资产': ['计算机', '软件', '互联网', '区块链'],
   '地产': ['房地产', '工程建设', '装修'], '农业': ['农牧', '农业', '种植', '养殖', '饲料'],
+  '债券': [], '混合': [],
 };
 async function autoPullFlow() {
   const diag = [];
@@ -8233,7 +8454,7 @@ async function autoPullFlow() {
         if (Array.isArray(sj) && sj.length > 5) {
           flow.sectors = sj.filter(x => x.name && typeof x.net_in === 'number' && isFinite(x.net_in))
             .map(x => ({ name: String(x.name), today: x.net_in / 1e4,   // 万→亿
-              d5: 0, d10: 0 }))                                   // 新浪无5日/10日
+              d5: null, d10: null }))                             // 新浪无5日/10日——null 显示为「—」而非 +0.0
             .filter(x => x.name);
           if (flow.sectors.length > 0)
             diag.push({ label: '行业主力资金(新浪备源)', ok: true, raw: flow.sectors.length + ' 个板块，Top1 ' + flow.sectors[0].name + ' ' + flow.sectors[0].today.toFixed(1) + '亿（注：仅当日数据，无5日/10日累计）' });
@@ -8295,13 +8516,13 @@ function flowSignals(flow) {
       s.forEach(sec => {
         if (seen.has(sec.name) || !hints.some(h => sec.name.indexOf(h) >= 0)) return;
         seen.add(sec.name);
-        if (sec.today <= -5) out.push(['amber', `你的「${escapeHtml(p.factor)}」相关板块「${escapeHtml(sec.name)}」今日主力净流出 ${Math.abs(sec.today).toFixed(1)} 亿（5日 ${sec.d5 >= 0 ? '+' : ''}${sec.d5.toFixed(1)} 亿）——资金撤离中，与再平衡卖出排序相互印证。`]);
-        else if (sec.today >= 5) out.push(['blue', `你的「${escapeHtml(p.factor)}」相关板块「${escapeHtml(sec.name)}」今日主力净流入 +${sec.today.toFixed(1)} 亿（5日 ${sec.d5 >= 0 ? '+' : ''}${sec.d5.toFixed(1)} 亿）——有资金承接。`]);
+        if (sec.today <= -5) out.push(['amber', `你的「${escapeHtml(p.factor)}」相关板块「${escapeHtml(sec.name)}」今日主力净流出 ${Math.abs(sec.today).toFixed(1)} 亿${sec.d5 != null ? `（5日 ${sec.d5 >= 0 ? '+' : ''}${sec.d5.toFixed(1)} 亿）` : ''}——资金撤离中（参考信息，不改变再平衡排序）。`]);
+        else if (sec.today >= 5) out.push(['blue', `你的「${escapeHtml(p.factor)}」相关板块「${escapeHtml(sec.name)}」今日主力净流入 +${sec.today.toFixed(1)} 亿${sec.d5 != null ? `（5日 ${sec.d5 >= 0 ? '+' : ''}${sec.d5.toFixed(1)} 亿）` : ''}——有资金承接。`]);
       });
     });
     // 拥挤度：今日榜首且5日也大幅为正 → 提示别追高
     const top = s[0];
-    if (top && top.today > 20 && top.d5 > 40) out.push(['amber', `「${escapeHtml(top.name)}」今日+5日都在大幅吸金（今日 +${top.today.toFixed(0)} 亿 / 5日 +${top.d5.toFixed(0)} 亿）——<strong>历史级流入常伴随拥挤</strong>，若计划新进该方向请分批、别追。`]);
+    if (top && top.today > 20 && top.d5 != null && top.d5 > 40) out.push(['amber', `「${escapeHtml(top.name)}」今日+5日都在大幅吸金（今日 +${top.today.toFixed(0)} 亿 / 5日 +${top.d5.toFixed(0)} 亿）——<strong>历史级流入常伴随拥挤</strong>，若计划新进该方向请分批、别追。`]);
   }
   if (flow.south && isFinite(flow.south.net)) {
     const n = flow.south.net;
@@ -8476,7 +8697,7 @@ VIEWS.macro = function (app) {
       // 榜单只收真流入/真流出：普涨日榜尾可能仍是正流入，不能冒充「流出 Top5」
       const topIn = f.sectors.filter(x => x.today > 0).slice(0, 5);
       const topOut = f.sectors.filter(x => x.today < 0).slice(-5).reverse();
-      const row = x => `<tr><td>${escapeHtml(x.name)}</td><td class="num" style="color:${x.today >= 0 ? 'var(--green-ink)' : 'var(--red-ink)'}">${x.today >= 0 ? '+' : ''}${x.today.toFixed(1)}</td><td class="num" style="color:${x.d5 >= 0 ? 'var(--green-ink)' : 'var(--red-ink)'}">${x.d5 >= 0 ? '+' : ''}${x.d5.toFixed(1)}</td></tr>`;
+      const row = x => `<tr><td>${escapeHtml(x.name)}</td><td class="num" style="color:${x.today >= 0 ? 'var(--green-ink)' : 'var(--red-ink)'}">${x.today >= 0 ? '+' : ''}${x.today.toFixed(1)}</td><td class="num" style="color:${x.d5 == null ? 'var(--muted)' : x.d5 >= 0 ? 'var(--green-ink)' : 'var(--red-ink)'}">${x.d5 == null ? '—' : (x.d5 >= 0 ? '+' : '') + x.d5.toFixed(1)}</td></tr>`;
       html += `<div class="grid grid-2" style="gap:12px;margin-top:8px">
         <div><h4 style="margin:4px 0 6px">主力净流入 Top5（亿元）</h4><div class="table-scroll"><table><thead><tr><th>板块</th><th class="num">今日</th><th class="num">5日</th></tr></thead><tbody>${topIn.map(row).join('')}</tbody></table></div></div>
         <div><h4 style="margin:4px 0 6px">主力净流出 Top5（亿元）</h4><div class="table-scroll"><table><thead><tr><th>板块</th><th class="num">今日</th><th class="num">5日</th></tr></thead><tbody>${topOut.map(row).join('')}</tbody></table></div></div>
