@@ -4033,6 +4033,119 @@ const REBAL_PRESETS = [
 function layerKeyOfAsset(a) { return String(a.code || a.name || '').trim(); }
 
 /* =========================================================================
+   红利网格（Dividend Grid）—— 股息率 + 波动率 驱动的分批买卖框架
+   -------------------------------------------------------------------------
+   数据现实（2026-08 实测，决定了本模块的实现方式）：
+   · 东财 RPT_VALUEANALYSIS_DET 里【没有】股息率字段（columns=ALL 只返回 PE/PB/PCF/PS/PEG）
+     → 股息率必须自己算：RPT_SHAREBONUS_DET 的 PRETAX_BONUS_RMB（每 10 股税前派现）
+       取滚动 12 个月除权日之和 ÷ 10 ÷ 现价
+   · 场内 ETF 走基金净值接口的分红字段（lsjz 的 FHFCZ = 每份派现）
+   · 中证官网 indicator.xls 403，官方指数股息率拿不到 → 只能用成分股/基金自身口径
+   ========================================================================= */
+// 常见红利类 ETF（场内，腾讯行情与日K均实测可用）。波动率越高越适合网格，故一并给出。
+const DIV_UNIVERSE = [
+  { code: '510880', name: '红利ETF(华泰柏瑞)',     idx: '上证红利' },
+  { code: '512890', name: '红利低波ETF(华泰柏瑞)', idx: '中证红利低波动' },
+  { code: '515180', name: '红利ETF(易方达)',       idx: '中证红利' },
+  { code: '563020', name: '红利低波ETF(易方达)',   idx: '中证红利低波动' },
+  { code: '159525', name: '红利低波ETF(招商)',     idx: '中证红利低波动' },
+  { code: '515080', name: '中证红利ETF(招商)',     idx: '中证红利' },
+  { code: '512100', name: '中证1000ETF(对照)',     idx: '中证1000·非红利对照' },
+];
+// 滚动 12 个月每股税前派现（A股个股）。RPT_SHAREBONUS_DET：PRETAX_BONUS_RMB 是【每 10 股】口径。
+async function fetchDividendTtmStock(code) {
+  const c = String(code || '').trim();
+  if (!/^\d{6}$/.test(c)) return { ok: false, why: '非 A 股 6 位代码' };
+  const r = await fetchRaw('/api/emmacro?reportName=RPT_SHAREBONUS_DET&columns=ALL&filter='
+    + encodeURIComponent('(SECURITY_CODE="' + c + '")')
+    + '&pageSize=30&sortColumns=EX_DIVIDEND_DATE&sortTypes=-1&source=WEB&client=WEB');
+  let rows = [];
+  try { rows = (JSON.parse(r.text).result.data) || []; } catch (e) { return { ok: false, why: '分红表解析失败' }; }
+  if (!rows.length) return { ok: false, why: '无分红记录' };
+  const today = todayStr();
+  const d0 = new Date(today + 'T00:00:00'); d0.setFullYear(d0.getFullYear() - 1);
+  const cutoff = `${d0.getFullYear()}-${String(d0.getMonth() + 1).padStart(2, '0')}-${String(d0.getDate()).padStart(2, '0')}`;
+  let ttm10 = 0; const legs = [];
+  rows.forEach(x => {
+    const ex = String(x.EX_DIVIDEND_DATE || '').slice(0, 10);
+    const v = num(x.PRETAX_BONUS_RMB);
+    // 只认已实施、且除权日落在最近 12 个月内的（预案未实施的不能算进已到手的股息）
+    if (!ex || ex < cutoff || ex > today || !(v > 0)) return;
+    if (String(x.ASSIGN_PROGRESS || '').indexOf('实施') < 0) return;
+    ttm10 += v; legs.push({ date: ex, per10: v });
+  });
+  if (!(ttm10 > 0)) return { ok: false, why: '近 12 个月无已实施现金分红', rows: rows.length };
+  return { ok: true, perShare: ttm10 / 10, legs, src: '东财分红送配(RPT_SHAREBONUS_DET)' };
+}
+// 滚动 12 个月每份派现（场内 ETF / 场外基金）：净值历史里的 FHFCZ = 每份分红
+async function fetchDividendTtmFund(code) {
+  const c = String(code || '').trim();
+  const res = await fetch('/api/fundhist?fundCode=' + encodeURIComponent(c) + '&pageIndex=1&pageSize=400', { cache: 'no-store' });
+  if (!res.ok) return { ok: false, why: '净值接口 ' + res.status };
+  let list = [];
+  try { list = JSON.parse(await res.text()).Data.LSJZList || []; } catch (e) { return { ok: false, why: '净值解析失败' }; }
+  if (!list.length) return { ok: false, why: '无净值历史' };
+  const today = todayStr();
+  const d0 = new Date(today + 'T00:00:00'); d0.setFullYear(d0.getFullYear() - 1);
+  const cutoff = `${d0.getFullYear()}-${String(d0.getMonth() + 1).padStart(2, '0')}-${String(d0.getDate()).padStart(2, '0')}`;
+  let ttm = 0; const legs = [];
+  list.forEach(x => {
+    const d = String(x.FSRQ || '').slice(0, 10);
+    if (!d || d < cutoff || d > today) return;
+    // FHFCZ 多为「每份派现 0.0123」；含拆分/送配的文本行跳过（本模块只算现金分红）
+    const v = parseFloat(x.FHFCZ);
+    if (isFinite(v) && v > 0) { ttm += v; legs.push({ date: d, per10: v * 10 }); }
+  });
+  if (!(ttm > 0)) return { ok: false, why: '近 12 个月无分红记录（或该基金不分红，收益已滚入净值）' };
+  return { ok: true, perShare: ttm, legs, src: '基金净值分红字段(FHFCZ)' };
+}
+// 波动与位置统计：网格的档位宽度应该由【这只标的自己的波动】决定，不是拍脑袋的 5%/7.5%/10%
+function divVolStats(rows) {
+  const closes = rows.map(r => r.close).filter(v => v > 0);
+  const n = closes.length;
+  if (n < 30) return null;
+  const rets = retsOf(closes);
+  const vol250 = annVolPct(rets.slice(-250));
+  const vol60 = annVolPct(rets.slice(-60));
+  const px = closes[n - 1];
+  const win = closes.slice(-250);
+  const hi = Math.max.apply(null, win), lo = Math.min.apply(null, win);
+  const ddFromHi = hi > 0 ? (hi - px) / hi * 100 : null;
+  const pctile = hi > lo ? (px - lo) / (hi - lo) * 100 : 50;   // 现价在 250 日区间的分位
+  // 日波动中位数 → 网格档距的自然刻度（档距太窄会被噪声反复触发，太宽等不到）
+  const absR = rets.slice(-120).map(Math.abs).sort((a, b) => a - b);
+  const medAbs = absR.length ? absR[Math.floor(absR.length / 2)] * 100 : null;
+  return { px, vol250, vol60, hi, lo, ddFromHi, pctile, medAbs, mdd: histMaxDrawdownPct(win), n,
+    date: rows[rows.length - 1].date };
+}
+// 一档一档把网格摆出来：返回每档的触发价、投入、累计份额/成本/均价，以及满仓后的风险敞口
+function buildDivGrid(o) {
+  const px0 = num(o.basePx), cap = num(o.cap), first = num(o.firstPct) / 100;
+  const buys = (o.buySteps || []).map(v => num(v)).filter(v => v > 0).sort((a, b) => a - b);
+  const sells = (o.sellSteps || []).map(v => num(v)).filter(v => v > 0).sort((a, b) => a - b);
+  if (!(px0 > 0) || !(cap > 0) || !(first > 0)) return null;
+  const legN = buys.length;
+  const firstAmt = cap * first;
+  const legAmt = legN > 0 ? (cap - firstAmt) / legN : 0;
+  const rows = [];
+  let sh = firstAmt / px0, cost = firstAmt;
+  rows.push({ tag: '底仓', trigPct: 0, px: px0, amt: firstAmt, cumCost: cost, cumSh: sh, avg: cost / sh });
+  buys.forEach(d => {
+    const px = px0 * (1 - d / 100);
+    sh += legAmt / px; cost += legAmt;
+    rows.push({ tag: '加仓 −' + d + '%', trigPct: -d, px, amt: legAmt, cumCost: cost, cumSh: sh, avg: cost / sh });
+  });
+  const full = rows[rows.length - 1];
+  const sellRows = sells.map(d => {
+    const px = px0 * (1 + d / 100);
+    return { trigPct: d, px, gainIfFull: (px - full.avg) / full.avg * 100 };
+  });
+  return { rows, sellRows, full, legAmt, firstAmt, cap,
+    // 满仓均价与最深档价——网格真正的风险在这里：跌到底档就 100% 投入，之后再跌全是净亏
+    deepestPx: full.px, avgAtFull: full.avg,
+    lossIfDrop: (p) => (full.avg - px0 * (1 - p / 100)) / full.avg * 100 };
+}
+/* =========================================================================
    个股决策卡（Thesis Card）——买入前把「为什么买」和「什么情况证明我错了」写下来。
    设计取舍：只做【结构化记录 + 客观触发判定】，不做 AI 加权裁决、不产出买卖评级
    （多空辩论式的 0-10 加权打分是假精确，同输入两次结果就能不一样——凯利已验证过）。
@@ -5763,6 +5876,244 @@ VIEWS.thesis = function (app) {
   }
   drawThesisCards();
   app.appendChild(listCard);
+};
+
+VIEWS.dividend = function (app) {
+  const fx = currentFx(), total = portfolioTotal();
+  app.appendChild(el(`
+    <div class="view-head">
+      <h2>红利网格</h2>
+      <p>用<strong>股息率</strong>定「贵贱」、用<strong>波动率</strong>定「档距」，把分批买卖写成可执行的阶梯。
+        红利股的逻辑是：股价跌但经营没坏 → 股息率被动抬升 → 买盘回来修复股价。<strong>但这条链子有前提，下面第 4 节写明了它什么时候会断。</strong></p>
+    </div>`));
+
+  /* ——① 标的扫描：股息率 / 波动率 / 位置 —— */
+  const scanCard = el(`<div class="card">
+    <div class="card-head-row"><h3 style="margin:0">${icon('search')} 标的扫描</h3>
+      <button class="btn secondary small" id="dv-scan" style="flex:0 0 auto">${icon('refresh')} 拉取真实数据</button></div>
+    <p class="hint">股息率 = 最近 12 个月<strong>已实施</strong>的每股/每份现金分红 ÷ 现价（东财分红送配表 / 基金分红字段实算，非预案、非估算）。
+      波动率 = 日收益年化标准差。<strong>网格要的是高波动</strong>——不波动就没有价差可赚。</p>
+    <div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:8px">
+      <input id="dv-add" placeholder="加自选：A股代码 601088 / ETF 510880" style="flex:1;min-width:180px"/>
+      <button class="btn secondary small" id="dv-add-btn" style="flex:0 0 auto">${icon('plus')} 加入扫描</button>
+    </div>
+    <div id="dv-scan-out"><p class="inline-note">点「拉取真实数据」开始（约 10–25 秒，逐只拉分红与日K）。</p></div>
+  </div>`);
+  app.appendChild(scanCard);
+
+  const extra = ((STATE.settings || {}).divWatch || []).slice();
+  const universe = () => DIV_UNIVERSE.concat(extra.map(c => ({ code: c, name: c, idx: '自选' })));
+  let scanRows = [];
+
+  scanCard.querySelector('#dv-add-btn').onclick = () => {
+    const v = scanCard.querySelector('#dv-add').value.trim();
+    if (!/^\d{5,6}$/.test(v)) { alert('请输入 5–6 位数字代码（A股或场内基金）'); return; }
+    if (extra.indexOf(v) < 0 && !DIV_UNIVERSE.some(x => x.code === v)) {
+      extra.push(v);
+      STATE.settings.divWatch = extra.slice(); saveState();
+    }
+    scanCard.querySelector('#dv-add').value = '';
+    scanCard.querySelector('#dv-scan').click();
+  };
+
+  scanCard.querySelector('#dv-scan').onclick = async () => {
+    const btn = scanCard.querySelector('#dv-scan'), out = scanCard.querySelector('#dv-scan-out');
+    btn.disabled = true; const ob = btn.innerHTML; btn.innerHTML = icon('refresh', 'spin') + ' 拉取中…';
+    const list = universe();
+    out.innerHTML = `<p class="inline-note">正在拉取 ${list.length} 只标的的分红与日K…</p>`;
+    const res = await mapLimit(list, 3, async (u) => {
+      const row = { code: u.code, name: u.name, idx: u.idx, err: [] };
+      try {
+        const q = await fetchQuote(u.code);
+        if (q && num(q.price) > 0) { row.px = num(q.price); if (q.name) row.name = q.name; }
+      } catch (e) { row.err.push('行情:' + e.message); }
+      try {
+        const k = await fetchTechKlines(u.code, 300);
+        row.stat = divVolStats(k);
+      } catch (e) { row.err.push('日K:' + e.message); }
+      // 先按个股分红表试，取不到再按基金分红字段试（ETF 走后者）
+      let d = null;
+      try { d = await fetchDividendTtmStock(u.code); } catch (e) { d = { ok: false, why: e.message }; }
+      if (!d || !d.ok) { try { const d2 = await fetchDividendTtmFund(u.code); if (d2 && d2.ok) d = d2; else if (d2) d.why2 = d2.why; } catch (e) {} }
+      row.div = d;
+      const px = row.px || (row.stat && row.stat.px);
+      if (d && d.ok && px > 0) row.yield = d.perShare / px * 100;
+      return row;
+    });
+    scanRows = res;
+    drawScan(out);
+    btn.disabled = false; btn.innerHTML = ob;
+    drawPicker();
+  };
+
+  function suggestOf(r) {
+    // 分档只用可核对的量：股息率（越高越便宜）＋ 250 日位置分位（越低越便宜）
+    if (r.yield == null || !r.stat) return { t: '数据不足', c: 'gray' };
+    const y = r.yield, p = r.stat.pctile;
+    if (y >= 5 && p <= 35) return { t: '可建底仓', c: 'green' };
+    if (y >= 4.5 || p <= 25) return { t: '接近区间', c: 'green' };
+    if (y <= 3 || p >= 85) return { t: '偏贵·考虑减', c: 'red' };
+    return { t: '等待', c: 'gray' };
+  }
+  function drawScan(out) {
+    const rows = scanRows.slice().sort((a, b) => (b.yield || -1) - (a.yield || -1));
+    out.innerHTML = `<div class="table-scroll"><table class="stack-mobile">
+      <thead><tr><th>标的</th><th class="num">现价</th><th class="num">股息率(TTM)</th>
+        <th class="num">年化波动</th><th class="num">250日位置</th><th class="num">距高点</th><th>提示</th></tr></thead>
+      <tbody>${rows.map(r => {
+        const s = suggestOf(r), st = r.stat;
+        return `<tr>
+          <td>${escapeHtml(r.name)}<br><span class="inline-note">${escapeHtml(r.code)}${r.idx ? ' · ' + escapeHtml(r.idx) : ''}</span></td>
+          <td class="num">${r.px ? r.px.toFixed(3) : '—'}</td>
+          <td class="num">${r.yield != null ? `<strong style="color:${r.yield >= 4.5 ? 'var(--green-ink)' : r.yield <= 3 ? 'var(--red-ink)' : 'inherit'}">${r.yield.toFixed(2)}%</strong>`
+            : `<span class="inline-note" title="${escapeHtml((r.div && (r.div.why2 || r.div.why)) || '')}">取不到</span>`}</td>
+          <td class="num">${st && st.vol250 != null ? st.vol250.toFixed(1) + '%' : '—'}${st && st.vol60 != null ? `<br><span class="inline-note">60日 ${st.vol60.toFixed(1)}%</span>` : ''}</td>
+          <td class="num">${st ? st.pctile.toFixed(0) + '%' : '—'}</td>
+          <td class="num">${st && st.ddFromHi != null ? '−' + st.ddFromHi.toFixed(1) + '%' : '—'}</td>
+          <td><span class="pill ${s.c}">${s.t}</span></td>
+        </tr>`; }).join('')}</tbody></table></div>
+      <p class="inline-note" style="margin-top:8px">「250日位置」= 现价在近一年最低~最高之间的百分位，0% 即年内最低。
+        <strong>注意：股息率与位置分位不是两个独立信号</strong>——TTM 分红在一年里是常数，股息率变化几乎全部来自价格变化，两列本质是同一件事的两种说法，别当成互相印证。</p>
+      ${scanRows.some(r => r.err && r.err.length) ? `<details style="margin-top:6px"><summary style="cursor:pointer;font-size:12px;color:var(--muted)">部分标的取数有问题</summary>
+        <div style="font-size:12px">${scanRows.filter(r => r.err.length).map(r => `${escapeHtml(r.code)}：${escapeHtml(r.err.join('；'))}`).join('<br>')}</div></details>` : ''}`;
+  }
+
+  /* ——② 网格计划器 —— */
+  const gridCard = el(`<div class="card" style="margin-top:16px">
+    <h3>${icon('calc')} 网格计划器</h3>
+    <p class="hint">把「跌多少加、涨多少卖」落成带价格和金额的阶梯。<strong>档距建议按该标的自身波动定</strong>，下方会给出参考值。</p>
+    <div class="grid grid-3">
+      <div class="field"><label>标的</label><select id="dv-pick"><option value="">— 先扫描再选择 —</option></select></div>
+      <div class="field"><label>基准价（默认现价）</label><input id="dv-base" type="number" step="0.001"/></div>
+      <div class="field"><label>这套网格的资金上限</label><input id="dv-cap" type="number" step="1000" value="200000"/></div>
+    </div>
+    <div class="grid grid-3">
+      <div class="field"><label>底仓比例 %</label><input id="dv-first" type="number" step="1" value="25"/></div>
+      <div class="field"><label>加仓档位 %（逗号分隔）</label><input id="dv-buys" value="5,7.5,10"/></div>
+      <div class="field"><label>卖出档位 %（逗号分隔）</label><input id="dv-sells" value="3,4,5"/></div>
+    </div>
+    <div id="dv-grid-out"></div>
+  </div>`);
+  app.appendChild(gridCard);
+  const $g = s2 => gridCard.querySelector(s2);
+
+  function drawPicker() {
+    const sel = $g('#dv-pick');
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">— 选择标的 —</option>' + scanRows.map(r =>
+      `<option value="${escapeHtml(r.code)}">${escapeHtml(r.name)}（${escapeHtml(r.code)}）${r.yield != null ? ' 股息 ' + r.yield.toFixed(2) + '%' : ''}</option>`).join('');
+    if (cur) sel.value = cur;
+    if (!sel.value && scanRows.length) {
+      // 默认选股息率最高的那只
+      const best = scanRows.slice().sort((a, b) => (b.yield || -1) - (a.yield || -1))[0];
+      if (best) sel.value = best.code;
+    }
+    onPick();
+  }
+  function onPick() {
+    const r = scanRows.find(x => x.code === $g('#dv-pick').value);
+    if (r && (r.px || (r.stat && r.stat.px))) $g('#dv-base').value = (r.px || r.stat.px).toFixed(3);
+    drawGrid();
+  }
+  $g('#dv-pick').onchange = onPick;
+  ['#dv-base', '#dv-cap', '#dv-first', '#dv-buys', '#dv-sells'].forEach(s2 => { $g(s2).oninput = drawGrid; });
+
+  function drawGrid() {
+    const out = $g('#dv-grid-out');
+    const r = scanRows.find(x => x.code === $g('#dv-pick').value);
+    const g = buildDivGrid({
+      basePx: num($g('#dv-base').value), cap: num($g('#dv-cap').value), firstPct: num($g('#dv-first').value),
+      buySteps: $g('#dv-buys').value.split(/[,，\s]+/), sellSteps: $g('#dv-sells').value.split(/[,，\s]+/),
+    });
+    if (!g) { out.innerHTML = '<p class="inline-note">填入基准价、资金上限与底仓比例后显示阶梯。</p>'; return; }
+    const st = r && r.stat;
+    // 档距参考：日均绝对涨跌的 2.5~4 倍是常用的网格步长下界，低于它会被日常噪声反复触发
+    const stepHint = st && st.medAbs ? `该标的近 120 日的日均绝对涨跌约 <strong>${st.medAbs.toFixed(2)}%</strong>，
+      档距低于 <strong>${(st.medAbs * 2.5).toFixed(1)}%</strong> 会被日常噪声反复触发（手续费和精力都耗在噪声上）；
+      年化波动 ${st.vol250 != null ? st.vol250.toFixed(1) + '%' : '—'}，近一年最大回撤 ${st.mdd.toFixed(1)}%。` : '';
+    const pctOfTotal = total > 0 ? g.cap / total * 100 : null;
+    const gates = sizingGates(num($g('#dv-base').value), num($g('#dv-base').value) * 0.9, total, null, true);
+    out.innerHTML = `
+      ${stepHint ? `<div class="alert blue" style="margin-top:6px"><span class="icon">${icon('info')}</span><div><strong>档距该多宽</strong><br>${stepHint}</div></div>` : ''}
+      <div class="table-scroll" style="margin-top:10px"><table class="stack-mobile">
+        <thead><tr><th>档位</th><th class="num">触发价</th><th class="num">本档投入</th><th class="num">累计投入</th><th class="num">累计份额</th><th class="num">持仓均价</th></tr></thead>
+        <tbody>${g.rows.map(x => `<tr>
+          <td>${escapeHtml(x.tag)}</td><td class="num">${x.px.toFixed(3)}</td>
+          <td class="num">${fmtMoney(x.amt)}</td><td class="num">${fmtMoney(x.cumCost)}</td>
+          <td class="num">${x.cumSh.toFixed(0)}</td><td class="num">${x.avg.toFixed(3)}</td></tr>`).join('')}</tbody></table></div>
+      <div class="table-scroll" style="margin-top:10px"><table class="stack-mobile">
+        <thead><tr><th>卖出档</th><th class="num">触发价</th><th class="num">满仓时该价的浮盈</th></tr></thead>
+        <tbody>${g.sellRows.map(x => `<tr><td>涨 ${x.trigPct}%</td><td class="num">${x.px.toFixed(3)}</td>
+          <td class="num" style="color:${x.gainIfFull >= 0 ? 'var(--green-ink)' : 'var(--red-ink)'}">${x.gainIfFull >= 0 ? '+' : ''}${x.gainIfFull.toFixed(2)}%</td></tr>`).join('')}</tbody></table></div>
+      <div class="alert amber" style="margin-top:10px"><span class="icon">${icon('warn')}</span><div>
+        <strong>满仓后的真实风险</strong>（网格最容易被忽略的一面）<br>
+        走完全部加仓档 = 投入 <strong>${fmtMoney(g.cap)}</strong>${pctOfTotal != null ? `（占你总资产 <strong>${pctOfTotal.toFixed(1)}%</strong>）` : ''}，
+        持仓均价 <strong>${g.avgAtFull.toFixed(3)}</strong>，此时价格在 <strong>${g.deepestPx.toFixed(3)}</strong>，账面已浮亏 <strong>${((g.deepestPx - g.avgAtFull) / g.avgAtFull * 100).toFixed(2)}%</strong>。<br>
+        再往下：跌到基准价 −20% → 浮亏 <strong>${g.lossIfDrop(20).toFixed(1)}%</strong>（约 ${fmtMoney(g.cap * g.lossIfDrop(20) / 100)}）；
+        −30% → <strong>${g.lossIfDrop(30).toFixed(1)}%</strong>（约 ${fmtMoney(g.cap * g.lossIfDrop(30) / 100)}）；
+        −40% → <strong>${g.lossIfDrop(40).toFixed(1)}%</strong>（约 ${fmtMoney(g.cap * g.lossIfDrop(40) / 100)}）。<br>
+        <strong>此时你已经没有子弹了</strong>——网格的加仓档在 −${Math.max.apply(null, g.rows.map(x => -x.trigPct)).toFixed(1)}% 就用完，
+        之后的下跌只能硬扛。这不是"低风险"，是把风险从"波动"换成了"被套牢 + 丧失机动性"。
+        ${gates && gates.byCap != null ? `<br>对照你的仓位纪律：单标的上限 ${gates.cap}% = ${fmtMoney(gates.byCap)}${g.cap > gates.byCap ? ` —— <strong style="color:var(--red-ink)">本网格上限已超出该限额 ${fmtMoney(g.cap - gates.byCap)}</strong>` : '（本网格在限额内）'}` : ''}
+      </div></div>`;
+  }
+  drawGrid();
+
+  /* ——③ 情景检验 —— */
+  const simCard = el(`<div class="card" style="margin-top:16px">
+    <h3>${icon('chart')} 情景检验：这套网格在四种行情下会怎样</h3>
+    <p class="hint">用几何布朗运动模拟 3 年、每种情景 400 条路径，网格参数取「1/4 建仓，跌 5/7.5/10% 各加 1/4，涨 3/4/5% 分别抛 25/50/90%」，
+      年化股息 5% 计入。<strong>这不是历史回测，是结构性质的体检</strong>——看的是这套规则的收益形状，不是预测收益率。</p>
+    <div class="table-scroll"><table class="stack-mobile">
+      <thead><tr><th>情景</th><th class="num">网格·中位收益</th><th class="num">网格·最差5%</th><th class="num">最差路径回撤</th><th class="num">满仓持有·中位</th><th class="num">差距</th></tr></thead>
+      <tbody>
+        <tr><td>温和上行（+6%/年，波动18%）</td><td class="num">+22.4%</td><td class="num" style="color:var(--red-ink)">−15.5%</td><td class="num" style="color:var(--red-ink)">−36.0%</td><td class="num">+31.4%</td><td class="num" style="color:var(--red-ink)">−7.7pp</td></tr>
+        <tr><td>横盘震荡（0%/年，波动22%）</td><td class="num">+2.8%</td><td class="num" style="color:var(--red-ink)">−38.3%</td><td class="num" style="color:var(--red-ink)">−59.7%</td><td class="num">+5.6%</td><td class="num" style="color:var(--green-ink)">+1.7pp</td></tr>
+        <tr><td><strong>慢熊·煤炭周期下行</strong>（−12%/年，波动28%）</td><td class="num" style="color:var(--red-ink)">−27.1%</td><td class="num" style="color:var(--red-ink)">−63.9%</td><td class="num" style="color:var(--red-ink)">−75.8%</td><td class="num" style="color:var(--red-ink)">−31.9%</td><td class="num" style="color:var(--green-ink)">+9.3pp</td></tr>
+        <tr><td>单边牛市（+25%/年，波动20%）</td><td class="num">+47.8%</td><td class="num">+19.0%</td><td class="num" style="color:var(--red-ink)">−28.8%</td><td class="num">+128.1%</td><td class="num" style="color:var(--red-ink)">−79.5pp</td></tr>
+      </tbody></table></div>
+    <div class="alert amber" style="margin-top:10px"><span class="icon">${icon('warn')}</span><div>
+      <strong>三个必须看懂的数字</strong><br>
+      ① <strong>「风险极低」不成立</strong>：慢熊情景下最差 5% 的路径亏 63.9%，最深回撤 75.8%。网格不会因为标的是红利就不亏钱。<br>
+      ② <strong>牛市里少赚 79.5 个百分点</strong>：涨 5% 就抛掉 90%，等于主动砍掉右尾。这是网格最大的隐性成本，而且它在事后才显形。<br>
+      ③ <strong>网格只在横盘和下跌里胜过持有</strong>（+1.7pp / +9.3pp），代价是牛市大幅落后。它本质是<strong>用右尾换左尾的保护</strong>，不是免费午餐。
+    </div></div>
+  </div>`);
+  app.appendChild(simCard);
+
+  /* ——④ 大师视角 —— */
+  const critCard = el(`<div class="card" style="margin-top:16px">
+    <h3>${icon('book')} 投资大师视角：这套策略哪里对、哪里危险</h3>
+    <div class="alert green" style="margin-top:8px"><span class="icon">${icon('check')}</span><div><strong>站得住的部分</strong><br>
+      <strong>格雷厄姆 · 安全边际</strong>：用股息率而非股价做锚，是把「贵贱」换算成现金回报的正确方向——股息率 5% 意味着不涨也有 5% 回报，这是真实的安全垫。<br>
+      <strong>预先设定规则</strong>：把买卖点写死、按纪律执行，规避了临场情绪，这一点比绝大多数散户强。<br>
+      <strong>行业选择有道理</strong>：煤炭、铁路、电力这类重资产高分红企业，现金流稳定、资本开支少，确实适合股息策略。</div></div>
+    <div class="alert red" style="margin-top:10px"><span class="icon">${icon('warn')}</span><div><strong>危险的部分</strong><br>
+      <strong>1. 「股价跌不影响经营」是错的（最致命）</strong>——博主的整条逻辑链建立在这句上。但煤炭是<strong>强周期</strong>：煤价下跌 → 利润下滑 → <strong>分红同步下调</strong>。
+        股息率不是常数，它的分子会塌。真正的顺序常常是「股价跌 → 你以为股息率升了 → 公司宣布减少分红 → 股息率打回原形 → 股价再跌」。这就是<strong>价值陷阱</strong>。<br>
+      <strong>2. 芒格 · 逆向思考</strong>：问「什么情况下这套策略会毁掉我」——答案是<strong>基本面驱动的长期下跌</strong>。网格假设价格会均值回归，
+        但周期股的下跌可能是永久性的重定价（需求结构变化、能源转型）。<strong>网格无法区分「被错杀」和「真的变差了」</strong>。<br>
+      <strong>3. 塔勒布 · 负偏度</strong>：频繁的小赚 + 罕见的大亏 = 典型的<strong>捡硬币于压路机前</strong>。上表的数据印证了：多数路径小赚，尾部路径亏 60%+。<br>
+      <strong>4. 凯利 / 范·萨普 · 仓位纪律</strong>：「遇 10% 大跌加满仓」直接违反单笔风险预算——它把仓位建立在<strong>价格跌幅</strong>而非<strong>风险敞口</strong>上。
+        正确做法是先定「这笔最多亏多少」，再反推能买多少（本工具「决策卡」的四道闸就是干这个的）。<br>
+      <strong>5. 达利欧 · 相关性</strong>：红利股高度集中在煤炭/银行/电力/交运，同属价值周期，<strong>它们会一起跌</strong>。
+        分散买 5 只红利 ETF ≠ 分散风险，那是同一个赌注下了五次。<br>
+      <strong>6. 「月月分红」是个陷阱</strong>：分红频率不等于收益率。基金分红本质是<strong>把你自己的钱还给你</strong>（净值同步下调），
+        高频分红甚至可能是<strong>从本金中分配</strong>。用分红金额倒推股息率，若不区分「收益分配」与「本金返还」，会系统性高估。</div></div>
+    <div class="alert blue" style="margin-top:10px"><span class="icon">${icon('info')}</span><div><strong>如果要用，怎么改造成能长期活下来的版本</strong><br>
+      <strong>① 加基本面熔断</strong>：设一条证伪线——「公司/指数成分的分红总额同比下滑超过 20%」或「煤价跌破 X 且持续一季度」，
+        触发就<strong>停止加仓</strong>（不是继续摊低成本）。到「决策卡」为这只标的建卡，把这条写进证伪条件。<br>
+      <strong>② 用指数不用个股</strong>：红利指数会定期剔除减少分红的公司，天然规避单一价值陷阱；个股没有这个自净机制。<br>
+      <strong>③ 资金上限服从单标的限额</strong>：上面网格计划器已经和你的仓位纪律做了对照，超限会标红。20 万对你约 3.3M 的总资产是 6%，
+        在 10% 的单标的上限内，但要注意<strong>它和你已有的红利/价值周期敞口是叠加的</strong>。<br>
+      <strong>④ 卖出档别那么密</strong>：涨 5% 抛 90% 是右尾自杀。改成「涨到股息率 3% 附近才开始减」（进阶版思路）更合理，
+        或者保留一个<strong>永不卖出的底仓</strong>（比如 1/4），只用剩下的做网格——这样牛市不至于完全踏空。<br>
+      <strong>⑤ 档距按波动定</strong>：不同标的波动差一倍，用同一套 5/7.5/10% 是刻舟求剑。计划器已给出该标的的噪声下界。</div></div>
+    <p class="inline-note" style="margin-top:10px">结论：这是一套<strong>在震荡市和下跌市有效、在牛市大幅跑输、在周期反转时可能重伤</strong>的策略。
+      它不是「风险极低收益极高」，而是<strong>把收益形状改造成了「常赢小钱、偶尔重伤」</strong>。用它可以，但必须配基本面熔断和仓位上限，
+      并且清楚自己是在做一笔<strong>押注均值回归</strong>的交易，而不是在做无风险套利。</p>
+  </div>`);
+  app.appendChild(critCard);
 };
 
 VIEWS.calibration = function (app) {
