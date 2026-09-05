@@ -39,7 +39,7 @@ nav{
 nav ul{display:flex;gap:0;list-style:none;margin:0 auto;padding:0;max-width:760px;overflow-x:auto;scrollbar-width:none}
 nav ul::-webkit-scrollbar{display:none}
 nav a{
-  display:block;padding:13px 12px;white-space:nowrap;text-decoration:none;
+  display:block;padding:13px 11px;white-space:nowrap;text-decoration:none;
   color:var(--ink-soft);font-size:14px;letter-spacing:.02em;
 }
 nav a:hover,nav a:focus-visible{color:var(--lapis);background:var(--lapis-tint)}
@@ -53,8 +53,8 @@ nav a:hover,nav a:focus-visible{color:var(--lapis);background:var(--lapis-tint)}
 .hero .dates{font-size:15px;color:#A9C2CB;margin:0 0 26px}
 .spine{display:flex;gap:2px;margin-bottom:0;padding-bottom:30px;overflow-x:auto;scrollbar-width:none}
 .spine::-webkit-scrollbar{display:none}
-.spine div{flex:1;min-width:118px;padding:12px 10px;background:rgba(255,255,255,.07);border-top:2px solid var(--gold)}
-.spine div:nth-child(3){border-top-color:#6E8A94;opacity:.55}
+.spine div{flex:1;min-width:116px;padding:12px 10px;background:rgba(255,255,255,.07);border-top:2px solid var(--gold)}
+.spine div.soft{border-top-color:#6E8A94;opacity:.65}
 .spine b{display:block;font-size:13px;color:#DCE7EA;font-weight:600}
 .spine span{display:block;font-size:12px;color:#93AEB8;margin-top:3px}
 .herofig{margin:0}
@@ -78,10 +78,22 @@ em{font-style:normal;color:var(--wine);font-weight:600}
 ul.plain{margin:0 0 16px;padding-left:20px}
 ul.plain li{margin-bottom:7px}
 
+/* ---------- 地点链接 ---------- */
+a.pin{color:var(--lapis);text-decoration:none;border-bottom:1px dotted #9BB3BC;white-space:nowrap}
+a.pin::before{content:"◈";color:var(--gold);font-size:10px;margin-right:3px;vertical-align:1px}
+a.pin:hover{background:var(--lapis-tint)}
+
+/* ---------- 动线 ---------- */
+.route{
+  background:#fff;border:1px solid var(--rule);border-left:3px solid var(--lapis);
+  border-radius:0 4px 4px 0;padding:13px 15px;margin:0 0 18px;font-size:14px;line-height:2;
+}
+.route b{font-family:var(--serif);display:block;font-size:13px;color:var(--lapis);margin-bottom:2px;letter-spacing:.03em}
+.route .hop{color:var(--gold);font-weight:600;font-size:12px;padding:0 5px;white-space:nowrap}
+
 /* ---------- urgent ---------- */
 .urgent{background:var(--wine-tint);border-left:4px solid var(--wine);padding:20px 22px;margin:0 0 26px;border-radius:0 4px 4px 0}
-.urgent h3{margin-top:0;color:var(--wine)}
-.urgent h4{margin-top:0;color:var(--wine)}
+.urgent h3,.urgent h4{margin-top:0;color:var(--wine)}
 .urgent p:last-child{margin-bottom:0}
 
 /* ---------- checklist ---------- */
@@ -105,7 +117,7 @@ ul.plain li{margin-bottom:7px}
 /* ---------- flights ---------- */
 .flight{border:1px solid var(--rule);background:var(--card);border-radius:4px;padding:16px 18px;margin:0 0 12px}
 .flight .no{font-size:13px;color:var(--gold);font-weight:600;font-family:var(--serif);margin-bottom:8px}
-.flight .leg{display:flex;gap:14px;align-items:baseline;flex-wrap:wrap}
+.flight .leg{display:flex;gap:12px;align-items:baseline;flex-wrap:wrap}
 .flight .leg b{font-family:var(--serif);font-size:19px;font-weight:600;letter-spacing:.01em}
 .flight .leg span{color:var(--ink-soft);font-size:15px}
 .flight .arrow{color:var(--gold);font-weight:600}
@@ -129,23 +141,50 @@ ul.plain li{margin-bottom:7px}
 .slot .what{flex:1;margin:0}
 @media(max-width:520px){
   .slot{gap:10px}
-  .slot .when{flex:0 0 78px;font-size:12px}
+  .slot .when{flex:0 0 76px;font-size:12px}
+  .route{line-height:2.1}
 }
 
+/* ---------- 滑动相册 ---------- */
+.gal{margin:20px 0 6px}
+.gal .strip{
+  display:flex;gap:10px;overflow-x:auto;scroll-snap-type:x mandatory;
+  padding-bottom:10px;-webkit-overflow-scrolling:touch;
+  scrollbar-width:thin;scrollbar-color:#C6CCC5 transparent;
+}
+.gal .strip::-webkit-scrollbar{height:6px}
+.gal .strip::-webkit-scrollbar-thumb{background:#C6CCC5;border-radius:3px}
+.gal .strip figure{flex:0 0 88%;max-width:560px;scroll-snap-align:center;margin:0}
+@media(min-width:620px){.gal .strip figure{flex:0 0 66%}}
+.gal .strip img{display:block;width:100%;height:236px;object-fit:cover;border-radius:3px;background:var(--rule)}
+.gal .strip figcaption{font-size:13px;color:var(--ink-soft);margin-top:7px;line-height:1.6}
+.gal .hint{font-size:12px;color:#8A9793;margin:0}
+.gal.single .strip figure{flex:0 0 100%;max-width:none}
+.gal.single .hint{display:none}
+
 /* ---------- food ---------- */
-.food{background:var(--gold-tint);border-radius:4px;padding:14px 16px;margin:14px 0 4px;font-size:15px}
-.food b{display:block;font-family:var(--serif);font-size:15px;color:#7A5B18;margin-bottom:6px}
+.food{background:var(--gold-tint);border-radius:4px;padding:14px 16px;margin:16px 0 4px;font-size:15px}
+.food b.h{display:block;font-family:var(--serif);font-size:15px;color:#7A5B18;margin-bottom:6px}
 .food ul{margin:0;padding-left:18px}
 .food li{margin-bottom:5px;line-height:1.65}
 .food li:last-child{margin-bottom:0}
 .food .price{color:var(--ink-soft);font-size:13px}
+
+/* ---------- 体验卡 ---------- */
+.xp{background:#fff;border:1px solid var(--rule);border-radius:4px;padding:14px 16px;margin:16px 0}
+.xp.pick{border-color:var(--gold);border-width:1.5px}
+.xp .h{font-family:var(--serif);font-size:16px;font-weight:600;margin:0 0 3px;line-height:1.45}
+.xp .star{color:var(--gold);font-weight:600;font-size:13px;white-space:nowrap}
+.xp .why{margin:8px 0 0;font-size:14px;line-height:1.7}
+.xp .why:first-of-type{margin-top:6px}
+.xp .kv{font-size:13px;color:var(--ink-soft);margin:6px 0 0}
 
 /* ---------- figures ---------- */
 figure{margin:22px 0}
 figure img{display:block;width:100%;height:auto;border-radius:3px;background:var(--rule)}
 figcaption{font-size:13px;color:var(--ink-soft);margin-top:8px;line-height:1.6}
 
-/* ---------- misc blocks ---------- */
+/* ---------- misc ---------- */
 .note{background:var(--lapis-tint);padding:16px 18px;border-radius:4px;margin:18px 0;font-size:15px}
 .note p:last-child{margin-bottom:0}
 .opt{border:1px solid var(--rule);background:var(--card);border-radius:4px;padding:18px 20px;margin:16px 0}
@@ -153,17 +192,123 @@ figcaption{font-size:13px;color:var(--ink-soft);margin-top:8px;line-height:1.6}
 .opt.pick{border-color:var(--gold);border-width:1.5px}
 .tag{display:inline-block;font-size:12px;background:var(--gold);color:#fff;padding:1px 8px;border-radius:2px;margin-left:8px;vertical-align:2px}
 .tag.warn{background:var(--wine)}
+.tag.cool{background:var(--lapis)}
 
 table{width:100%;border-collapse:collapse;margin:18px 0;font-size:15px}
 th,td{text-align:left;padding:11px 10px;border-bottom:1px solid var(--rule);vertical-align:top}
 th{color:var(--lapis);font-weight:600;font-size:14px}
 td:first-child{white-space:nowrap;color:var(--ink-soft)}
 .wide{overflow-x:auto}
-.wide table{min-width:520px}
+.wide table{min-width:540px}
+
+/* ---------- 手绘地图 ---------- */
+.mapbox{background:#fff;border:1px solid var(--rule);border-radius:4px;padding:14px;margin:20px 0}
+.mapbox svg{display:block;width:100%;height:auto}
+.mapbox .cap{font-size:12px;color:var(--ink-soft);margin:8px 2px 0;line-height:1.6}
+
+/* ---------- 链接库 ---------- */
+.links{margin:8px 0 20px}
+.links a.row{
+  display:flex;gap:12px;padding:12px 2px;border-bottom:1px solid var(--rule);
+  text-decoration:none;color:var(--ink);align-items:baseline;
+}
+.links a.row:hover{background:var(--lapis-tint)}
+.links a.row b{flex:0 0 140px;font-weight:600;font-size:15px;color:var(--lapis)}
+.links a.row span{flex:1;font-size:13px;color:var(--ink-soft);line-height:1.6}
+@media(max-width:520px){
+  .links a.row{flex-direction:column;gap:2px}
+  .links a.row b{flex:none}
+}
 
 footer{background:var(--lapis);color:#9FB8C1;padding:34px 0;margin-top:50px;font-size:13px;line-height:1.7}
 footer a{color:#CFE0E6}
 .totop{display:inline-block;margin-top:14px;color:#CFE0E6;text-decoration:none;font-size:13px}
+
+/* ================= 手机端优化 ================= */
+html{-webkit-text-size-adjust:100%}
+body{overflow-x:hidden}
+a,button,.check .box{-webkit-tap-highlight-color:rgba(15,59,76,.12)}
+
+/* sticky 导航会遮住锚点标题，给所有跳转目标留出让位 */
+section,.day,header{scroll-margin-top:54px}
+
+/* 导航右侧渐变，提示还能往右滑 */
+nav{position:sticky;overflow:hidden}
+nav::after{
+  content:"";position:absolute;right:0;top:0;bottom:0;width:26px;pointer-events:none;
+  background:linear-gradient(90deg,rgba(244,245,242,0),rgba(244,245,242,.96));
+}
+
+/* 手绘地图：窄屏下不缩放，保持最小宽度横向滑动，文字才读得清 */
+.mapbox .svgwrap{overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:thin}
+.mapbox .svgwrap svg{min-width:600px}
+
+/* 触摸设备上把相册滚动条藏起来，靠手势滑 */
+@media (hover:none){
+  .gal .strip{scrollbar-width:none}
+  .gal .strip::-webkit-scrollbar{display:none}
+}
+
+@media(max-width:600px){
+  .wrap{padding:0 16px}
+  section{padding:36px 0 6px}
+  body{font-size:16px;line-height:1.72}
+
+  .hero{padding-top:36px}
+  .hero h1{font-size:29px;line-height:1.3;margin-bottom:10px}
+  .hero .dates{font-size:14px;line-height:1.7;margin-bottom:20px}
+  .hero .spine div{min-width:104px;padding:10px 9px}
+  .herofig img{height:180px}
+
+  h2{font-size:22px}
+  h3{font-size:17px;margin-top:26px}
+  h4{font-size:16px}
+  .lede{font-size:14px;margin-bottom:20px}
+
+  nav a{padding:12px 10px;font-size:13px}
+
+  /* 动线：窄屏下按行断开，别挤成一坨 */
+  .route{padding:12px 13px;font-size:13.5px;line-height:2.05}
+  .route .hop{padding:0 3px;font-size:11.5px}
+
+  .slot{margin-bottom:13px}
+  .day{padding:22px 0}
+  .day h3{font-size:18px}
+
+  .gal .strip figure{flex:0 0 90%}
+  .gal .strip img{height:198px}
+  .gal .strip figcaption{font-size:12.5px}
+
+  .food,.note,.xp{padding:13px 14px;font-size:14.5px}
+  .urgent{padding:16px 17px}
+  .opt{padding:15px 16px}
+  .flight{padding:14px 15px}
+  .flight .leg b{font-size:17px}
+  .flight .leg span{font-size:14px}
+
+  table{font-size:14px}
+  th,td{padding:9px 8px}
+  .wide table{min-width:480px}
+  /* 表格能横滑时给个提示，免得以为内容被截断了 */
+  .wide::after{
+    content:"← 左右滑动看完整表格 →";display:block;
+    font-size:11.5px;color:#8A9793;margin:-10px 0 14px;
+  }
+
+  .mapbox{padding:10px}
+  .mapbox .cap{font-size:11.5px}
+
+  .links a.row b{font-size:14.5px}
+  .links a.row span{font-size:12.5px}
+
+  footer{padding:28px 0;font-size:12.5px}
+}
+
+@media(max-width:380px){
+  .hero h1{font-size:26px}
+  .slot .when{flex:0 0 70px;font-size:11.5px}
+  .gal .strip img{height:176px}
+}
 </style>
 </head>
 <body>
@@ -173,12 +318,13 @@ footer a{color:#CFE0E6}
     <li><a href="#flights">航班</a></li>
     <li><a href="#before">出发前</a></li>
     <li><a href="#base">落脚点</a></li>
-    <li><a href="#rhythm">作息</a></li>
     <li><a href="#tbilisi">第比利斯</a></li>
+    <li><a href="#hike">徒步</a></li>
     <li><a href="#batumi">巴统</a></li>
-    <li><a href="#yerevan">埃里温转场</a></li>
+    <li><a href="#yerevan">埃里温</a></li>
+    <li><a href="#backtb">9.30–10.1</a></li>
     <li><a href="#tashkent">塔什干</a></li>
-    <li><a href="#exp">一日游</a></li>
+    <li><a href="#urls">常用网址</a></li>
     <li><a href="#ref">速查</a></li>
   </ul>
 </nav>
@@ -190,7 +336,8 @@ footer a{color:#CFE0E6}
     <div class="spine">
       <div><b>9.18–9.23</b><span>第比利斯旅居</span></div>
       <div><b>9.23–9.26</b><span>巴统（火车往返）</span></div>
-      <div><b>9.27–9.30</b><span>埃里温（朋友安排）</span></div>
+      <div class="soft"><b>9.27–9.30</b><span>埃里温（朋友安排）</span></div>
+      <div><b>9.30–10.1</b><span>回第比利斯收尾</span></div>
       <div><b>10.1–10.3</b><span>塔什干 / 撒马尔罕</span></div>
     </div>
   </div>
@@ -208,7 +355,7 @@ footer a{color:#CFE0E6}
   <div class="flight">
     <p class="no">9月18日 周五 · 东方航空 MU285</p>
     <p class="leg"><b>12:50</b> <span>上海浦东 T1</span> <span class="arrow">→</span> <b>19:00</b> <span>第比利斯国际 TBS</span></p>
-    <p class="meta">飞行约 10 小时 10 分。落地时第比利斯天刚黑，不算深夜航班，当晚还能吃顿正经晚饭。</p>
+    <p class="meta">飞行约 10 小时 10 分。落地时天刚黑，不算深夜航班，当晚还能吃顿正经晚饭。</p>
   </div>
 
   <div class="flight">
@@ -223,14 +370,36 @@ footer a{color:#CFE0E6}
     <p class="meta">红眼，10月4日周日清晨落地。10月3日白天完整可用，下午 5 点前后离开市区去机场即可。</p>
   </div>
 
+  <h3>整趟的骨架</h3>
+  <div class="wide">
+  <table>
+    <tr><th>日期</th><th>在哪</th><th>这天的主线</th></tr>
+    <tr><td>9.18 五</td><td>第比利斯</td><td>19:00 落地，办卡换钱，夜看 Metekhi 平台</td></tr>
+    <tr><td>9.19 六</td><td>卡兹别吉 或 卡赫季</td><td>整日外出（晴天给山）</td></tr>
+    <tr><td>9.20 日</td><td>另一个</td><td>整日外出</td></tr>
+    <tr><td>9.21 一</td><td>第比利斯</td><td>上午干活，下午 Narikala + Betlemi，傍晚泡硫磺浴</td></tr>
+    <tr><td>9.22 二</td><td>姆茨赫塔</td><td>上午干活，下午古都，晚上 Fabrika</td></tr>
+    <tr><td>9.23 三</td><td>→ 巴统</td><td>上午火车，下午海滨大道 + Argo 缆车日落</td></tr>
+    <tr><td>9.24 四</td><td>阿扎拉山区</td><td>整日：瀑布 + 石桥 + 家庭酒庄</td></tr>
+    <tr><td>9.25 五</td><td>巴统</td><td>上午干活，下午植物园 + 海边</td></tr>
+    <tr><td>9.26 六</td><td>→ 第比利斯</td><td>上午鱼市/Gonio，下午火车回</td></tr>
+    <tr><td>9.27 日</td><td>→ 埃里温</td><td>朋友安排</td></tr>
+    <tr><td>9.28–9.29</td><td>埃里温</td><td>朋友安排</td></tr>
+    <tr><td>9.30 三</td><td>→ 第比利斯</td><td>上午出发，下午到，傍晚 Mtatsminda 或 Dry Bridge</td></tr>
+    <tr><td>10.1 四</td><td>→ 塔什干</td><td>上午第比利斯最后半天，15:30 起飞</td></tr>
+    <tr><td>10.2 五</td><td>撒马尔罕</td><td>高铁当天往返</td></tr>
+    <tr><td>10.3 六</td><td>塔什干 → 上海</td><td>白天城内，20:20 起飞</td></tr>
+  </table>
+  </div>
+
   <div class="urgent">
-    <h4>由此推出的两条硬约束</h4>
-    <p><strong>一、9月30日必须回到第比利斯。</strong>10月1日的飞机从第比利斯起飞，而埃里温到第比利斯没有稳定的直飞，主要靠陆路 5–7 小时加边境查验。不要压到 10月1日当天赶回来，那天下午 3 点半就要登机，一点缓冲都没有。9月30日白天走陆路回第比利斯，晚上住 Avlabari 一带，10月1日中午直接去机场，这才是安全的排法。</p>
-      <p style="margin-top:10px"><strong>二、塔什干只有一个整天加一个白天。</strong>10月1日晚上 19:50 才落地，当天基本只剩吃夜宵。所以撒马尔罕放 10月2日整天往返，塔什干城内压缩进 10月3日上午到下午。</p>
+    <h4>两条硬约束</h4>
+    <p><strong>一、9月30日必须回到第比利斯。</strong>10月1日的飞机从第比利斯起飞，而埃里温到第比利斯没有稳定的直飞，主要靠陆路 5–7 小时加边境查验。不要压到 10月1日当天赶回来——那天下午 3 点半就要登机，一点缓冲都没有。9月30日白天走陆路回，晚上住 Avlabari 一带。这一天半的具体安排见<a href="#backtb">「9.30–10.1 回第比利斯」</a>一节。</p>
+    <p style="margin-top:10px"><strong>二、塔什干只有一个整天加一个白天。</strong>10月1日晚上 19:50 才落地，当天只剩吃夜宵。所以撒马尔罕放 10月2日整天往返，塔什干城内压进 10月3日上午到下午。</p>
   </div>
 
   <h3>和国内工作时间的冲突，提前打招呼</h3>
-  <p>格鲁吉亚比北京晚 4 小时，塔什干晚 3 小时。多数日子上午能覆盖国内的下午班，但这三天不行：</p>
+  <p>格鲁吉亚比北京晚 4 小时，塔什干晚 3 小时。多数日子上午 8:30–14:00 能覆盖国内下午班，但这三天不行：</p>
   <div class="wide">
   <table>
     <tr><th>日期</th><th>冲突</th><th>怎么办</th></tr>
@@ -246,7 +415,7 @@ footer a{color:#CFE0E6}
 <section id="before">
 <div class="wrap">
   <h2>出发前必办</h2>
-  <p class="lede">前两项在登机前必须完成，火车票和高铁票越早越好。</p>
+  <p class="lede">前两项在登机前必须完成，火车票和高铁票越早越好。所有网址集中在<a href="#urls">「常用网址」</a>一节。</p>
 
   <div class="urgent">
     <h3>保险是今年新增的硬性入境条件</h3>
@@ -255,14 +424,16 @@ footer a{color:#CFE0E6}
 
   <ul class="check">
     <li><span class="box" role="checkbox" aria-checked="false" tabindex="0"></span><span class="t"><b>买保险，存离线 PDF</b><span>两个人各一份，覆盖格鲁吉亚 + 亚美尼亚 + 乌兹别克斯坦，9.18 – 10.4。</span></span></li>
-    <li><span class="box" role="checkbox" aria-checked="false" tabindex="0"></span><span class="t"><b>订第比利斯住宿 9.18–9.23（5 晚）</b><span>Avlabari 一带。见下一节。</span></span></li>
-    <li><span class="box" role="checkbox" aria-checked="false" tabindex="0"></span><span class="t"><b>订巴统住宿 9.23–9.26（3 晚）</b><span>老城 Piazza 或海滨大道一带，走路能到火车站接驳的位置更省事。</span></span></li>
-    <li><span class="box" role="checkbox" aria-checked="false" tabindex="0"></span><span class="t"><b>订第比利斯住宿 9.26（1 晚）和 9.30–10.1（1 晚）</b><span>两次都建议 Avlabari 附近：26 号是为了衔接 27 号去埃里温的小巴，30 号是为了 10 月 1 日去机场。</span></span></li>
-    <li><span class="box" role="checkbox" aria-checked="false" tabindex="0"></span><span class="t"><b>买第比利斯 ⇄ 巴统火车票</b><span>tre.ge 官网或 App。<em>2026 年 8 月 6 日新隧道通车，全程已缩短到约 4 小时，时刻表跟着改点了</em>，网上流传的 8:00→13:35 是旧数据，下单前以 tre.ge 实时查询为准。周末容易满，尽早买。</span></span></li>
-    <li><span class="box" role="checkbox" aria-checked="false" tabindex="0"></span><span class="t"><b>买塔什干 ⇄ 撒马尔罕 Afrosiyob 高铁票</b><span>railway.uz 官网。车票通常提前一到两个月开售，开售即被旅行社扫走一批，落地再买大概率没有。往返都要买。</span></span></li>
+    <li><span class="box" role="checkbox" aria-checked="false" tabindex="0"></span><span class="t"><b>订第比利斯住宿 9.18–9.23（5 晚）</b><span>Avlabari 一带。</span></span></li>
+    <li><span class="box" role="checkbox" aria-checked="false" tabindex="0"></span><span class="t"><b>订巴统住宿 9.23–9.26（3 晚）</b><span>老城 Piazza 或海滨大道一带。</span></span></li>
+    <li><span class="box" role="checkbox" aria-checked="false" tabindex="0"></span><span class="t"><b>订第比利斯住宿 9.26（1 晚）＋ 9.30–10.1（1 晚）</b><span>两次都建议 Avlabari 附近：26 号衔接 27 号去埃里温的小巴，30 号衔接 10 月 1 日去机场。</span></span></li>
+    <li><span class="box" role="checkbox" aria-checked="false" tabindex="0"></span><span class="t"><b>买第比利斯 ⇄ 巴统火车票</b><span>tre.ge。<em>2026 年 8 月 6 日新隧道通车，全程已缩到约 4 小时，时刻表跟着改点</em>，网上流传的 8:00→13:35 是旧数据，下单前以 tre.ge 实时查询为准。周末容易满。</span></span></li>
+    <li><span class="box" role="checkbox" aria-checked="false" tabindex="0"></span><span class="t"><b>买塔什干 ⇄ 撒马尔罕 Afrosiyob 高铁票</b><span>railway.uz。通常提前一到两个月开售，一开售就被旅行社扫走一批。往返都要买。</span></span></li>
+    <li><span class="box" role="checkbox" aria-checked="false" tabindex="0"></span><span class="t"><b>订 9.19 / 9.20 两个整日游</b><span>采收季周末抢手，提前一周订。具体推荐见当天。</span></span></li>
+    <li><span class="box" role="checkbox" aria-checked="false" tabindex="0"></span><span class="t"><b>订 9.30 埃里温 → 第比利斯的车</b><span>推荐包车，见那一节。</span></span></li>
     <li><span class="box" role="checkbox" aria-checked="false" tabindex="0"></span><span class="t"><b>核对护照有效期</b><span>出发当天起算 6 个月以上。</span></span></li>
     <li><span class="box" role="checkbox" aria-checked="false" tabindex="0"></span><span class="t"><b>下 Google Maps 离线包（格鲁吉亚 + 亚美尼亚 + 乌兹别克斯坦），装 Bolt 和 Yandex Go</b><span>Bolt 是格鲁吉亚打车主力，Yandex Go 在塔什干是主力。外卖用 Wolt。</span></span></li>
-    <li><span class="box" role="checkbox" aria-checked="false" tabindex="0"></span><span class="t"><b>欧标转换插头</b><span>两圆孔 C/F 型，220V。格鲁吉亚和乌兹别克斯坦通用。</span></span></li>
+    <li><span class="box" role="checkbox" aria-checked="false" tabindex="0"></span><span class="t"><b>欧标转换插头</b><span>两圆孔 C/F 型，220V，格鲁吉亚和乌兹别克斯坦通用。</span></span></li>
   </ul>
 
   <h3>签证</h3>
@@ -275,23 +446,83 @@ footer a{color:#CFE0E6}
 <section id="base">
 <div class="wrap">
   <h2>落脚点：阿夫拉巴里</h2>
-  <p class="lede">ნიკიფორე ირბახის ქუჩა，姆特克瓦里河左岸。</p>
+  <p class="lede">ნიკიფორე ირბახის ქუჩა，姆特克瓦里河左岸（东岸）。</p>
 
-  <p>这个位置比住老城核心区舒服。<strong>Avlabari 地铁站步行三四分钟</strong>，1 号线一站到自由广场（老城和 Rustaveli 大街），两站到 Rustaveli。单程 1 拉里上下，Metromoney 卡在站台窗口办，也能直接刷 Visa 或 Master。</p>
+  <p>这个位置比住老城核心区舒服。<a class="pin" href="https://maps.google.com/?q=Avlabari+Metro+Station+Tbilisi" target="_blank" rel="noopener">Avlabari 地铁站</a>步行三四分钟，1 号线一站到自由广场（老城和 Rustaveli 大街入口），两站到 Rustaveli。单程 1 拉里上下，Metromoney 卡在站台窗口办，也能直接刷 Visa 或 Master。</p>
 
-  <p>步行范围内：圣三一大教堂 Sameba 十分钟，Metekhi 教堂和悬崖平台十二分钟，过桥进老城硫磺浴区十五分钟，Rike 公园（缆车下站）十五分钟。</p>
+  <div class="mapbox">
+    <div class="svgwrap">
+    <svg viewBox="0 0 700 470" role="img" aria-label="第比利斯核心区示意图">
+      <rect x="0" y="0" width="700" height="470" fill="#FBFBF9"/>
+      <!-- 河 -->
+      <path d="M300,0 C330,90 250,150 285,235 C320,320 250,380 290,470 L400,470 C360,380 430,320 395,235 C360,150 440,90 410,0 Z" fill="#DCE8EC"/>
+      <text x="352" y="452" font-size="11" fill="#7C9AA5" text-anchor="middle" font-style="italic">Mtkvari 河</text>
+      <!-- 西岸标注 -->
+      <text x="150" y="24" font-size="12" fill="#8A9793">西岸 · 老城一侧</text>
+      <text x="560" y="24" font-size="12" fill="#8A9793">东岸 · 住处一侧</text>
+      <!-- 桥 -->
+      <rect x="285" y="196" width="118" height="7" rx="3" fill="#C4B183"/>
+      <text x="344" y="190" font-size="11" fill="#8A7440" text-anchor="middle">和平桥</text>
+      <rect x="288" y="316" width="112" height="7" rx="3" fill="#C4B183"/>
+      <text x="344" y="338" font-size="11" fill="#8A7440" text-anchor="middle">Metekhi 桥</text>
+      <!-- 缆车线 -->
+      <line x1="452" y1="232" x2="176" y2="286" stroke="#B0842B" stroke-width="1.6" stroke-dasharray="6 5"/>
+      <text x="300" y="272" font-size="11" fill="#B0842B" transform="rotate(-11 300 272)">缆车 2.5 GEL</text>
+      <!-- 西岸点 -->
+      <g fill="#0F3B4C">
+        <circle cx="176" cy="286" r="7"/><text x="60" y="291" font-size="13">Narikala 要塞</text>
+        <circle cx="205" cy="352" r="6"/><text x="70" y="357" font-size="13">硫磺浴区</text>
+        <circle cx="243" cy="318" r="5"/><text x="120" y="323" font-size="12" fill="#4A5A58">Betlemi 街</text>
+        <circle cx="252" cy="243" r="6"/><text x="150" y="234" font-size="13">老城</text>
+        <circle cx="214" cy="150" r="6"/><text x="82" y="146" font-size="13">自由广场</text>
+        <circle cx="150" cy="86" r="5"/><text x="30" y="82" font-size="12" fill="#4A5A58">Rustaveli 大街</text>
+        <circle cx="120" cy="196" r="5"/><text x="16" y="200" font-size="12" fill="#4A5A58">Dry Bridge</text>
+      </g>
+      <!-- 东岸点 -->
+      <g fill="#7A2233">
+        <circle cx="452" cy="232" r="7"/><text x="470" y="237" font-size="13">Rike 公园</text>
+        <circle cx="470" cy="300" r="6"/><text x="488" y="305" font-size="13">Metekhi 平台</text>
+        <circle cx="520" cy="352" r="9"/><text x="538" y="357" font-size="14" font-weight="600">住处 Avlabari</text>
+        <circle cx="560" cy="252" r="7"/><text x="578" y="257" font-size="13">Sameba 大教堂</text>
+        <circle cx="512" cy="404" r="5"/><text x="528" y="409" font-size="12" fill="#4A5A58">埃里温小巴点</text>
+      </g>
+      <!-- 步行示意 -->
+      <path d="M520,352 L470,300" stroke="#7A2233" stroke-width="1.2" stroke-dasharray="3 4" fill="none"/>
+      <path d="M520,352 L560,252" stroke="#7A2233" stroke-width="1.2" stroke-dasharray="3 4" fill="none"/>
+      <path d="M520,352 L452,232" stroke="#7A2233" stroke-width="1.2" stroke-dasharray="3 4" fill="none"/>
+    </svg>
+    </div>
+    <p class="cap">第比利斯核心区示意（非比例）。红点在东岸，都在住处步行 10–15 分钟内；蓝点在西岸老城，过桥或坐缆车过去。虚线是常走的步行线，金色虚线是 Rike → Narikala 的缆车。</p>
+  </div>
 
-  <figure>
-    <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Tbilisi_Holy_Trinity_Cathedral_(Sameba)_IMG_8956_1920.jpg?width=1200" alt="第比利斯圣三一大教堂">
-    <figcaption>圣三一大教堂 Sameba，从民宿走过去十分钟，傍晚上去看全城。</figcaption>
-  </figure>
+  <div class="route">
+    <b>住处出发的步行半径</b>
+    住处 <span class="hop">→10 分钟→</span> <a class="pin" href="https://maps.google.com/?q=Holy+Trinity+Cathedral+Sameba+Tbilisi" target="_blank" rel="noopener">Sameba 大教堂</a> <span class="hop">|</span> <span class="hop">→12 分钟→</span> <a class="pin" href="https://maps.google.com/?q=Metekhi+Church+Tbilisi" target="_blank" rel="noopener">Metekhi 教堂与悬崖平台</a> <span class="hop">|</span> <span class="hop">→15 分钟→</span> <a class="pin" href="https://maps.google.com/?q=Rike+Park+Tbilisi" target="_blank" rel="noopener">Rike 公园</a>（缆车下站） <span class="hop">|</span> <span class="hop">→15 分钟过桥→</span> <a class="pin" href="https://maps.google.com/?q=Abanotubani+Tbilisi" target="_blank" rel="noopener">硫磺浴区</a>
+  </div>
 
-  <div class="note">
-    <p>顺带一提，<strong>Avlabari 地铁站旁边就是发往埃里温的小巴集散点</strong>（另一个大站在 Ortachala）。所以 9 月 26 号从巴统回来那晚、以及 9 月 30 号从埃里温回来那晚，都建议住这附近，来回都省一趟车。</p>
+  <h3>地铁 1 号线，你会反复用到</h3>
+  <p>站序（往西北方向）：<strong>Avlabari → Liberty Square（自由广场，1 站）→ Rustaveli（2 站）→ Marjanishvili（3 站，Fabrika 在这站）→ Station Square（4 站，中央火车站 + Dezerter 大市场）</strong>。全线单一票价，刷 Metromoney 或直接刷银行卡。</p>
+
+  <div class="gal">
+    <div class="strip">
+      <figure>
+        <img loading="lazy" src="https://commons.wikimedia.org/wiki/Special:FilePath/Tbilisi_Holy_Trinity_Cathedral_(Sameba)_IMG_8956_1920.jpg?width=1100" alt="第比利斯圣三一大教堂">
+        <figcaption>圣三一大教堂 Sameba，从住处走过去十分钟，傍晚上去看全城。</figcaption>
+      </figure>
+      <figure>
+        <img loading="lazy" src="https://commons.wikimedia.org/wiki/Special:FilePath/Abanotubani_Tbilisi.jpg?width=1100" alt="第比利斯硫磺浴区">
+        <figcaption>Abanotubani 硫磺浴区的砖砌圆顶，过桥步行十五分钟。</figcaption>
+      </figure>
+      <figure>
+        <img loading="lazy" src="https://commons.wikimedia.org/wiki/Special:FilePath/Bridge_of_Peace_Tbilisi.jpg?width=1100" alt="第比利斯和平桥">
+        <figcaption>和平桥，连接 Rike 公园与老城，夜里会亮灯。</figcaption>
+      </figure>
+    </div>
+    <p class="hint">← 左右滑动看更多 →</p>
   </div>
 
   <h3>周边采买</h3>
-  <p>附近有 Nikora、Spar、2 Nabiji 这类小超市，走路都在五分钟内，晚上十点前基本还开着。要买菜和香料去 Dezerter Bazaar，自由广场旁边的大市场，坐地铁两站，早上去最新鲜。</p>
+  <p>附近有 Nikora、Spar、2 Nabiji 这类小超市，走路五分钟内，晚上十点前基本还开着。要买菜和香料去 <a class="pin" href="https://maps.google.com/?q=Dezerter+Bazaar+Tbilisi" target="_blank" rel="noopener">Dezerter Bazaar</a>——<em>它在中央火车站 Station Square 旁边，地铁 1 号线坐 4 站</em>，是第比利斯最大的市场，早上去最新鲜。</p>
 
   <h3>民宿网速万一不稳，这几家能干活</h3>
   <div class="wide">
@@ -304,15 +535,9 @@ footer a{color:#CFE0E6}
   </table>
   </div>
   <p>要正经工位就找 Impact Hub Tbilisi 或 Terminal，可以按天买。</p>
-</div>
-</section>
 
-<!-- ============ 时差 ============ -->
-<section id="rhythm">
-<div class="wrap">
-  <h2>时差决定了这一周怎么过</h2>
-  <p class="lede">格鲁吉亚 UTC+4，比北京晚 4 小时；塔什干 UTC+5，比北京晚 3 小时。</p>
-
+  <h3>时差与作息</h3>
+  <p>格鲁吉亚 UTC+4，比北京晚 4 小时；塔什干 UTC+5，晚 3 小时。</p>
   <div class="wide">
   <table>
     <tr><th>北京</th><th>第比利斯 / 巴统</th><th>塔什干</th><th></th></tr>
@@ -322,9 +547,7 @@ footer a{color:#CFE0E6}
     <tr><td>22:00</td><td>18:00</td><td>19:00</td><td>国内睡了，你在吃晚饭</td></tr>
   </table>
   </div>
-
-  <p>所以最合理的作息是：<strong>早上八点半起来处理国内事务，做到下午两点收工</strong>。这段正好覆盖国内的下午半天到下班，两点之后完全自由——吃午饭、进老城、泡澡、爬 Narikala、喝酒，什么都来得及。</p>
-  <p>反过来说，别想着晚上工作，那对应国内凌晨，没人在。也别把重要会议排在当地上午八点前，那是国内中午。</p>
+  <p><strong>最合理的作息：早上八点半起来处理国内事务，做到下午两点收工。</strong>这段正好覆盖国内的下午半天到下班，两点之后完全自由。反过来说别想着晚上工作，那对应国内凌晨，没人在。</p>
 </div>
 </section>
 
@@ -337,101 +560,185 @@ footer a{color:#CFE0E6}
   <div class="day">
     <span class="daytag move">9.18 周五</span>
     <h3>落地当晚</h3>
+
+    <div class="route">
+      <b>今日动线</b>
+      <a class="pin" href="https://maps.google.com/?q=Tbilisi+International+Airport" target="_blank" rel="noopener">TBS 机场</a> <span class="hop">→Bolt 17km／25–30 分→</span> <a class="pin" href="https://maps.google.com/?q=Avlabari+Tbilisi" target="_blank" rel="noopener">Avlabari 住处</a> <span class="hop">→步行 12 分→</span> 老城晚饭 <span class="hop">→步行 8 分→</span> <a class="pin" href="https://maps.google.com/?q=Metekhi+Church+Tbilisi" target="_blank" rel="noopener">Metekhi 平台</a> <span class="hop">→步行 10 分→</span> 回住处
+    </div>
+
     <div class="slot"><p class="when">19:00</p><p class="what">MU285 落地 TBS。中国护照免签，走 All Passports 通道，人不多的话二十来分钟出关。</p></div>
-    <div class="slot"><p class="when">19:20–19:50</p><p class="what">到达厅两件事一起办：<strong>电话卡</strong>（Magti 或 Silknet 柜台，短期流量套餐 20–40 拉里）；<strong>取现金</strong>，用 TBC 或 Bank of Georgia 的 ATM 取 200–300 拉里应急。机场兑换点汇率差，只换 50–100 拉里，市区自由广场和 Rustaveli 一带的独立兑换点好很多。</p></div>
-    <div class="slot"><p class="when">19:50</p><p class="what">Bolt 出机场到 Avlabari，约 17 公里，25–35 拉里，25–30 分钟。深夜航班也有车，不用担心。</p></div>
-    <div class="slot"><p class="when">20:30</p><p class="what">到民宿放行李，冲个澡，别躺下。</p></div>
-    <div class="slot"><p class="when">21:00</p><p class="what">出门吃第一顿。走路十来分钟就进老城。</p></div>
-    <div class="slot"><p class="when">22:30</p><p class="what"><strong>Metekhi 悬崖平台</strong>，民宿步行十二分钟。对岸老城和 Narikala 要塞都打了灯，第一晚看这个最提气。看完回去睡，倒时差第一夜不要熬。</p></div>
+    <div class="slot"><p class="when">19:20–19:50</p><p class="what">到达厅两件事一起办：<strong>电话卡</strong>（Magti 或 Silknet 柜台，短期流量套餐 20–40 拉里）；<strong>取现金</strong>，用 TBC 或 Bank of Georgia 的 ATM 取 200–300 拉里。机场兑换点汇率差，只换 50–100 拉里应急，市区自由广场一带的独立兑换点好得多。</p></div>
+    <div class="slot"><p class="when">19:50</p><p class="what">Bolt 出机场。机场在城东南 17 公里，25–35 拉里，25–30 分钟，走 Kakheti 公路进城。</p></div>
+    <div class="slot"><p class="when">20:30</p><p class="what">到住处放行李，冲个澡，别躺下。</p></div>
+    <div class="slot"><p class="when">21:00</p><p class="what">出门吃第一顿。从 Avlabari 沿 Ketevan Tsamebuli 大道往河边走，过 Metekhi 桥就进老城，十二分钟。</p></div>
+    <div class="slot"><p class="when">22:30</p><p class="what"><a class="pin" href="https://maps.google.com/?q=Metekhi+Church+Tbilisi" target="_blank" rel="noopener">Metekhi 悬崖平台</a>看夜景。这个点站在东岸悬崖上，正对面是打了灯的老城和山脊上的 Narikala 要塞，脚下是河。第一晚看这个最提气。看完回去睡，倒时差第一夜不要熬。</p></div>
 
     <div class="food">
-      <b>落地第一顿 · 老城边上</b>
+      <b class="h">落地第一顿 · 老城边上</b>
       <ul>
-        <li><strong>Salobie Bia</strong> —— Rustaveli 剧院旁台阶下去，家常菜不宰客。招牌是 shkmeruli（蒜香核桃酱烤鸡）和 lobiani（豆泥饼），两个人 60–90 拉里吃很饱。<span class="price">不用订位，翻台快</span></li>
-        <li><strong>Machakhela</strong> —— 老城多家分店，阿扎尔奶酪船（船形 khachapuri 里卧一颗蛋，拌开吃）稳定水准，第一次吃格鲁吉亚菜从这家入门不会错</li>
+        <li><strong>Salobie Bia</strong>（Rustaveli 剧院旁台阶下）—— 家常菜不宰客。招牌是 shkmeruli（蒜香核桃酱烤鸡）和 lobiani（豆泥饼），两个人 60–90 拉里吃很饱。<span class="price">不用订位，翻台快</span></li>
+        <li><strong>Machakhela</strong>（老城多家分店）—— 阿扎尔奶酪船（船形 khachapuri 里卧一颗蛋，拌开吃）稳定水准，第一次吃格鲁吉亚菜从这家入门不会错</li>
         <li>喝的：Saperavi 干红、Rkatsiteli 琥珀酒，餐酒一瓶 25–45 拉里；不喝酒就点 Borjomi 气泡矿泉水，格鲁吉亚国民饮料，味道很咸，做好心理准备</li>
       </ul>
     </div>
 
     <div class="note">
-      <p><strong>第一晚别去泡硫磺浴。</strong>坐了十个小时飞机再泡四十度硫磺水，出来只会更虚。放到 9 月 21 号傍晚，那天走了一天山路，泡完正好。</p>
+      <p><strong>第一晚别去泡硫磺浴。</strong>坐了十个小时飞机再泡四十度硫磺水，出来只会更虚。放到 9 月 21 号傍晚，那天走了一天，泡完正好。</p>
     </div>
   </div>
 
   <div class="day">
     <span class="daytag">9.19 周六 &amp; 9.20 周日</span>
     <h3>两个整日：一天进山，一天下酒乡</h3>
-    <p>这两天各排一个整日外出。<strong>哪天上山看天气预报定</strong>——卡兹别吉云低就白跑一趟，把晴的那天给山，另一天给卡赫季。</p>
+    <p>这两天各排一个整日外出。<strong>哪天上山看天气预报定</strong>——卡兹别吉云低就白跑一趟，把晴的那天给山，另一天去卡赫季。天气看 <a href="https://www.meteoblue.com/en/weather/week/stepantsminda_georgia" target="_blank" rel="noopener">meteoblue 的 Stepantsminda 页</a>，山区预报比通用天气 App 准。</p>
 
     <h4>A · 大高加索军事公路（卡兹别吉），约 13 小时</h4>
-    <div class="slot"><p class="when">07:30</p><p class="what">出发。跟团在民宿或指定点接，包车司机直接上门。</p></div>
-    <div class="slot"><p class="when">09:00–09:40</p><p class="what"><strong>Ananuri 城堡</strong>，Zhinvali 水库边的教堂加城墙，湖水是奶蓝色。停四十分钟够。</p></div>
-    <div class="slot"><p class="when">11:00–11:30</p><p class="what"><strong>Gudauri 俄格友谊纪念碑</strong>，悬崖上的环形壁画平台，正对着 Devil's Valley 峡谷，视野最好的一站。</p></div>
-    <div class="slot"><p class="when">12:00</p><p class="what">翻 <strong>Jvari 山口</strong>，海拔 2379 米。路边有矿泉钙华台地，橙红色的，可以停十分钟。</p></div>
-    <div class="slot"><p class="when">13:00–14:00</p><p class="what">Stepantsminda 镇（卡兹别吉镇）吃午饭。山里的 khinkali 个头大、汁多，配一碗 kharcho 牛肉汤。</p></div>
-    <div class="slot"><p class="when">14:00–16:00</p><p class="what">换当地 4×4 上山到 <strong>Gergeti 三一教堂</strong>，海拔 2170 米，土路颠簸二十分钟。上面留一小时，雪山背景下的孤零零小教堂，是格鲁吉亚最标志性的画面。体力好也可以从镇上徒步一个半小时上去。</p></div>
-    <div class="slot"><p class="when">16:30</p><p class="what">下山返程，路上大概率会在 Ananuri 或 Pasanauri 再停一次买蜂蜜和 churchkhela。</p></div>
-    <div class="slot"><p class="when">20:00–20:30</p><p class="what">回到第比利斯。晚饭老城解决，或者直接叫 Wolt 送到民宿。</p></div>
 
-    <figure>
-      <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Ananuri_castle_01.jpg?width=1200" alt="阿纳努里城堡">
-      <figcaption>Ananuri 城堡，军事公路上的第一站。</figcaption>
-    </figure>
+    <div class="route">
+      <b>动线：一路向北，全程约 155 公里</b>
+      第比利斯 <span class="hop">→70km／1.5h→</span> <a class="pin" href="https://maps.google.com/?q=Ananuri+Fortress+Georgia" target="_blank" rel="noopener">Ananuri 城堡</a> <span class="hop">→50km／1h→</span> <a class="pin" href="https://maps.google.com/?q=Russia-Georgia+Friendship+Monument+Gudauri" target="_blank" rel="noopener">Gudauri 友谊纪念碑</a> <span class="hop">→10km→</span> <a class="pin" href="https://maps.google.com/?q=Jvari+Pass+Georgia" target="_blank" rel="noopener">Jvari 山口 2379m</a> <span class="hop">→30km／45 分→</span> <a class="pin" href="https://maps.google.com/?q=Stepantsminda+Georgia" target="_blank" rel="noopener">Stepantsminda 镇</a> <span class="hop">→4×4 20 分／或徒步 1.5h→</span> <a class="pin" href="https://maps.google.com/?q=Gergeti+Trinity+Church" target="_blank" rel="noopener">Gergeti 三一教堂 2170m</a>
+    </div>
+
+    <div class="slot"><p class="when">07:30</p><p class="what">出发。跟团在住处或指定点接，包车司机直接上门。</p></div>
+    <div class="slot"><p class="when">09:00–09:40</p><p class="what"><strong>Ananuri 城堡</strong>，Zhinvali 水库边的教堂加城墙，湖水是奶蓝色。停四十分钟够。</p></div>
+    <div class="slot"><p class="when">11:00–11:30</p><p class="what"><strong>Gudauri 俄格友谊纪念碑</strong>，悬崖上的环形壁画平台，正对 Devil's Valley 峡谷，视野最好的一站。</p></div>
+    <div class="slot"><p class="when">12:00</p><p class="what">翻 <strong>Jvari 山口</strong>，海拔 2379 米。路边有橙红色的矿泉钙华台地，可以停十分钟。</p></div>
+    <div class="slot"><p class="when">13:00–14:00</p><p class="what">Stepantsminda 镇吃午饭。山里的 khinkali 个头大、汁多，配一碗 kharcho 牛肉汤。</p></div>
+    <div class="slot"><p class="when">14:00–16:00</p><p class="what">上 <strong>Gergeti 三一教堂</strong>。坐当地 4×4 土路颠簸二十分钟，或者<em>自己徒步上去，单程 1.5–2 小时，爬升约 500 米</em>（详见<a href="#hike">徒步一节</a>）。上面留一小时。雪山背景下的孤零零小教堂，是格鲁吉亚最标志性的画面。</p></div>
+    <div class="slot"><p class="when">16:30</p><p class="what">下山返程，路上大概率会在 Pasanauri 一带停一次买蜂蜜和 churchkhela。</p></div>
+    <div class="slot"><p class="when">20:00–20:30</p><p class="what">回到第比利斯。晚饭老城解决，或者直接叫 Wolt 送到住处。</p></div>
+
+    <div class="gal">
+      <div class="strip">
+        <figure>
+          <img loading="lazy" src="https://commons.wikimedia.org/wiki/Special:FilePath/Gergeti_Trinity_Church_14th_century_in_Georgia.jpg?width=1100" alt="格尔盖蒂三一教堂">
+          <figcaption>Gergeti 三一教堂，14 世纪，海拔 2170 米，背后是 5047 米的卡兹别克山。</figcaption>
+        </figure>
+        <figure>
+          <img loading="lazy" src="https://commons.wikimedia.org/wiki/Special:FilePath/Ananuri_castle_01.jpg?width=1100" alt="阿纳努里城堡">
+          <figcaption>Ananuri 城堡，军事公路上的第一站，就在 Zhinvali 水库边。</figcaption>
+        </figure>
+        <figure>
+          <img loading="lazy" src="https://commons.wikimedia.org/wiki/Special:FilePath/Russia–Georgia_Friendship_Monument.jpg?width=1100" alt="俄格友谊纪念碑">
+          <figcaption>Gudauri 的俄格友谊纪念碑，环形平台内壁是整幅马赛克壁画。</figcaption>
+        </figure>
+        <figure>
+          <img loading="lazy" src="https://commons.wikimedia.org/wiki/Special:FilePath/Zhinvali_Reservoir,_Georgia.jpg?width=1100" alt="金瓦利水库">
+          <figcaption>Zhinvali 水库，秋天水位低时会露出湖底的老村落。</figcaption>
+        </figure>
+      </div>
+      <p class="hint">← 左右滑动看更多 →</p>
+    </div>
 
     <div class="note">
       <p>九月下旬山上白天 15–20°C，夜里 5–10°C，风大。<strong>一定带冲锋衣或厚外套</strong>，山下第比利斯二十几度会骗你。</p>
-      <p style="margin-top:10px"><strong>怎么走</strong>：跟团最省心，GetYourGuide、Viator、Airbnb 体验上都有，人均 25–40 美元，8 点出发晚上八九点回；或者 Bolt 上找司机包车，全天 250–350 拉里一车，路线和停留时间自己定，两个人分摊下来和跟团差不多，但舒服很多。<em>推荐包车</em>——跟团在每个点都只给你二十分钟，Gergeti 上面根本不够。</p>
+    </div>
+
+    <div class="xp pick">
+      <p class="h">这天订什么 <span class="star">建议包车，不跟大团</span></p>
+      <p class="why">Airbnb 上这条线最稳的一类是<strong>「Zhinvali 水库 + Ananuri + Gudauri 全景 + 卡兹别吉 + Gergeti」的一日团</strong>，其中有 18 座中巴的版本评分约 <strong>★4.9、近 600 条评价</strong>，是这条线上评价基数最大的一档，含午餐和山区蜂蜜品尝。GetYourGuide 上同线路的团标 11 小时、★4.8、1300+ 条评价，价格 19–38 美元。</p>
+      <p class="why"><em>但我更建议包车</em>：全天 250–350 拉里一车，两个人分摊下来和跟团差不多。跟团在每个点只给二十分钟，Gergeti 上面根本不够；包车可以自己决定在山上多待一小时，或者临时加 Gveleti 瀑布、Juta 谷。Bolt 上直接找司机谈，或让住处代订。</p>
+      <p class="kv">评分与评价数来自公开检索，出发前请在 App 内复核当天档期。</p>
     </div>
 
     <h4>B · 卡赫季酒乡，正赶上采收季 <span class="tag">时机难得</span></h4>
-    <p>你们的时间点非常巧。<em>rtveli（葡萄采收节）从九月中下旬开始，十月上旬进入高峰</em>，整个阿拉扎尼谷都在收葡萄。这段时间家庭酒庄是开门的，可以下地剪葡萄、光脚踩果、直接从 qvevri 陶罐里舀新酒喝。这是全年最难复制的一天，比单纯"参观酒庄"高一个量级。</p>
+    <p>你们的时间点非常巧。<em>rtveli（葡萄采收节）从九月第二三周开始，十月上旬进入高峰</em>，整个阿拉扎尼谷都在收葡萄。这段时间家庭酒庄是开门的，可以下地剪葡萄、在 satsnakheli 木槽里踩果、直接从 qvevri 陶罐里舀新酒喝。这是全年最难复制的一天，比单纯"参观酒庄"高一个量级。</p>
+
+    <div class="route">
+      <b>动线：往东进阿拉扎尼谷，单程约 110 公里</b>
+      第比利斯 <span class="hop">→110km／2h→</span> <a class="pin" href="https://maps.google.com/?q=Bodbe+Monastery+Georgia" target="_blank" rel="noopener">Bodbe 修道院</a> <span class="hop">→3km／10 分→</span> <a class="pin" href="https://maps.google.com/?q=Sighnaghi+Georgia" target="_blank" rel="noopener">锡格纳吉 Sighnaghi</a> <span class="hop">→谷里 20–40 分→</span> 家庭酒庄 marani <span class="hop">→可选→</span> <a class="pin" href="https://maps.google.com/?q=Tsinandali+Estate+Georgia" target="_blank" rel="noopener">Tsinandali 庄园</a> <span class="hop">→2h→</span> 回第比利斯
+    </div>
+
     <div class="slot"><p class="when">08:30</p><p class="what">出发，往东开两小时。</p></div>
     <div class="slot"><p class="when">10:30–11:15</p><p class="what"><strong>Bodbe 修道院</strong>，圣尼诺墓，柏树夹道，露台俯瞰整条阿拉扎尼谷。进门女士要头巾或围巾。</p></div>
-    <div class="slot"><p class="when">11:30–13:00</p><p class="what"><strong>锡格纳吉 Sighnaghi</strong>，"爱情之城"，红顶小城，城墙上走一段。石板坡道多，穿好走的鞋。</p></div>
-    <div class="slot"><p class="when">13:00–16:00</p><p class="what">家庭酒庄 marani，采收季的重头戏：下地剪葡萄、踩果、qvevri 陶罐品鉴，配一顿长桌午餐。Saperavi 红、Rkatsiteli 琥珀酒，还有 chacha 葡萄渣烈酒。<em>这段要留足三小时，别赶</em>。</p></div>
+    <div class="slot"><p class="when">11:30–13:00</p><p class="what"><strong>锡格纳吉</strong>，"爱情之城"，红顶小城，城墙上走一段。石板坡道多，穿好走的鞋。</p></div>
+    <div class="slot"><p class="when">13:00–16:00</p><p class="what">家庭酒庄 marani，采收季的重头戏：下地剪葡萄、踩果、把葡萄倒进 qvevri、陶罐品鉴，配一顿长桌午餐。Saperavi 红、Rkatsiteli 琥珀酒，还有 chacha 葡萄渣烈酒。<em>这段要留足三小时，别赶</em>。</p></div>
     <div class="slot"><p class="when">16:30</p><p class="what">时间够可以加 Tsinandali 庄园（19 世纪贵族园林加酒窖），或走 Gombori 山口那条路回，山景更好。</p></div>
     <div class="slot"><p class="when">19:00–19:30</p><p class="what">回到第比利斯。这天一路在吃在喝，晚饭随便对付一口就行。</p></div>
 
-    <figure>
-      <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Sighnaghi_town_in_Kakheti,_Georgia.jpg?width=1200" alt="卡赫季的锡格纳吉小城">
-      <figcaption>锡格纳吉，背后就是阿拉扎尼谷和大高加索山脉。</figcaption>
-    </figure>
-
-    <div class="food">
-      <b>卡赫季这天的吃</b>
-      <ul>
-        <li>酒庄长桌午餐一般已经包含：pkhali（核桃菠菜泥团）、mtsvadi（炭烤猪肉串）、churchkhela（核桃串蘸葡萄汁凝的"格鲁吉亚士力架"），主人会一直劝酒</li>
-        <li><strong>锡格纳吉城里</strong>：Pheasant's Tears 是当地最有名的自然酒酒庄兼餐厅，能在城里吃到；不订位的话城墙边随便一家露台餐厅都行，人均 40–70 拉里</li>
-        <li><em>村里的家庭酒庄基本只收现金拉里</em>，出发前取够，一人准备 200 拉里现金</li>
-      </ul>
+    <div class="gal">
+      <div class="strip">
+        <figure>
+          <img loading="lazy" src="https://commons.wikimedia.org/wiki/Special:FilePath/Sighnaghi_town_in_Kakheti,_Georgia.jpg?width=1100" alt="卡赫季的锡格纳吉小城">
+          <figcaption>锡格纳吉，背后就是阿拉扎尼谷和大高加索山脉。</figcaption>
+        </figure>
+        <figure>
+          <img loading="lazy" src="https://commons.wikimedia.org/wiki/Special:FilePath/Bodbe_Monastery_2.jpg?width=1100" alt="博德贝修道院">
+          <figcaption>Bodbe 修道院，圣尼诺墓所在，柏树道尽头是俯瞰河谷的露台。</figcaption>
+        </figure>
+        <figure>
+          <img loading="lazy" src="https://commons.wikimedia.org/wiki/Special:FilePath/Qvevri_in_Georgia.jpg?width=1100" alt="格鲁吉亚陶罐酿酒">
+          <figcaption>qvevri 陶罐，埋在地下发酵，八千年没变过的方法，UNESCO 非遗。</figcaption>
+        </figure>
+      </div>
+      <p class="hint">← 左右滑动看更多 →</p>
     </div>
 
-    <div class="note"><p>全程约 10 小时。跟团人均 190–250 拉里含品鉴，包车 250–300 拉里一车。采收季周末抢手，<strong>建议提前一周订</strong>。</p></div>
+    <div class="xp pick">
+      <p class="h">这天订什么 <span class="star">整趟最值得花钱的一天</span></p>
+      <p class="why">优先找<strong>标题里明确写 rtveli 或 harvest 的采收体验</strong>——很多常规酒庄游只是参观加品鉴，没有下地。合格的采收体验应该包含：剪葡萄、satsnakheli 木槽踩果、把果倒进 qvevri、supra 长桌宴，有的还带 khinkali 手作课。</p>
+      <p class="why">Airbnb 上 <strong>「Taste Kakheti's finest wines and scenery」</strong>（走三家风格不同的酒庄）标 ★4.94、18 条评价，是这一带能查到的具体条目之一；同类的常规卡赫季酒庄游评分普遍在 ★4.8–4.9。GetYourGuide 上有专门的 <strong>Telavi Rtveli 采收体验</strong>，季节限定。两个平台都搜一遍，挑含采收环节的。</p>
+      <p class="kv">村里的家庭酒庄基本只收现金拉里，出发前一人取 200 拉里。全程约 10 小时，跟团人均 190–250 拉里含品鉴，包车 250–300 拉里一车。</p>
+    </div>
+
+    <div class="food">
+      <b class="h">卡赫季这天的吃</b>
+      <ul>
+        <li>酒庄长桌午餐一般已经包含：pkhali（核桃菠菜泥团）、mtsvadi（炭烤猪肉串）、churchkhela（核桃串蘸葡萄汁凝的"格鲁吉亚士力架"），主人会一直劝酒</li>
+        <li><strong>Pheasant's Tears</strong>（锡格纳吉城内）—— 当地最有名的自然酒酒庄兼餐厅，用传统 qvevri 酿法，餐也做得好。<span class="price">要订位</span></li>
+        <li>不订位的话城墙边随便一家露台餐厅都行，人均 40–70 拉里</li>
+      </ul>
+    </div>
   </div>
 
   <div class="day">
     <span class="daytag rest">9.21 周一</span>
     <h3>上午干活 · 下午爬要塞 · 傍晚泡澡</h3>
+
+    <div class="route">
+      <b>今日动线：一条从山脊走回河边的下坡线</b>
+      住处 <span class="hop">→步行 15 分→</span> <a class="pin" href="https://maps.google.com/?q=Rike+Park+Tbilisi" target="_blank" rel="noopener">Rike 公园</a> <span class="hop">→缆车 4 分→</span> <a class="pin" href="https://maps.google.com/?q=Narikala+Fortress+Tbilisi" target="_blank" rel="noopener">Narikala 要塞</a> <span class="hop">→步行 15 分→</span> <a class="pin" href="https://maps.google.com/?q=Kartlis+Deda+Mother+of+Georgia+Tbilisi" target="_blank" rel="noopener">Mother Georgia 雕像</a> <span class="hop">→步行下坡 30 分→</span> <a class="pin" href="https://maps.google.com/?q=Betlemi+Street+Tbilisi" target="_blank" rel="noopener">Betlemi 街</a> <span class="hop">→步行 10 分→</span> <a class="pin" href="https://maps.google.com/?q=Abanotubani+Tbilisi" target="_blank" rel="noopener">硫磺浴区</a> <span class="hop">→步行 12 分→</span> 住处
+    </div>
+
     <div class="slot"><p class="when">08:30–14:00</p><p class="what">工作，对应国内 12:30–18:00，正好覆盖下午班到下班。</p></div>
     <div class="slot"><p class="when">14:00–15:00</p><p class="what">午饭。老城边上吃，或者叫 Wolt。</p></div>
-    <div class="slot"><p class="when">15:30</p><p class="what">走到 <strong>Rike 公园</strong>（民宿十五分钟），坐缆车上 <strong>Narikala 要塞</strong>。2.5 拉里，<em>只能刷 Metromoney 卡，不收现金也不收银行卡</em>，前一天先去地铁站把卡办好。</p></div>
-    <div class="slot"><p class="when">16:00–16:45</p><p class="what">要塞上转一圈，看 Mother Georgia 雕像（一手酒碗一手剑，待客与御敌）。这个点光线开始变金黄，全城最好的机位。</p></div>
-    <div class="slot"><p class="when">16:45–17:45</p><p class="what">不坐缆车下山，沿 <strong>Betlemi 街</strong>走下来——老犹太区，彩色玻璃阳台，木楼梯，第比利斯最好看的一段坡道，慢慢走一小时。</p></div>
+    <div class="slot"><p class="when">15:30</p><p class="what">走到 <strong>Rike 公园</strong>（住处十五分钟，沿河），坐缆车跨河上 <strong>Narikala 要塞</strong>。2.5 拉里，<em>只能刷 Metromoney 卡，不收现金也不收银行卡</em>，前一天先去地铁站把卡办好。</p></div>
+    <div class="slot"><p class="when">16:00–16:45</p><p class="what">要塞上转一圈，往西走到 <strong>Mother Georgia</strong> 雕像（一手酒碗一手剑，待客与御敌）。这个点光线开始变金黄，是全城最好的机位。</p></div>
+    <div class="slot"><p class="when">16:45–17:45</p><p class="what">不坐缆车下山，沿 <strong>Betlemi 街</strong>走下来——老犹太区，彩色玻璃阳台，木楼梯，第比利斯最好看的一段坡道，慢慢走一小时，一路能穿到硫磺浴区上方。</p></div>
     <div class="slot"><p class="when">18:00–19:30</p><p class="what"><strong>Abanotubani 硫磺浴</strong>。私人包间按小时计，约 60–120 拉里，两三个人分摊很划算。搓背（kisa）另加 15–20 拉里，值得试一次，力度很大。</p></div>
     <div class="slot"><p class="when">20:00</p><p class="what">晚饭，老城。</p></div>
 
-    <figure>
-      <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Abanotubani_Tbilisi.jpg?width=1200" alt="第比利斯硫磺浴区">
-      <figcaption>Abanotubani 硫磺浴区。<strong>Chreli Abano</strong>（蓝瓷马赛克那家，最上镜，也最贵）、<strong>Bathhouse No.5</strong>（本地人多，性价比高）、<strong>Gulo's Thermal Spa</strong>（干净新，适合第一次泡）。私人间可穿泳衣也可不穿。</figcaption>
-    </figure>
+    <div class="gal">
+      <div class="strip">
+        <figure>
+          <img loading="lazy" src="https://commons.wikimedia.org/wiki/Special:FilePath/Narikala_Fortress,_Tbilisi,_Georgia.jpg?width=1100" alt="纳里卡拉要塞">
+          <figcaption>Narikala 要塞，4 世纪始建，山脊上俯瞰整个老城。</figcaption>
+        </figure>
+        <figure>
+          <img loading="lazy" src="https://commons.wikimedia.org/wiki/Special:FilePath/Kartlis_Deda,_Tbilisi.jpg?width=1100" alt="格鲁吉亚母亲雕像">
+          <figcaption>Mother Georgia，一手端酒碗迎客，一手握剑对敌。</figcaption>
+        </figure>
+        <figure>
+          <img loading="lazy" src="https://commons.wikimedia.org/wiki/Special:FilePath/Abanotubani_Tbilisi.jpg?width=1100" alt="硫磺浴区">
+          <figcaption>硫磺浴区。Chreli Abano（蓝瓷马赛克那家，最上镜也最贵）、Bathhouse No.5（本地人多，性价比高）、Gulo's Thermal Spa（干净新，适合第一次泡）。</figcaption>
+        </figure>
+      </div>
+      <p class="hint">← 左右滑动看更多 →</p>
+    </div>
+
+    <div class="xp">
+      <p class="h">这天傍晚可以插一个体验（可选） <span class="star">3 小时档</span></p>
+      <p class="why">如果不想自己走，Airbnb 上老城步行类的口碑条目有：<strong>「Walk Tbilisi Old Town with curated stops &amp; stories」★4.93 / 631 条</strong>、<strong>「Explore Tbilisi's Old Town and Wine」★4.97 / 368 条</strong>、以及一个<strong>老城 + 缆车 + 品酒的组合 ★4.98 / 56 条</strong>。老城本身不大，靠这份手册加地图自己走完全够；<em>除非你想听本地人讲故事，否则这三小时不必花钱</em>。</p>
+      <p class="why">硫磺浴不用通过平台订，直接去店里现场开包间。</p>
+    </div>
 
     <div class="food">
-      <b>这天的晚饭，值得订个好的</b>
+      <b class="h">这天的晚饭，值得订个好的</b>
       <ul>
         <li><strong>Shavi Lomi</strong>（黑狮子）—— 藏在院子里的波西米亚小馆，主厨 Meriko Gubeladze 把 chakapuli（龙蒿炖羊肉）、pkhali 这类老菜做出新样子，churchkhela 甜点是招牌。人均 70–110 拉里。<span class="price">必须订位</span></li>
-        <li><strong>Barbarestan</strong> —— 复原 19 世纪贵族 Barbare Jorjadze 食谱本的餐厅：李子酱小牛肉、薄荷樱桃汤、badrijani nigvzit（核桃酱茄子卷）。一家人开的，服务很好。人均 90–140 拉里。<span class="price">必须订位，常提前一周满</span></li>
-        <li><strong>Café Littera</strong> —— 作家之家花园里，主厨 Tekuna Gachechiladze，南瓜 khinkali、榛子酱鳟鱼。九月底还能坐户外，是这趟最适合"吃一顿好的"的地方。<span class="price">必须订位</span></li>
-        <li>泡完澡不想走远：硫磺浴区门口就有 <strong>BLACK CAT</strong> 和几家小馆，随便坐</li>
+        <li><strong>Barbarestan</strong> —— 复原 19 世纪贵族 Barbare Jorjadze 食谱本的餐厅：李子酱小牛肉、薄荷樱桃汤、badrijani nigvzit（核桃酱茄子卷）。一家人开的。人均 90–140 拉里。<span class="price">必须订位，常提前一周满</span></li>
+        <li><strong>Café Littera</strong> —— 作家之家花园里，主厨 Tekuna Gachechiladze，南瓜 khinkali、榛子酱鳟鱼。九月底还能坐户外。<span class="price">必须订位</span></li>
+        <li>泡完澡不想走远：硫磺浴区门口就有 BLACK CAT 和几家小馆，随便坐</li>
       </ul>
     </div>
   </div>
@@ -439,44 +746,109 @@ footer a{color:#CFE0E6}
   <div class="day">
     <span class="daytag rest">9.22 周二</span>
     <h3>上午干活 · 下午姆茨赫塔 · 晚上 Fabrika</h3>
+
+    <div class="route">
+      <b>今日动线：出城往西北 25 公里，晚上回右岸</b>
+      住处 <span class="hop">→Bolt 25km／25 分→</span> <a class="pin" href="https://maps.google.com/?q=Svetitskhoveli+Cathedral+Mtskheta" target="_blank" rel="noopener">Svetitskhoveli 大教堂</a> <span class="hop">→车 15 分上山→</span> <a class="pin" href="https://maps.google.com/?q=Jvari+Monastery+Mtskheta" target="_blank" rel="noopener">Jvari 修道院</a> <span class="hop">→Bolt 30 分→</span> <a class="pin" href="https://maps.google.com/?q=Fabrika+Tbilisi" target="_blank" rel="noopener">Fabrika</a>（右岸 Marjanishvili，地铁 3 站） <span class="hop">→步行→</span> <a class="pin" href="https://maps.google.com/?q=Agmashenebeli+Avenue+Tbilisi" target="_blank" rel="noopener">Aghmashenebeli 步行街</a>
+    </div>
+
     <div class="slot"><p class="when">08:30–13:30</p><p class="what">工作。今天早收一点，午饭简单吃。</p></div>
-    <div class="slot"><p class="when">14:30</p><p class="what">Bolt 去 <strong>姆茨赫塔 Mtskheta</strong>，25–35 拉里，25 分钟。格鲁吉亚的古都和宗教中心，UNESCO 名录。</p></div>
-    <div class="slot"><p class="when">15:00–16:00</p><p class="what"><strong>Svetitskhoveli 大教堂</strong>，"生命之柱"，11 世纪，格鲁吉亚人心里最重要的教堂。院子和城墙都能走。</p></div>
-    <div class="slot"><p class="when">16:15–17:00</p><p class="what">上山到 <strong>Jvari 修道院</strong>（6 世纪），站在两河交汇口俯瞰全城。开车上去十五分钟，风很大。</p></div>
-    <div class="slot"><p class="when">17:30</p><p class="what">回城。三个小时足够，晚饭前能到。</p></div>
+    <div class="slot"><p class="when">14:30</p><p class="what">Bolt 去 <strong>姆茨赫塔 Mtskheta</strong>，25–35 拉里，25 分钟。格鲁吉亚的古都和宗教中心，UNESCO 名录，在库拉河与阿拉格维河交汇处。</p></div>
+    <div class="slot"><p class="when">15:00–16:00</p><p class="what"><strong>Svetitskhoveli 大教堂</strong>，"生命之柱"，11 世纪，格鲁吉亚人心里最重要的教堂。院子和城墙都能走一圈。</p></div>
+    <div class="slot"><p class="when">16:15–17:00</p><p class="what">上山到 <strong>Jvari 修道院</strong>（6 世纪），站在两河交汇口的高处俯瞰全城，能清楚看到两条河的水色不同。开车上去十五分钟，风很大。</p></div>
+    <div class="slot"><p class="when">17:30</p><p class="what">回城。</p></div>
     <div class="slot"><p class="when">19:30</p><p class="what"><strong>Fabrika</strong>，河右岸，苏联时期缝纫厂改的青旅加院子，一圈酒吧、小店和工作室，第比利斯年轻人晚上都在这儿。旁边 Aghmashenebeli 大道步行街顺便逛。</p></div>
 
-    <p>这个点你们后面去埃里温的路线（往南）完全不经过，值得单独跑一趟。</p>
+    <div class="gal">
+      <div class="strip">
+        <figure>
+          <img loading="lazy" src="https://commons.wikimedia.org/wiki/Special:FilePath/Mtskheta,_Svetitskhoveli_Cathedral_(36092332115).jpg?width=1100" alt="生命之柱大教堂">
+          <figcaption>Svetitskhoveli 大教堂，建于 11 世纪。进堂女士需头巾或围巾，男士别穿短裤。</figcaption>
+        </figure>
+        <figure>
+          <img loading="lazy" src="https://commons.wikimedia.org/wiki/Special:FilePath/Jvari_Monastery,_Mtskheta,_Georgia.jpg?width=1100" alt="十字修道院">
+          <figcaption>Jvari 修道院，6 世纪，建在两河交汇口的山顶上。</figcaption>
+        </figure>
+      </div>
+      <p class="hint">← 左右滑动看更多 →</p>
+    </div>
 
-    <figure>
-      <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Mtskheta,_Svetitskhoveli_Cathedral_(36092332115).jpg?width=1200" alt="姆茨赫塔的十一世纪生命之柱大教堂">
-      <figcaption>Svetitskhoveli 大教堂，建于 11 世纪。进堂女士需头巾或围巾，男士别穿短裤。</figcaption>
-    </figure>
+    <p>姆茨赫塔这个点，你们后面去埃里温的路线（往南）完全不经过，值得单独跑一趟。<strong>不必买一日游</strong>——Bolt 单程 25–35 拉里，两个景点都在明面上，自己去更自由。</p>
 
     <div class="food">
-      <b>姆茨赫塔和 Fabrika 的吃</b>
+      <b class="h">姆茨赫塔和 Fabrika 的吃</b>
       <ul>
-        <li><strong>Salobie</strong>（姆茨赫塔老路上的那家老店，不是市区的 Salobie Bia）—— 以 lobio（陶罐炖芸豆）配玉米饼 mchadi 出名，几十年的本地馆子，路过必停</li>
+        <li><strong>Salobie</strong>（姆茨赫塔老路上那家老店，不是市区的 Salobie Bia）—— 以 lobio（陶罐炖芸豆）配玉米饼 mchadi 出名，几十年的本地馆子，路过必停</li>
         <li>姆茨赫塔城里主街两侧都是餐厅和纪念品店，随便挑一家露台，人均 40–60 拉里</li>
-        <li><strong>Fabrika 院子里</strong>：Moulin Electrique 的汉堡、Lolita 的意式菜、Kikliko 的早午餐；想喝精酿去 Fabrika 门口那排小窗口。这里晚饭吃得比老城随意，气氛好</li>
+        <li><strong>Fabrika 院子里</strong>：Moulin Electrique 的汉堡、Lolita 的意式菜、Kikliko 的早午餐。想喝精酿去门口那排小窗口。这里晚饭吃得比老城随意，气氛好</li>
       </ul>
+    </div>
+
+    <div class="xp">
+      <p class="h">想喝一晚可以考虑 <span class="star">★4.83</span></p>
+      <p class="why">Airbnb 上有个 <strong>「Tbilisi 5 Bar Tour」</strong>（★4.83），带着走五家本地酒吧。Fabrika 这一带本来就是酒吧密度最高的地方，想省事就跟着走一晚，不想跟就自己在院子里挑。</p>
     </div>
   </div>
 
   <div class="day">
     <span class="daytag move">9.23 周三</span>
     <h3>退房，坐火车去巴统</h3>
-    <p>细节见下一段。核心是：<strong>上午班车，中午前后到巴统，下午整个下午都还在</strong>。</p>
+    <p>细节见<a href="#batumi">下一段</a>。核心是：上午班车，中午前后到巴统，下午整个下午都还在。</p>
   </div>
 
   <h3>哪天不想出门就换这些</h3>
   <ul class="plain">
-    <li><strong>Dry Bridge 跳蚤市场</strong> —— 旧货、苏联徽章、老相机、银器，周末最热闹，能砍价</li>
-    <li><strong>Mtatsminda 山顶公园</strong> —— 坐 funicular 缆索车上去，有游乐场和观景台，山顶餐厅看全城夜景</li>
-    <li><strong>龟湖 Turtle Lake</strong> —— 缆车上去，绕湖走一圈四十分钟，安静，旁边是露天民族博物馆</li>
-    <li><strong>Wine Factory N1</strong> 或 <strong>8000 Vintages</strong> —— 系统喝一遍格鲁吉亚本土品种，有侍酒师讲，人均 60–120 拉里</li>
-    <li><strong>Chronicle of Georgia</strong> —— 城北山上的巨型青铜柱阵，苏联雕塑家 Tsereteli 的作品，人少，气势足，Bolt 单程 20 拉里</li>
+    <li><a class="pin" href="https://maps.google.com/?q=Dry+Bridge+Market+Tbilisi" target="_blank" rel="noopener">Dry Bridge 跳蚤市场</a> —— 旧货、苏联徽章、老相机、银器，周末最热闹，能砍价</li>
+    <li><a class="pin" href="https://maps.google.com/?q=Mtatsminda+Park+Tbilisi" target="_blank" rel="noopener">Mtatsminda 山顶公园</a> —— 坐 funicular 缆索车上去，有游乐场和观景台，山顶餐厅看全城夜景</li>
+    <li><a class="pin" href="https://maps.google.com/?q=Turtle+Lake+Tbilisi" target="_blank" rel="noopener">龟湖 Turtle Lake</a> —— 缆车上去，绕湖走一圈四十分钟，旁边是露天民族博物馆</li>
+    <li><strong>Wine Factory N1</strong> 或 <strong>8000 Vintages</strong> —— 系统喝一遍格鲁吉亚本土品种，有侍酒师讲，人均 60–120 拉里。Airbnb 上「Wine tasting in historic cellar」★4.9 / 531 条也是同类</li>
+    <li><a class="pin" href="https://maps.google.com/?q=Chronicle+of+Georgia+Tbilisi" target="_blank" rel="noopener">Chronicle of Georgia</a> —— 城北山上的巨型青铜柱阵，Tsereteli 的作品，人少，气势足，Bolt 单程 20 拉里</li>
   </ul>
+</div>
+</section>
+
+<!-- ============ 徒步 ============ -->
+<section id="hike">
+<div class="wrap">
+  <h2>徒步：网上最有名的那条，这趟去不了</h2>
+  <p class="lede">但卡兹别吉一带有两条同级别的，能当天往返。</p>
+
+  <div class="urgent">
+    <h4>先说斯瓦涅季 Mestia → Ushguli</h4>
+    <p>网上格鲁吉亚徒步的头条永远是这条：从 <strong>梅斯蒂亚 Mestia 走到乌树故里 Ushguli</strong>，四天三夜，翻山越谷，终点是欧洲海拔最高的有人居住村落（2100 米，UNESCO 名录），一路是中世纪石砌碉楼和 4000 米以上的雪峰。它确实是格鲁吉亚徒步的天花板。</p>
+    <p style="margin-top:10px"><em>但这趟塞不进去。</em>梅斯蒂亚在西北角的上斯瓦涅季，从第比利斯过去单程 8–9 小时车程，或者飞库塔伊西再转 3 小时山路。四天徒步加上来回，至少要挖出 6 整天——你们最长的连续空档是巴统那三天，硬塞会把整个西部段拆掉，而且九月底山口已经开始变天。<strong>留给下次，专门为它安排一趟。</strong></p>
+  </div>
+
+  <h3>这趟能做的四条，按强度排</h3>
+
+  <div class="opt pick">
+    <h4>1 · Gergeti 三一教堂徒步 <span class="tag">最顺手</span></h4>
+    <p>就在 9.19 或 9.20 卡兹别吉那天。从 <a class="pin" href="https://maps.google.com/?q=Stepantsminda+Georgia" target="_blank" rel="noopener">Stepantsminda 镇</a>（1740 米）走上 Gergeti 教堂（2170 米），<strong>单程 1.5–2 小时，爬升约 430 米</strong>，先过桥进 Gergeti 村，再走林间土路和之字坡。路很清楚，不需要向导。</p>
+    <p style="margin-bottom:0">上去走路、下来坐 4×4，或者反过来，是最省力的组合。<em>包车的话直接跟司机说，他会在山下等你</em>。要走就别拖到下午，山上四点后起风很冷。</p>
+  </div>
+
+  <div class="opt">
+    <h4>2 · Juta 谷 → Chaukhi 山脚 <span class="tag cool">格鲁吉亚的多洛米蒂</span></h4>
+    <p>这是卡兹别吉一带最出名的徒步。<a class="pin" href="https://maps.google.com/?q=Juta+Kazbegi+Georgia" target="_blank" rel="noopener">Juta 村</a>（2200 米，格鲁吉亚海拔最高的常住村之一）在 Stepantsminda 往东约 30 公里，最后一段是土路，需要越野车。从村里往里走 <strong>2 小时到 Chaukhi 山脚</strong>，正对着一排锯齿状的花岗岩尖峰，形状像多洛米蒂。体力好可以继续往 Abudelauri 三色湖方向（绿湖、白湖、蓝湖，来回要一整天）。</p>
+    <p style="margin-bottom:0">当天往返得很早出发，实际是把卡兹别吉那天换成 Juta 那天。<em>如果你们两个人里有一个真想走山，值得单独用掉一个整日</em>——但那样 Gergeti 就得放弃，二选一。</p>
+  </div>
+
+  <div class="opt">
+    <h4>3 · Truso 峡谷 <span class="tag cool">平缓，不爬升</span></h4>
+    <p style="margin-bottom:0">在 Kobi 附近（Stepantsminda 往南 20 公里），沿着河谷平走 <strong>单程 8 公里，几乎没有爬升</strong>，沿途是橙红色的矿泉钙华台地、废弃的中世纪碉楼村、还有冒气泡的矿泉眼。适合不想爬山但想走进山里的人。往返半天，可以作为卡兹别吉那天的下半场替代 Gergeti。</p>
+  </div>
+
+  <div class="opt">
+    <h4>4 · Gveleti 瀑布 <span class="tag cool">一小时</span></h4>
+    <p style="margin-bottom:0">Stepantsminda 往北 10 分钟车程，停车后<strong>往返一小时</strong>，走到一道藏在峡谷里的瀑布。轻松，适合当天时间不够时的补充。包车的话让司机顺路带一下就行。</p>
+  </div>
+
+  <h3>巴统那边也有一条</h3>
+  <p><a class="pin" href="https://maps.google.com/?q=Mtirala+National+Park+Georgia" target="_blank" rel="noopener">Mtirala 国家公园</a>，巴统往东约 30 公里，格鲁吉亚降水量最大的地方，亚热带雨林、吊桥、瀑布和可以游泳的水潭，半天足够。可以并进 9.24 阿扎拉山区那天，也可以单独去。Airbnb 上有个进 Mtirala 看树上蜂箱、在阿扎拉传统民居里尝蜂蜜的体验（★5.0，但只有 2 条评价，属于新上架）。</p>
+
+  <div class="note">
+    <p><strong>九月底的山区状况</strong>：Juta、Truso 都还开着，10 月中后开始下雪封路。白天 10–18°C，太阳下不冷，一进背阴处立刻降十度。徒步鞋、冲锋衣、帽子、防晒都要，山上没有补给点，水和吃的自己带。手机信号在 Juta 和 Truso 谷里基本没有。</p>
+  </div>
 </div>
 </section>
 
@@ -487,37 +859,61 @@ footer a{color:#CFE0E6}
   <p class="lede">9.23 周三 – 9.26 周六 &nbsp;·&nbsp; 巴统住 3 晚，不折腾库塔伊西</p>
 
   <div class="opt pick">
-    <h4>为什么这样改 <span class="tag">按你的意思</span></h4>
-    <p style="margin-bottom:0">火车往返定了之后，中途下车玩内陆峡谷（库塔伊西、Martvili、Prometheus）就不顺了——那几个点都离火车站几十公里，得单独包车，等于把一天耗在路上。<strong>不如把三整天全给巴统和阿扎拉山区</strong>：山、瀑布、海、植物园、老城都在一小时车程内，节奏松得多，也符合你们这趟"旅居"而不是"打卡"的基调。内陆峡谷留给下次。</p>
+    <h4>为什么砍掉内陆峡谷 <span class="tag">按你的意思</span></h4>
+    <p style="margin-bottom:0">火车往返定了之后，中途下车玩内陆峡谷（库塔伊西、Martvili、Prometheus）就不顺了——那几个点都离火车站几十公里，得单独包车，等于把一天耗在路上。<strong>不如把三整天全给巴统和阿扎拉山区</strong>：山、瀑布、海、植物园、老城都在一小时车程内，节奏松得多，也符合"旅居"而不是"打卡"的基调。</p>
   </div>
 
   <div class="urgent">
-    <h4>火车时刻：2026 年 8 月改点了</h4>
-    <p>新隧道 8 月 6 日通车，第比利斯–巴统全程从 5 小时缩到 <strong>约 4 小时</strong>，时刻表跟着调整。网上（包括不少中文攻略）还在传 8:00 发 13:35 到的旧数据，<em>下单前务必在 tre.ge 查当天实际班次</em>。大致规律没变：每天每个方向两班，上午一班、下午偏晚一班，Stadler 瑞士双层车，经济舱 25–30 拉里起，商务舱翻倍。</p>
-    <p style="margin-top:10px"><strong>车站位置要注意</strong>：第比利斯这头是市中心的 Station Square（地铁 1 号线直达）；<em>巴统那头的车站叫 Batumi Central，实际在城北 Makhinjauri，离市中心还有 6 公里</em>，出站要再打 10–15 拉里的车进城。算时间时别忘了这一段。</p>
+    <h4>两个必须记住的细节</h4>
+    <p><strong>一、时刻表 2026 年 8 月改点了。</strong>新隧道 8 月 6 日通车，第比利斯–巴统全程从 5 小时缩到<strong>约 4 小时</strong>。网上（包括不少中文攻略）还在传 8:00 发 13:35 到的旧数据。<em>下单前务必在 tre.ge 查当天实际班次</em>。大致规律没变：每天每个方向两班，上午一班、下午偏晚一班，Stadler 瑞士双层车，经济舱 25–30 拉里起。</p>
+    <p style="margin-top:10px"><strong>二、巴统那头的车站不在市中心。</strong>第比利斯这头是市中心的 <a class="pin" href="https://maps.google.com/?q=Tbilisi+Central+Railway+Station" target="_blank" rel="noopener">Station Square 火车站</a>（地铁 1 号线直达）；<em>巴统这头叫 <a class="pin" href="https://maps.google.com/?q=Batumi+Central+Railway+Station+Makhinjauri" target="_blank" rel="noopener">Batumi Central</a>，实际在城北的 Makhinjauri，离市中心还有 6 公里</em>，出站要再打 10–15 拉里的车。两头算时间都别漏了这一段。</p>
   </div>
 
   <div class="day">
     <span class="daytag move">9.23 周三</span>
     <h3>第比利斯 → 巴统</h3>
-    <div class="slot"><p class="when">06:45</p><p class="what">起床退房。行李全带走，这边住宿到此为止。</p></div>
-    <div class="slot"><p class="when">07:15</p><p class="what">Bolt 去 Station Square 火车站，Avlabari 过去约 15 分钟，10–15 拉里。也可以坐地铁 1 号线直达，但拖箱子换乘不方便。</p></div>
-    <div class="slot"><p class="when">07:40</p><p class="what">进站上车。座位对号，行李架在车厢两头。上层视野好，靠右侧（西行方向）能看更多山景。</p></div>
-    <div class="slot"><p class="when">08:00 前后</p><p class="what">发车。车上有插座和小桌板，这四个小时正好是国内 12:00–16:00，可以处理消息和文档。中段过 Rioni 河谷，最后一段出隧道后贴着黑海开进城，风景在后半程。</p></div>
+
+    <div class="route">
+      <b>今日动线：横穿格鲁吉亚，370 公里</b>
+      <a class="pin" href="https://maps.google.com/?q=Avlabari+Tbilisi" target="_blank" rel="noopener">Avlabari</a> <span class="hop">→Bolt 15 分→</span> <a class="pin" href="https://maps.google.com/?q=Tbilisi+Central+Railway+Station" target="_blank" rel="noopener">Station Square 站</a> <span class="hop">→火车 4h→</span> <a class="pin" href="https://maps.google.com/?q=Batumi+Central+Railway+Station+Makhinjauri" target="_blank" rel="noopener">Batumi Central</a> <span class="hop">→车 20 分／6km→</span> 巴统市区住处 <span class="hop">→步行→</span> <a class="pin" href="https://maps.google.com/?q=Batumi+Boulevard" target="_blank" rel="noopener">海滨大道</a> <span class="hop">→步行 20 分→</span> <a class="pin" href="https://maps.google.com/?q=Ali+and+Nino+Statue+Batumi" target="_blank" rel="noopener">Ali &amp; Nino</a> <span class="hop">→缆车→</span> <a class="pin" href="https://maps.google.com/?q=Argo+Cable+Car+Batumi" target="_blank" rel="noopener">Argo 缆车山顶</a>
+    </div>
+
+    <div class="slot"><p class="when">06:45</p><p class="what">起床退房。行李全带走，第比利斯这边住宿到此为止。</p></div>
+    <div class="slot"><p class="when">07:15</p><p class="what">Bolt 去 Station Square 火车站，15 分钟，10–15 拉里。也可以坐地铁 1 号线 4 站直达，但拖箱子换乘不方便。</p></div>
+    <div class="slot"><p class="when">07:40</p><p class="what">进站上车。座位对号，行李架在车厢两头。<em>上层视野好</em>，靠右侧（西行方向）能看更多山景。</p></div>
+    <div class="slot"><p class="when">08:00 前后</p><p class="what">发车。车上有插座和小桌板，这四小时正好是国内 12:00–16:00，处理消息和文档。中段过 Rioni 河谷，最后一段出隧道后贴着黑海开进城，风景在后半程。</p></div>
     <div class="slot"><p class="when">12:00 前后</p><p class="what">到 Batumi Central（Makhinjauri）。出站打车进城 10–15 拉里，二十分钟。</p></div>
     <div class="slot"><p class="when">13:00</p><p class="what">入住，放行李。</p></div>
     <div class="slot"><p class="when">13:30–15:00</p><p class="what">午饭。到了巴统第一顿就该吃阿扎尔奶酪船，这里是它的发源地。</p></div>
-    <div class="slot"><p class="when">15:00–17:30</p><p class="what"><strong>海滨大道</strong>（Batumi Boulevard）。租辆自行车或电动滑板车，从老城骑到 Alphabetic Tower 和 <strong>Ali &amp; Nino 雕塑</strong>——会转动、每十分钟交错穿过彼此一次的钢制情侣像，取自那本同名小说。旁边就是音乐喷泉。</p></div>
-    <div class="slot"><p class="when">17:30–19:00</p><p class="what"><strong>Argo 缆车</strong>上山，看日落和黑海全景，山顶有观景平台和小酒吧。九月底日落大约在 19:20，提前上去占位置。</p></div>
-    <div class="slot"><p class="when">19:30</p><p class="what">下山吃晚饭，老城 Piazza 广场一带。</p></div>
+    <div class="slot"><p class="when">15:00–17:30</p><p class="what"><strong>海滨大道</strong>，全长七公里。租自行车或电动滑板车（沿路有租点，一小时几拉里），从老城骑到 <strong>Alphabetic Tower</strong> 字母塔和 <strong>Ali &amp; Nino 雕塑</strong>——会转动、每十分钟交错穿过彼此一次的钢制情侣像，取自那本同名小说。旁边就是音乐喷泉。</p></div>
+    <div class="slot"><p class="when">17:30–19:00</p><p class="what"><strong>Argo 缆车</strong>上山（下站在市区，缆车 2.6 公里），看日落和黑海全景，山顶有观景平台和小酒吧。九月底日落约 19:20，提前上去占位置。</p></div>
+    <div class="slot"><p class="when">19:30</p><p class="what">下山吃晚饭，<a class="pin" href="https://maps.google.com/?q=Piazza+Square+Batumi" target="_blank" rel="noopener">老城 Piazza 广场</a>一带。</p></div>
+
+    <div class="gal">
+      <div class="strip">
+        <figure>
+          <img loading="lazy" src="https://commons.wikimedia.org/wiki/Special:FilePath/Seafront_Promenade,_Batumi,_Georgia_-_panoramio.jpg?width=1100" alt="巴统海滨大道">
+          <figcaption>巴统海滨大道，全长七公里，骑车最舒服。</figcaption>
+        </figure>
+        <figure>
+          <img loading="lazy" src="https://commons.wikimedia.org/wiki/Special:FilePath/Ali_and_Nino_statue_in_Batumi.jpg?width=1100" alt="阿里与尼诺雕塑">
+          <figcaption>Ali &amp; Nino，两座钢制人像每十分钟缓缓交错穿过彼此一次。</figcaption>
+        </figure>
+        <figure>
+          <img loading="lazy" src="https://commons.wikimedia.org/wiki/Special:FilePath/Batumi_Alphabetic_Tower.jpg?width=1100" alt="字母塔">
+          <figcaption>字母塔，塔身盘绕的是格鲁吉亚 33 个字母。</figcaption>
+        </figure>
+      </div>
+      <p class="hint">← 左右滑动看更多 →</p>
+    </div>
 
     <div class="food">
-      <b>巴统的奶酪船，是有排名的</b>
+      <b class="h">巴统的奶酪船，是有排名的</b>
       <ul>
         <li><strong>Porto Franco</strong> —— TasteAtlas 上排世界第一的阿扎尔奶酪船（khachapuri Adjaruli），本地人和游客都认。船大黄油厚，两个人点一个就够，别贪心</li>
         <li><strong>Retro</strong> —— 同榜世界第二，本地老店，价格更实在</li>
         <li><strong>Laguna</strong> —— 巴统本地评价里的第一名，海边位置</li>
-        <li>吃法：先把船头的面包撕下来，把中间的蛋黄、黄油和奶酪搅匀，再撕船边蘸着吃。<span class="price">单个 15–25 拉里，热量惊人，配一杯柠檬水解腻</span></li>
+        <li>吃法：先把船头的面包撕下来，把中间的蛋黄、黄油和奶酪搅匀，再撕船边蘸着吃。<span class="price">单个 15–25 拉里，热量惊人，配柠檬水解腻</span></li>
       </ul>
     </div>
   </div>
@@ -525,21 +921,51 @@ footer a{color:#CFE0E6}
   <div class="day">
     <span class="daytag">9.24 周四</span>
     <h3>阿扎拉山区一日 <span class="tag warn">国内工作日</span></h3>
-    <p>巴统真正的好东西在城后面的山里，半小时车程就换了一个世界：亚热带雨林、石拱桥、瀑布、山里的家庭酒庄。<strong>这天全天在外，山谷信号断续，提前跟国内打好招呼。</strong></p>
-    <div class="slot"><p class="when">09:00</p><p class="what">出发。包车全天 150–200 拉里一车（Bolt 上找司机或酒店代订），或者跟当地一日团人均 60–100 拉里。</p></div>
-    <div class="slot"><p class="when">10:00–11:00</p><p class="what"><strong>Makhuntseti 瀑布</strong>，离巴统 30 公里，36 米高，从公路边走一百米就到，不用徒步。下面有水潭，天热还能下水。</p></div>
-    <div class="slot"><p class="when">11:00–11:40</p><p class="what"><strong>女王塔玛尔拱桥</strong>（Queen Tamar Bridge），12–13 世纪的石拱桥，就在瀑布旁边，桥头有卖蜂蜜、churchkhela 和自酿 chacha 的摊子。</p></div>
-    <div class="slot"><p class="when">12:00–13:00</p><p class="what">再往山里走，<strong>Mirveti 瀑布</strong>或 <strong>Tkhilnari 瀑布</strong>（Makho 村），人比 Makhuntseti 少很多，村道两边全是柑橘和猕猴桃。</p></div>
+    <p>巴统真正的好东西在城后面的山里，半小时车程就换了一个世界：亚热带雨林、石拱桥、瀑布、山里的家庭酒庄。<strong>这天全天在外，山谷里信号断续，提前跟国内打好招呼。</strong></p>
+
+    <div class="route">
+      <b>今日动线：沿 Adjaristsqali 河谷往东，最远 45 公里</b>
+      巴统 <span class="hop">→30km／40 分→</span> <a class="pin" href="https://maps.google.com/?q=Makhuntseti+Waterfall+Georgia" target="_blank" rel="noopener">Makhuntseti 瀑布</a> <span class="hop">→步行 3 分→</span> <a class="pin" href="https://maps.google.com/?q=Queen+Tamar+Bridge+Makhuntseti" target="_blank" rel="noopener">女王塔玛尔拱桥</a> <span class="hop">→15km／25 分→</span> <a class="pin" href="https://maps.google.com/?q=Mirveti+Waterfall+Georgia" target="_blank" rel="noopener">Mirveti 瀑布</a> <span class="hop">→山里→</span> 家庭餐馆午饭 <span class="hop">→→</span> 阿扎拉家庭酒庄 <span class="hop">→1h→</span> 回巴统
+    </div>
+
+    <div class="slot"><p class="when">09:00</p><p class="what">出发。包车全天 150–200 拉里一车（Bolt 上找司机或酒店代订），或跟当地一日团人均 60–100 拉里。</p></div>
+    <div class="slot"><p class="when">10:00–11:00</p><p class="what"><strong>Makhuntseti 瀑布</strong>，离巴统 30 公里，36 米高，<em>从公路边走一百米就到，不用徒步</em>。下面有水潭，天热还能下水。旁边有咖啡摊和小卖部。</p></div>
+    <div class="slot"><p class="when">11:00–11:40</p><p class="what"><strong>女王塔玛尔拱桥</strong>，12–13 世纪的石拱桥，就在瀑布旁边几分钟路。桥头有卖蜂蜜、churchkhela 和自酿 chacha 的摊子。</p></div>
+    <div class="slot"><p class="when">12:00–13:00</p><p class="what">再往山里走，<strong>Mirveti 瀑布</strong>或 Makho 村的 Tkhilnari 瀑布，人比 Makhuntseti 少很多，村道两边全是柑橘和猕猴桃。</p></div>
     <div class="slot"><p class="when">13:00–14:30</p><p class="what">山里的家庭餐馆吃午饭。阿扎拉山区的招牌是 <strong>borano</strong>（黄油煎的阿扎拉奶酪）和 <strong>sinori</strong>（薄面皮卷酸奶油），配自家腌菜，油厚味重，配 chacha 刚好。</p></div>
-    <div class="slot"><p class="when">15:00–16:30</p><p class="what">阿扎拉家庭酒庄品鉴。这一带做的是 Chkhaveri、Tsolikouri 这些西部品种，和卡赫季的风格完全不同，酸度更高更清爽。</p></div>
+    <div class="slot"><p class="when">15:00–16:30</p><p class="what">阿扎拉家庭酒庄品鉴。这一带做的是 Chkhaveri、Tsolikouri 这些西部品种，和卡赫季风格完全不同，酸度更高更清爽。</p></div>
     <div class="slot"><p class="when">17:30</p><p class="what">回巴统。休息一下，晚上吃顿正经的。</p></div>
 
+    <div class="gal">
+      <div class="strip">
+        <figure>
+          <img loading="lazy" src="https://commons.wikimedia.org/wiki/Special:FilePath/Makhuntseti_waterfall.jpg?width=1100" alt="马洪采季瀑布">
+          <figcaption>Makhuntseti 瀑布，36 米，从公路边走一百米就到。</figcaption>
+        </figure>
+        <figure>
+          <img loading="lazy" src="https://commons.wikimedia.org/wiki/Special:FilePath/Queen_Tamar_Bridge,_Adjara.jpg?width=1100" alt="女王塔玛尔桥">
+          <figcaption>塔玛尔女王时期的石拱桥，800 年了还在用。</figcaption>
+        </figure>
+        <figure>
+          <img loading="lazy" src="https://commons.wikimedia.org/wiki/Special:FilePath/Adjara_mountains_Georgia.jpg?width=1100" alt="阿扎拉山区">
+          <figcaption>阿扎拉山区的村落，房子多是木结构带宽檐，为了挡这里全格鲁吉亚最多的雨。</figcaption>
+        </figure>
+      </div>
+      <p class="hint">← 左右滑动看更多 →</p>
+    </div>
+
+    <div class="xp pick">
+      <p class="h">这天订什么 <span class="star">必须找车</span></p>
+      <p class="why">自己坐公交去瀑布不现实。Airbnb 上有<strong>正好覆盖这条线的体验</strong>：Makhuntseti 和 Mirveti 双瀑布 + 女王塔玛尔中世纪石桥 + 格鲁吉亚葡萄酒与当地食物品尝，标 ★5.0——<em>但只有 2 条评价，是新上架的条目</em>，评分参考价值有限，订之前多看看主人的其他条目和回复。同区还有「品酒 + 黑海饮食烹饪课」★5.0 / 6 条、「Mtirala 国家公园树上蜂箱 + 阿扎拉民居蜂蜜」★5.0 / 2 条。</p>
+      <p class="why"><strong>两个人的话我还是建议包车</strong>：全天 150–200 拉里一车，比人均跟团便宜，山里的家庭酒庄和小瀑布多待半小时少待半小时全看你。评价基数太小的体验，不如把钱花在能自己控制节奏的车上。</p>
+    </div>
+
     <div class="food">
-      <b>这天的晚饭</b>
+      <b class="h">这天的晚饭</b>
       <ul>
         <li><strong>BatuMarani</strong> —— 九成菜品是阿扎拉家族食谱，从巴统周边村子搜集来的，白天在山里吃的那几道这里都有更讲究的版本。人均 50–80 拉里</li>
         <li><strong>Cafe Adjara</strong>（老城）—— 有个午餐套餐，六道阿扎拉小菜一次上齐：malakhto（豆泥）、dolma（葡萄叶包饭）、小牛肉炖菜、sinori 等等，第一次系统吃阿扎拉菜就点这个</li>
-        <li><strong>Old Boulevard</strong> —— 传统格鲁吉亚菜配民俗歌舞表演，游客向但热闹，适合想看点节目的晚上</li>
+        <li><strong>Old Boulevard</strong> —— 传统格鲁吉亚菜配民俗歌舞表演，游客向但热闹</li>
       </ul>
     </div>
   </div>
@@ -547,14 +973,20 @@ footer a{color:#CFE0E6}
   <div class="day">
     <span class="daytag rest">9.25 周五</span>
     <h3>上午干活 · 下午植物园和海</h3>
-    <div class="slot"><p class="when">08:30–13:00</p><p class="what">工作，对应国内 12:30–17:00。今天早点收，下午的植物园要留足时间。</p></div>
+
+    <div class="route">
+      <b>今日动线：往北 9 公里再回来</b>
+      巴统市区 <span class="hop">→Bolt 9km／20 分→</span> <a class="pin" href="https://maps.google.com/?q=Batumi+Botanical+Garden" target="_blank" rel="noopener">巴统植物园（Green Cape）</a> <span class="hop">→园内步行 3h，上门进下门出→</span> 下门 <span class="hop">→Bolt 20 分→</span> <a class="pin" href="https://maps.google.com/?q=Batumi+Beach" target="_blank" rel="noopener">海边</a> <span class="hop">→步行→</span> 晚饭
+    </div>
+
+    <div class="slot"><p class="when">08:30–13:00</p><p class="what">工作，对应国内 12:30–17:00。今天早点收，下午植物园要留足时间。</p></div>
     <div class="slot"><p class="when">13:00–14:00</p><p class="what">午饭。</p></div>
-    <div class="slot"><p class="when">14:30–17:30</p><p class="what"><strong>巴统植物园</strong>，城北 9 公里的 Green Cape，Bolt 15–20 拉里。建在临海的山坡上，按地理分区种着东亚、澳洲、地中海的植物，一路走一路能从高处俯瞰黑海。<em>园子非常大，留足三小时</em>，进门先看地图，从上门进、下门出最省力。</p></div>
+    <div class="slot"><p class="when">14:30–17:30</p><p class="what"><strong>巴统植物园</strong>，城北 9 公里的 Green Cape，Bolt 15–20 拉里。建在临海的山坡上，按地理分区种着东亚、澳洲、地中海、南美的植物，一路走一路从高处俯瞰黑海。<em>园子非常大，留足三小时</em>。进门先看地图，<strong>从上门进、下门出最省力</strong>，全程基本是下坡。</p></div>
     <div class="slot"><p class="when">18:00–19:00</p><p class="what">回城，去海边坐坐。<strong>巴统的海滩是鹅卵石不是沙</strong>，赤脚走硌得慌，但水很清。九月底白天 22–25°C，水温还下得去，想游泳带泳衣。</p></div>
     <div class="slot"><p class="when">19:30</p><p class="what">晚饭。今晚吃海鲜。</p></div>
 
     <div class="food">
-      <b>黑海的海鲜</b>
+      <b class="h">黑海的海鲜</b>
       <ul>
         <li><strong>Oval Batumi</strong> —— 主厨 Guram Baghdoshvili，格鲁吉亚菜加黑海海鲜，黑海青口和当地小鱼做得好。人均 70–120 拉里</li>
         <li><strong>Panorama</strong> —— 31 层的 360° 观景餐厅，主厨 Izo Dzandzava 是格鲁吉亚第一位获米其林指南认可的女主厨。看夜景兼吃饭，价格是巴统里偏高的一档。<span class="price">订靠窗位</span></li>
@@ -566,50 +998,124 @@ footer a{color:#CFE0E6}
   <div class="day">
     <span class="daytag move">9.26 周六</span>
     <h3>巴统 → 第比利斯</h3>
+
+    <div class="route">
+      <b>今日动线</b>
+      巴统 <span class="hop">→车 15 分／12km→</span> <a class="pin" href="https://maps.google.com/?q=Gonio+Fortress+Georgia" target="_blank" rel="noopener">Gonio 要塞</a> 或 <a class="pin" href="https://maps.google.com/?q=Batumi+Fish+Market" target="_blank" rel="noopener">巴统鱼市</a> <span class="hop">→回市区→</span> 取行李 <span class="hop">→车 20 分／6km→</span> Batumi Central 站 <span class="hop">→火车 4h→</span> 第比利斯 Station Square <span class="hop">→Bolt 15 分→</span> <a class="pin" href="https://maps.google.com/?q=Avlabari+Tbilisi" target="_blank" rel="noopener">Avlabari</a>
+    </div>
+
     <div class="slot"><p class="when">09:00</p><p class="what">早饭，退房，行李寄存在酒店前台。</p></div>
-    <div class="slot"><p class="when">09:30–11:30</p><p class="what">上午二选一。<strong>Gonio 要塞</strong>：城南 15 分钟车程，罗马时期的方形城墙，据传圣马提亚墓就在里面，安静，人少。或者 <strong>巴统鱼市</strong>：自己在摊上挑鱼，交给楼上的小馆子，选煎、烤或炸，加工费几拉里，这是巴统最地道的一顿。</p></div>
+    <div class="slot"><p class="when">09:30–11:30</p><p class="what">上午二选一。<strong>Gonio 要塞</strong>：城南 15 分钟车程，罗马时期的方形城墙，据传圣马提亚墓就在里面，安静人少。或者<strong>巴统鱼市</strong>：自己在摊上挑鱼，交给楼上的小馆子，选煎、烤或炸，加工费几拉里——<em>这是巴统最地道的一顿</em>。</p></div>
     <div class="slot"><p class="when">12:00–13:30</p><p class="what">午饭。选了鱼市就在鱼市吃；选了 Gonio 就回城随便找家。</p></div>
     <div class="slot"><p class="when">14:00</p><p class="what">回酒店取行李。</p></div>
-    <div class="slot"><p class="when">15:30</p><p class="what">出发去 Batumi Central 车站（Makhinjauri），<em>记得这一段还有 6 公里</em>，留够时间。</p></div>
+    <div class="slot"><p class="when">15:30</p><p class="what">出发去 Batumi Central 车站，<em>记得这一段还有 6 公里</em>，留够时间。</p></div>
     <div class="slot"><p class="when">16:30–17:20</p><p class="what">发车（下午班的具体时间以 tre.ge 为准）。四小时车程，路上吃点车站买的面包。</p></div>
-    <div class="slot"><p class="when">20:30–21:30</p><p class="what">到第比利斯 Station Square，Bolt 回 Avlabari 一带的住处。</p></div>
+    <div class="slot"><p class="when">20:30–21:30</p><p class="what">到第比利斯 Station Square，Bolt 回 Avlabari 一带的住处，15 分钟。</p></div>
     <div class="slot"><p class="when">22:00</p><p class="what">收拾一下，明天去埃里温。</p></div>
-
-    <figure>
-      <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Seafront_Promenade,_Batumi,_Georgia_-_panoramio.jpg?width=1200" alt="巴统海滨大道">
-      <figcaption>巴统海滨大道，全长七公里。</figcaption>
-    </figure>
   </div>
 </div>
 </section>
 
-<!-- ============ 埃里温转场 ============ -->
+<!-- ============ 埃里温 ============ -->
 <section id="yerevan">
 <div class="wrap">
-  <h2>第三段 · 埃里温，以及回来</h2>
-  <p class="lede">9.27 周日 – 9.30 周三 &nbsp;·&nbsp; 行程由朋友安排，这里只管两头的交通</p>
+  <h2>第三段 · 埃里温</h2>
+  <p class="lede">9.27 周日 – 9.30 周三上午 &nbsp;·&nbsp; 行程由朋友安排，这里只管两头的交通</p>
 
-  <div class="urgent">
-    <h4>9 月 30 日回第比利斯，这是整趟最需要盯的一天</h4>
-    <p>10 月 1 日 15:30 的 C6222 是<strong>从第比利斯起飞</strong>的。埃里温到第比利斯没有稳定可靠的直飞（班次少且常变），实际上都走陆路，5–7 小时，中间还有 Sadakhlo–Bagratashen 口岸的排队和查验，堵一两个小时是常事。</p>
-    <p style="margin-top:10px"><em>不要把这段压到 10 月 1 日当天。</em>9 月 30 日上午从埃里温出发，下午到第比利斯，晚上住 Avlabari 一带，10 月 1 日中午从容去机场。多住一晚换来的是整趟行程唯一一个不可挽回节点上的安全余量。</p>
+  <div class="route">
+    <b>去程动线</b>
+    <a class="pin" href="https://maps.google.com/?q=Avlabari+Tbilisi" target="_blank" rel="noopener">Avlabari 小巴点</a> 或 <a class="pin" href="https://maps.google.com/?q=Ortachala+Bus+Station+Tbilisi" target="_blank" rel="noopener">Ortachala 客运站</a> <span class="hop">→往南 80km→</span> <a class="pin" href="https://maps.google.com/?q=Sadakhlo+Border+Crossing" target="_blank" rel="noopener">Sadakhlo–Bagratashen 口岸</a> <span class="hop">→查验 0.5–2h→</span> 亚美尼亚境内 <span class="hop">→经 Alaverdi／180km→</span> <a class="pin" href="https://maps.google.com/?q=Kilikia+Bus+Station+Yerevan" target="_blank" rel="noopener">埃里温 Kilikia 站</a>
   </div>
 
   <h3>两头的交通</h3>
   <div class="wide">
   <table>
     <tr><th>方式</th><th>时间与价格</th><th>说明</th></tr>
-    <tr><td>小巴 marshrutka</td><td>4–6 小时，10 美元起</td><td>埃里温 Kilikia 站 ⇄ 第比利斯 Avlabari 或 Ortachala。发车看坐满，走 Alaverdi 那条路要 6 小时。最便宜也最不舒服</td></tr>
+    <tr><td>小巴 marshrutka</td><td>4–6 小时，10 美元起</td><td>埃里温 Kilikia 站 ⇄ 第比利斯 Avlabari 或 Ortachala。坐满发车，走 Alaverdi 那条路要 6 小时。最便宜也最不舒服</td></tr>
     <tr><td>大巴</td><td>5–7 小时，8–30 美元</td><td>班次固定，可网上订（INFOBUS、Bookaway 一类平台），比小巴舒服</td></tr>
-    <tr><td>包车 / 拼车</td><td>4.5–5.5 小时，100–150 美元一车</td><td>最快最省事，能中途停 Haghpat、Sanahin 那两座 UNESCO 修道院。两三个人分摊很划算，<strong>9.30 这天推荐这个</strong></td></tr>
-    <tr><td>火车</td><td>约 10 小时，35–60 美元</td><td>每周四班的夜车，慢，但卧铺过夜省一晚住宿。时间上对不上你们的安排</td></tr>
+    <tr><td>包车 / 拼车</td><td>4.5–5.5 小时，100–150 美元一车</td><td>最快最省事，能中途停 Haghpat、Sanahin 两座 UNESCO 修道院。<strong>9.30 这天推荐这个</strong></td></tr>
+    <tr><td>火车</td><td>约 10 小时，35–60 美元</td><td>每周四班的夜车，慢，卧铺过夜省一晚住宿，但时间对不上你们的安排</td></tr>
   </table>
   </div>
 
-  <p>亚美尼亚对华免签，口岸出入境都在陆路口岸办，护照上会各盖一次章。<strong>注意保险要覆盖亚美尼亚</strong>，同一份保单如果只写格鲁吉亚，出境后就是裸奔。</p>
+  <p>亚美尼亚对华免签，出入境都在陆路口岸办，护照上各盖一次章。<strong>保险要覆盖亚美尼亚</strong>，同一份保单如果只写格鲁吉亚，出境后就是裸奔。</p>
 
   <div class="note">
-    <p><strong>9.27 出发那天</strong>：Avlabari 地铁站旁边就有发埃里温的小巴集散点，从住处走过去几分钟。朋友如果安排了车，把上车点定在 Avlabari 或 Ortachala 都方便。</p>
+    <p><strong>9.27 出发那天</strong>：Avlabari 地铁站旁边就有发埃里温的小巴集散点，从住处走过去几分钟。朋友如果安排了车，把上车点定在 Avlabari 或 Ortachala 都方便。<em>提醒朋友：9.30 上午必须发车回第比利斯</em>，别把行程排到 9.30 下午。</p>
+  </div>
+</div>
+</section>
+
+<!-- ============ 9.30–10.1 ============ -->
+<section id="backtb">
+<div class="wrap">
+  <h2>9.30 – 10.1 · 回第比利斯，然后走</h2>
+  <p class="lede">一天半的缓冲段。既是安全垫，也是把第比利斯没做完的事补上的机会。</p>
+
+  <div class="urgent">
+    <h4>这一天半的定位</h4>
+    <p>它存在的首要理由是<strong>给 10.1 15:30 的航班留缓冲</strong>——陆路过境不可控，堵两小时是常事。所以 9.30 的行程按"到得晚也不影响"来设计：<em>下午到就多玩一点，晚上到就直接吃饭休息</em>，不安排任何需要提前订、错过就浪费的东西。</p>
+  </div>
+
+  <div class="day">
+    <span class="daytag move">9.30 周三</span>
+    <h3>埃里温 → 第比利斯</h3>
+
+    <div class="route">
+      <b>今日动线</b>
+      埃里温 <span class="hop">→陆路 5–6h→</span> Avlabari 住处 <span class="hop">→步行 5 分→</span> <a class="pin" href="https://maps.google.com/?q=Avlabari+Metro+Station+Tbilisi" target="_blank" rel="noopener">Avlabari 地铁站</a> <span class="hop">→地铁 1 号线 1 站→</span> <a class="pin" href="https://maps.google.com/?q=Liberty+Square+Tbilisi" target="_blank" rel="noopener">自由广场</a> <span class="hop">→步行 10 分→</span> <a class="pin" href="https://maps.google.com/?q=Funicular+Tbilisi" target="_blank" rel="noopener">缆索车下站</a> <span class="hop">→funicular 5 分→</span> <a class="pin" href="https://maps.google.com/?q=Mtatsminda+Park+Tbilisi" target="_blank" rel="noopener">Mtatsminda 山顶</a>
+    </div>
+
+    <div class="slot"><p class="when">08:00–09:00</p><p class="what">从埃里温出发。<em>越早越好</em>，口岸上午人少，下午旅游团扎堆。包车的话让司机 8 点来接。</p></div>
+    <div class="slot"><p class="when">10:30–12:30</p><p class="what">过 Sadakhlo–Bagratashen 口岸。下车、排队、盖章、再上车，顺利半小时，赶上团队一两个小时。包车的话可以顺路停 <a class="pin" href="https://maps.google.com/?q=Haghpat+Monastery+Armenia" target="_blank" rel="noopener">Haghpat</a> 或 <a class="pin" href="https://maps.google.com/?q=Sanahin+Monastery+Armenia" target="_blank" rel="noopener">Sanahin</a> 修道院——两座都在 Alaverdi 附近，都是 UNESCO 名录，10 世纪的石构，各停 40 分钟，正好把过境的沉闷冲掉。</p></div>
+    <div class="slot"><p class="when">14:00–15:00</p><p class="what">到第比利斯，入住 Avlabari 一带。放行李，休息一小时。</p></div>
+    <div class="slot"><p class="when">15:30–16:30</p><p class="what">晚午饭。走了半天车，吃点热的。</p></div>
+    <div class="slot"><p class="when">17:00–19:30</p><p class="what"><strong>Mtatsminda 山顶公园</strong>。地铁到自由广场，走到 Chonkadze 街的缆索车（funicular）下站，五分钟升到 770 米的山顶。这是第比利斯唯一一个能把全城尽收眼底的地方——Narikala、河、Sameba、新城全在脚下。山顶有摩天轮、游乐场和一家大露台餐厅。<em>日落在 19:00 前后，赶得上就在上面看</em>。</p></div>
+    <div class="slot"><p class="when">20:00</p><p class="what">下山吃晚饭。这是格鲁吉亚的最后一顿正餐，去之前没订上的那家。</p></div>
+
+    <div class="note">
+      <p><strong>如果到得晚（18 点以后）</strong>：山顶就别去了，改成走到 Metekhi 平台再看一眼夜景（住处 12 分钟），然后老城吃饭。这天不设必做项，就是为了容错。</p>
+      <p style="margin-top:10px"><strong>如果到得早（13 点前）</strong>：加一个 <a class="pin" href="https://maps.google.com/?q=Dry+Bridge+Market+Tbilisi" target="_blank" rel="noopener">Dry Bridge 跳蚤市场</a>，苏联徽章、老相机、银器、旧地图，是这趟最好的手信来源，比纪念品店有意思得多。周三下午摊位不算最全但也够逛。</p>
+    </div>
+
+    <div class="food">
+      <b class="h">最后一顿格鲁吉亚菜</b>
+      <ul>
+        <li>之前没订上的那家：<strong>Barbarestan</strong>、<strong>Café Littera</strong>、<strong>Shavi Lomi</strong> 三选一，这天提前打电话或在网上订</li>
+        <li><strong>Mtatsminda 山顶餐厅</strong> —— 如果赶上日落就直接在山上吃，露台位视野无敌，菜是常规格鲁吉亚菜，胜在景</li>
+        <li>想吃点不一样的：<strong>Keto &amp; Kote</strong>，山坡上一栋老房子里的花园餐厅，本地人办生日聚会常去。<span class="price">要订位</span></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="day">
+    <span class="daytag move">10.1 周四</span>
+    <h3>第比利斯最后半天 → 塔什干</h3>
+
+    <div class="route">
+      <b>今日动线</b>
+      Avlabari 住处 <span class="hop">→步行 10 分→</span> <a class="pin" href="https://maps.google.com/?q=Holy+Trinity+Cathedral+Sameba+Tbilisi" target="_blank" rel="noopener">Sameba 大教堂</a> <span class="hop">→步行→</span> 早午饭 <span class="hop">→回住处取行李→</span> <span class="hop">→Bolt 30 分／17km→</span> <a class="pin" href="https://maps.google.com/?q=Tbilisi+International+Airport" target="_blank" rel="noopener">TBS 机场</a> <span class="hop">→飞 3h20m→</span> <a class="pin" href="https://maps.google.com/?q=Tashkent+International+Airport" target="_blank" rel="noopener">塔什干 T2</a> <span class="hop">→Yandex Go 20 分→</span> 塔什干住处
+    </div>
+
+    <div class="slot"><p class="when">08:30–09:30</p><p class="what">睡到自然醒，慢慢吃早饭。</p></div>
+    <div class="slot"><p class="when">09:30–10:30</p><p class="what">走去 <strong>Sameba 大教堂</strong>（住处十分钟）。如果整趟还没进去过，这是最后机会——它是格鲁吉亚最大的教堂，2004 年建成，内部空间比看上去更震撼。院子里能看到老城全景。</p></div>
+    <div class="slot"><p class="when">10:30–11:15</p><p class="what">补手信。Avlabari 一带的小超市就能买：churchkhela、Borjomi 矿泉水、tkemali 酸梅酱、svaneti 盐、蜂蜜、红酒。<em>酒要托运，别放随身</em>。</p></div>
+    <div class="slot"><p class="when">11:30</p><p class="what">退房，取行李。</p></div>
+    <div class="slot"><p class="when">12:00</p><p class="what">Bolt 去机场，30 分钟，25–35 拉里。</p></div>
+    <div class="slot"><p class="when">12:30</p><p class="what">到 TBS。国际航班提前 3 小时。<em>剩下的拉里现金在机场花掉或换掉</em>——拉里出了格鲁吉亚基本没地方换。</p></div>
+    <div class="slot"><p class="when">15:30</p><p class="what">C6222 起飞。</p></div>
+    <div class="slot"><p class="when">19:50</p><p class="what">落地塔什干 T2。乌兹别克斯坦对华免签 30 天。</p></div>
+    <div class="slot"><p class="when">20:00–20:40</p><p class="what">入境取行李。出关后办两件事：买 SIM 卡（Ucell、Beeline、Uzmobile 柜台都在到达厅），换钱（<strong>Som 面额很大</strong>，1 美元约合一万多，第一次换会被一沓钱吓到）。</p></div>
+    <div class="slot"><p class="when">21:00</p><p class="what">Yandex Go 进城。机场离市中心约 10 公里，二十分钟，五六万 Som。塔什干打车基本只用 Yandex Go。</p></div>
+    <div class="slot"><p class="when">21:30</p><p class="what">到酒店。今晚不安排行程，附近吃点东西早睡，明天六点半起。</p></div>
+
+    <div class="food">
+      <b class="h">落地夜宵</b>
+      <ul>
+        <li>塔什干餐厅普遍开到很晚，酒店周边找 <strong>samsa</strong>（馕坑烤的酥皮肉包）和 <strong>lagman</strong>（手拉面）就够，一顿三五万 Som</li>
+        <li><strong>Sim Sim</strong>（Sayilgoh 街）—— 市中心步行街上，samsa 和现出炉的 non 馕，25,000–35,000 Som</li>
+      </ul>
+    </div>
   </div>
 </div>
 </section>
@@ -618,59 +1124,62 @@ footer a{color:#CFE0E6}
 <section id="tashkent">
 <div class="wrap">
   <h2>第四段 · 塔什干与撒马尔罕</h2>
-  <p class="lede">10.1 周四晚 – 10.3 周六晚 &nbsp;·&nbsp; 一个整天给撒马尔罕，一个白天给塔什干</p>
-
-  <div class="day">
-    <span class="daytag move">10.1 周四</span>
-    <h3>第比利斯 → 塔什干，落地已是晚上</h3>
-    <div class="slot"><p class="when">上午</p><p class="what">第比利斯最后半天。慢慢吃个早午饭，Dry Bridge 淘点旧货，或者补买 churchkhela、Borjomi、红酒当手信。</p></div>
-    <div class="slot"><p class="when">11:30</p><p class="what">退房。</p></div>
-    <div class="slot"><p class="when">12:00</p><p class="what">Bolt 去机场，30 分钟，25–35 拉里。</p></div>
-    <div class="slot"><p class="when">12:30</p><p class="what">到 TBS。国际航班提前 3 小时，值机、退税（如果买了大件）、安检。<em>剩下的拉里现金在机场花掉或换掉</em>，拉里出了格鲁吉亚基本没地方换。</p></div>
-    <div class="slot"><p class="when">15:30</p><p class="what">C6222 起飞。</p></div>
-    <div class="slot"><p class="when">19:50</p><p class="what">落地塔什干 T2。乌兹别克斯坦对华免签 30 天。</p></div>
-    <div class="slot"><p class="when">20:00–20:40</p><p class="what">入境取行李。出关后办两件事：买 SIM 卡（Ucell、Beeline、Uzmobile 柜台都在到达厅），换钱（<strong>乌兹别克本币 Som 面额很大</strong>，1 美元约合一万多 Som，第一次换会被一沓钱吓到）。</p></div>
-    <div class="slot"><p class="when">21:00</p><p class="what">Yandex Go 进城。机场离市中心约 10 公里，二十分钟，五六万 Som。塔什干打车基本只用 Yandex Go。</p></div>
-    <div class="slot"><p class="when">21:30</p><p class="what">到酒店。今晚不安排行程，附近吃点东西早睡，明天六点半起。</p></div>
-
-    <div class="food">
-      <b>落地夜宵</b>
-      <ul>
-        <li>塔什干的餐厅普遍开到很晚，酒店周边找 <strong>samsa</strong>（馕坑烤的酥皮肉包）和 <strong>lagman</strong>（手拉面）就够了，一顿三五万 Som</li>
-        <li><strong>Sim Sim</strong>（Sayilgoh 街）—— 市中心步行街上，samsa 和现出炉的 non 馕，25,000–35,000 Som</li>
-      </ul>
-    </div>
-  </div>
+  <p class="lede">10.2 周五 – 10.3 周六 &nbsp;·&nbsp; 一个整天给撒马尔罕，一个白天给塔什干</p>
 
   <div class="day">
     <span class="daytag">10.2 周五</span>
     <h3>撒马尔罕一日往返 <span class="tag warn">国内工作日</span></h3>
     <p>Afrosiyob 高铁两小时零几分钟到，250 公里时速的西班牙 Talgo 车。<em>票必须提前买</em>——通常发车前一到两个月开售，一开售就被旅行社和熟客扫走一批，现场几乎买不到。往返都要订好。</p>
+
+    <div class="route">
+      <b>撒马尔罕城内动线：全部在 3 公里内，可步行 + 短途打车</b>
+      <a class="pin" href="https://maps.google.com/?q=Samarkand+Railway+Station" target="_blank" rel="noopener">撒马尔罕站</a> <span class="hop">→车 10 分→</span> <a class="pin" href="https://maps.google.com/?q=Registan+Samarkand" target="_blank" rel="noopener">Registan 广场</a> <span class="hop">→步行 10 分→</span> <a class="pin" href="https://maps.google.com/?q=Gur-e-Amir+Samarkand" target="_blank" rel="noopener">Gur-e-Amir 陵</a> <span class="hop">→车 8 分→</span> 午饭 <span class="hop">→步行→</span> <a class="pin" href="https://maps.google.com/?q=Shah-i-Zinda+Samarkand" target="_blank" rel="noopener">Shah-i-Zinda</a> <span class="hop">→步行 10 分→</span> <a class="pin" href="https://maps.google.com/?q=Bibi-Khanym+Mosque+Samarkand" target="_blank" rel="noopener">Bibi-Khanym 清真寺</a> <span class="hop">→紧邻→</span> <a class="pin" href="https://maps.google.com/?q=Siab+Bazaar+Samarkand" target="_blank" rel="noopener">Siyob 巴扎</a> <span class="hop">→车 10 分→</span> 车站
+    </div>
+
     <div class="slot"><p class="when">06:30</p><p class="what">起床，酒店早餐或路上买 samsa。</p></div>
-    <div class="slot"><p class="when">07:15</p><p class="what">到塔什干火车站（地铁 Toshkent 站直达）。<strong>进站安检很严，要求提前 30–45 分钟到</strong>，护照和车票都要查。</p></div>
+    <div class="slot"><p class="when">07:15</p><p class="what">到 <a class="pin" href="https://maps.google.com/?q=Tashkent+Railway+Station" target="_blank" rel="noopener">塔什干火车站</a>（地铁 Toshkent 站直达）。<strong>进站安检很严，要求提前 30–45 分钟到</strong>，护照和车票都要查。</p></div>
     <div class="slot"><p class="when">08:00</p><p class="what">发车。车上有餐车，二等座就够舒服。这两小时是国内 11:00–13:00，可以补消息。</p></div>
     <div class="slot"><p class="when">10:10</p><p class="what">到撒马尔罕站。打车进城十分钟。</p></div>
-    <div class="slot"><p class="when">10:30–12:00</p><p class="what"><strong>Registan 广场</strong>，三座经学院围合的广场，中亚建筑的天花板。上午光线从东边打过来，正面最好拍。可以加钱上宣礼塔俯瞰（找门口的管理员，几万 Som）。</p></div>
+    <div class="slot"><p class="when">10:30–12:00</p><p class="what"><strong>Registan 广场</strong>，三座经学院围合的广场，中亚建筑的天花板。<em>上午光线从东边打过来，正面最好拍</em>。可以加钱上宣礼塔俯瞰（找门口的管理员，几万 Som）。</p></div>
     <div class="slot"><p class="when">12:00–12:45</p><p class="what"><strong>Gur-e-Amir</strong>，帖木儿陵墓，步行十分钟。金箔穹顶内壁，比外面看着震撼。</p></div>
     <div class="slot"><p class="when">13:00–14:15</p><p class="what">午饭。</p></div>
-    <div class="slot"><p class="when">14:30–16:00</p><p class="what"><strong>Shah-i-Zinda</strong>，蓝瓷陵墓群夹成的小巷，一条几十米的坡道两侧全是不同年代的釉面砖。<em>下午光线斜进巷子，是全撒马尔罕最好拍的一小时</em>。</p></div>
-    <div class="slot"><p class="when">16:00–17:00</p><p class="what"><strong>Bibi-Khanym 清真寺</strong>和旁边的 <strong>Siyob 巴扎</strong>。巴扎里买干果、香料、馕，比塔什干便宜，也是买手信最好的地方。</p></div>
+    <div class="slot"><p class="when">14:30–16:00</p><p class="what"><strong>Shah-i-Zinda</strong>，蓝瓷陵墓群夹成的小巷，几十米的坡道两侧全是不同年代的釉面砖。<em>下午光线斜进巷子，是全撒马尔罕最好拍的一小时</em>。</p></div>
+    <div class="slot"><p class="when">16:00–17:00</p><p class="what"><strong>Bibi-Khanym 清真寺</strong>和紧挨着的 <strong>Siyob 巴扎</strong>。巴扎里买干果、香料、撒马尔罕馕，比塔什干便宜，也是买手信最好的地方。</p></div>
     <div class="slot"><p class="when">17:30</p><p class="what">回车站。</p></div>
     <div class="slot"><p class="when">18:00 前后</p><p class="what">返程班次（具体时间以 railway.uz 为准）。</p></div>
     <div class="slot"><p class="when">20:30</p><p class="what">回到塔什干。太累就在酒店附近吃碗面睡觉。</p></div>
 
-    <figure>
-      <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Registan_Samarkand_Uzbekistan.JPG?width=1200" alt="撒马尔罕雷吉斯坦广场的三座经学院">
-      <figcaption>雷吉斯坦广场。夜里有灯光秀，如果不想当天来回，也可以在撒马尔罕住一晚，10 月 3 日早班高铁回塔什干——但那样 10 月 3 日就只剩半天，塔什干城内要砍掉一半。<strong>建议还是当天往返。</strong></figcaption>
-    </figure>
+    <div class="gal">
+      <div class="strip">
+        <figure>
+          <img loading="lazy" src="https://commons.wikimedia.org/wiki/Special:FilePath/Registan_Samarkand_Uzbekistan.JPG?width=1100" alt="雷吉斯坦广场">
+          <figcaption>Registan 广场，三座经学院分别建于 15 和 17 世纪。夜里有灯光秀。</figcaption>
+        </figure>
+        <figure>
+          <img loading="lazy" src="https://commons.wikimedia.org/wiki/Special:FilePath/Shah-i-Zinda_Samarkand.jpg?width=1100" alt="沙赫静达陵墓群">
+          <figcaption>Shah-i-Zinda，一条坡道两侧十几座陵墓，蓝瓷密度全乌兹别克最高。</figcaption>
+        </figure>
+        <figure>
+          <img loading="lazy" src="https://commons.wikimedia.org/wiki/Special:FilePath/Gur-e-Amir_Samarkand.jpg?width=1100" alt="古尔埃米尔陵">
+          <figcaption>Gur-e-Amir，帖木儿及其后代的陵墓，那道凹槽穹顶是后世无数清真寺的原型。</figcaption>
+        </figure>
+      </div>
+      <p class="hint">← 左右滑动看更多 →</p>
+    </div>
+
+    <div class="xp">
+      <p class="h">要不要请个导游 <span class="star">值得</span></p>
+      <p class="why">撒马尔罕和格鲁吉亚不一样：<strong>不讲解就只是好看的砖</strong>。帖木儿、兀鲁伯、蓝瓷的年代层次，这些没人说你看不出来。Airbnb 上有条目走 Registan 三座经学院 + Gur Emir + Shah-i-Zinda，再带 <strong>兀鲁伯天文台</strong>（15 世纪的六分仪遗址）、<strong>Meros 造纸厂</strong>（复原撒马尔罕古法桑皮纸）和 Siyob 巴扎，由本地历史专业的主人带——这几个点自己不一定会去，天文台尤其值得。</p>
+      <p class="why">不想跟一整天的，<strong>Registan 门口就有持证导游</strong>，按小时谈，一两个小时讲完三座经学院，性价比很高。</p>
+    </div>
 
     <div class="food">
-      <b>撒马尔罕的午饭</b>
+      <b class="h">撒马尔罕的午饭</b>
       <ul>
         <li><strong>Bibikhanum Teahouse</strong> —— 就在 Bibi-Khanym 清真寺对面，院子里的传统茶馆，手抓饭和 shashlik 都稳，位置最省脚力</li>
         <li><strong>Platan</strong> —— 撒马尔罕老牌餐厅，中亚菜加欧洲菜，环境舒服，适合坐下来歇一个多小时</li>
-        <li>撒马尔罕的 plov 用亚麻籽油炒，颜色更深、更香，和塔什干的不是一个路子，值得对比着吃</li>
-        <li>Siyob 巴扎里的撒马尔罕馕（non）是全乌兹别克最有名的，硬，能放很久，当手信带走</li>
+        <li>撒马尔罕的 plov 用<em>亚麻籽油</em>炒，颜色更深更香，和塔什干不是一个路子，值得对比着吃</li>
+        <li>Siyob 巴扎里的撒马尔罕馕是全乌兹别克最有名的，硬，能放很久，当手信带走</li>
       </ul>
     </div>
   </div>
@@ -678,26 +1187,50 @@ footer a{color:#CFE0E6}
   <div class="day">
     <span class="daytag move">10.3 周六</span>
     <h3>塔什干半天，晚上回家</h3>
+
+    <div class="route">
+      <b>今日动线：老城 → 地铁 → 抓饭 → 机场</b>
+      <a class="pin" href="https://maps.google.com/?q=Chorsu+Bazaar+Tashkent" target="_blank" rel="noopener">Chorsu 巴扎</a> <span class="hop">→步行／车 10 分→</span> <a class="pin" href="https://maps.google.com/?q=Hazrati+Imam+Complex+Tashkent" target="_blank" rel="noopener">Hazrat Imam 建筑群</a> <span class="hop">→地铁→</span> <a class="pin" href="https://maps.google.com/?q=Kosmonavtlar+Metro+Station+Tashkent" target="_blank" rel="noopener">Kosmonavtlar 站</a> <span class="hop">→地铁→</span> Alisher Navoi 站 <span class="hop">→车 15 分→</span> <a class="pin" href="https://maps.google.com/?q=Besh+Qozon+Tashkent" target="_blank" rel="noopener">Besh Qozon 抓饭中心</a> <span class="hop">→车→</span> 酒店取行李 <span class="hop">→Yandex Go 20 分→</span> <a class="pin" href="https://maps.google.com/?q=Tashkent+International+Airport" target="_blank" rel="noopener">机场 T2</a>
+    </div>
+
     <div class="slot"><p class="when">08:30</p><p class="what">早饭，行李收好寄存在前台。</p></div>
     <div class="slot"><p class="when">09:00–10:15</p><p class="what"><strong>Chorsu Bazaar</strong>，蓝色穹顶大巴扎。穹顶下面是肉档和奶制品，外圈是干果、香料、馕、腌菜。中亚最有生活气的地方，早上人最多最热闹。</p></div>
     <div class="slot"><p class="when">10:30–11:20</p><p class="what"><strong>Hazrat Imam 建筑群</strong>，走路或打车十分钟。塔什干的宗教中心，图书馆里藏着世界最古老的《古兰经》抄本之一（奥斯曼抄本）。</p></div>
     <div class="slot"><p class="when">11:30–12:20</p><p class="what"><strong>地铁艺术站</strong>。中亚第一条地铁，每站装修都不同，刷一次卡随便坐。必看三站：<strong>Kosmonavtlar</strong>（宇航员站，深蓝配航天肖像，最出名）、<strong>Alisher Navoi</strong>（穹顶蓝瓷）、<strong>Pakhtakor</strong>（棉花图案）。一小时能刷完。</p></div>
-    <div class="slot"><p class="when">12:30–13:45</p><p class="what">抓饭。<em>这是塔什干这顿最不能错过的</em>，详见下面。</p></div>
-    <div class="slot"><p class="when">14:00–15:30</p><p class="what">买手信 + Tashkent City 新城公园歇脚。手信在 Chorsu 巴扎买干果、香料、丝绸最划算；要手工艺品去 <strong>Human House</strong>（陶器、细密画、刺绣）。</p></div>
+    <div class="slot"><p class="when">12:30–13:45</p><p class="what">抓饭。<em>这是塔什干最不能错过的一顿</em>，详见下面。Besh Qozon 在电视塔旁边，从地铁站要打车过去。</p></div>
+    <div class="slot"><p class="when">14:00–15:30</p><p class="what">买手信 + <a class="pin" href="https://maps.google.com/?q=Tashkent+City+Park" target="_blank" rel="noopener">Tashkent City 新城公园</a>歇脚。手信在 Chorsu 巴扎买干果、香料、丝绸最划算；要手工艺品去 <strong>Human House</strong>（陶器、细密画、刺绣）。</p></div>
     <div class="slot"><p class="when">16:00</p><p class="what">回酒店取行李，换身干净衣服。</p></div>
     <div class="slot"><p class="when">17:00</p><p class="what">Yandex Go 去机场 T2。国际航班提前 3 小时，<em>剩下的 Som 在机场花掉</em>，出境后没地方换。</p></div>
     <div class="slot"><p class="when">20:20</p><p class="what">MU6038 起飞。</p></div>
     <div class="slot"><p class="when">10.4 05:50</p><p class="what">落地浦东 T1。周日清晨，回家补觉。</p></div>
 
-    <figure>
-      <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Bazar_Chorsu_Tashkent.jpg?width=1200" alt="塔什干乔尔苏巴扎的蓝色穹顶">
-      <figcaption>Chorsu 巴扎的穹顶。</figcaption>
-    </figure>
+    <div class="gal">
+      <div class="strip">
+        <figure>
+          <img loading="lazy" src="https://commons.wikimedia.org/wiki/Special:FilePath/Bazar_Chorsu_Tashkent.jpg?width=1100" alt="乔尔苏巴扎">
+          <figcaption>Chorsu 巴扎的蓝色穹顶，直径 300 多米，下面是整层的肉档和奶制品。</figcaption>
+        </figure>
+        <figure>
+          <img loading="lazy" src="https://commons.wikimedia.org/wiki/Special:FilePath/Kosmonavtlar_metro_station_Tashkent.jpg?width=1100" alt="宇航员地铁站">
+          <figcaption>Kosmonavtlar 站，深蓝墙面上是加加林等宇航员的陶瓷肖像。</figcaption>
+        </figure>
+        <figure>
+          <img loading="lazy" src="https://commons.wikimedia.org/wiki/Special:FilePath/Hazrati_Imam_Complex_Tashkent.jpg?width=1100" alt="哈兹拉特伊玛目建筑群">
+          <figcaption>Hazrat Imam 建筑群，塔什干的宗教中心。</figcaption>
+        </figure>
+      </div>
+      <p class="hint">← 左右滑动看更多 →</p>
+    </div>
+
+    <div class="xp">
+      <p class="h">上午想跟人走 <span class="star">Tashkent Walking Tour</span></p>
+      <p class="why">Airbnb 上有塔什干城市步行体验，走老城、苏联时期建筑和巴扎，带本地视角的讲解。塔什干不像撒马尔罕那样需要历史讲解才看得懂，<em>这条线自己按上面的动线走完全没问题</em>；但如果想省心，或者对苏联建筑那段历史有兴趣，可以跟一个上午。</p>
+    </div>
 
     <div class="food">
-      <b>塔什干的抓饭，中午去</b>
+      <b class="h">塔什干的抓饭，中午去</b>
       <ul>
-        <li><strong>Besh Qozon</strong>（中亚抓饭中心）—— 电视塔旁边，号称有世界最大的抓饭锅，全开放式厨房，几口巨锅同时开工，旁边还有馕坑。每天做几种不同的抓饭：羊肉、牛肉、鸡肉，甚至马肉，也有撒马尔罕和费尔干纳两种流派。<em>大锅中午前后出锅，卖完就没，晚了只剩底料</em>，12 点前到最稳。一份 20,000–30,000 Som</li>
+        <li><strong>Besh Qozon</strong>（中亚抓饭中心）—— 电视塔旁边，号称有世界最大的抓饭锅，全开放式厨房，几口巨锅同时开工，旁边还有馕坑。每天做几种：羊肉、牛肉、鸡肉甚至马肉，也有撒马尔罕和费尔干纳两种流派。<em>大锅中午前后出锅，卖完就没</em>，12 点前到最稳。一份 20,000–30,000 Som</li>
         <li><strong>Samarqand Zig'ir Osh</strong> —— 想吃亚麻籽油炒的撒马尔罕抓饭就去这家，Olmazor 分店在地铁 Beruni 站附近，不在游客区，本地人多</li>
         <li><strong>Chorsu 巴扎外的 Oqvat Bozori 摊档</strong> —— 蓝穹顶旁边的小巷，塑料棚下面本地人在做 plov、shashlik、naryn（碎面拌马肉），一盘三四美元，最便宜也最真实</li>
         <li>喝的：绿茶（ko'k choy）配抓饭解腻，几乎每桌都有</li>
@@ -709,61 +1242,62 @@ footer a{color:#CFE0E6}
 </div>
 </section>
 
-<!-- ============ 一日游体验 ============ -->
-<section id="exp">
+<!-- ============ 常用网址 ============ -->
+<section id="urls">
 <div class="wrap">
-  <h2>一日游体验：哪几天有空档，该挑什么</h2>
-  <p class="lede">你发的 Airbnb 体验链接我这边网络打不开，拿不到实时的清单、评分和价格。所以下面不列具体项目名，而是把你行程里真正能塞进去的空档算清楚，再说每个空档该搜什么、怎么筛。</p>
+  <h2>常用网址</h2>
+  <p class="lede">按用到的顺序排，出发前把要装的 App 一次装完。</p>
 
-  <h3>空档表：按新行程算出来的</h3>
-  <div class="wide">
-  <table>
-    <tr><th>时间</th><th>可用时长</th><th>适合什么</th><th>搜索关键词</th></tr>
-    <tr><td>9.19 周六<br>9.20 周日</td><td>各一整天<br>10–13 小时</td><td>这两天是体验的主场。一天卡兹别吉，一天卡赫季采收季</td><td>Kazbegi day trip / Gergeti、Kakheti wine tour、rtveli harvest</td></tr>
-    <tr><td>9.21 周一 傍晚</td><td>3–4 小时</td><td>老城步行 + 品酒，或烹饪课</td><td>Tbilisi old town walking tour、wine tasting、cooking class</td></tr>
-    <tr><td>9.22 周二 下午</td><td>4–5 小时</td><td>姆茨赫塔半日（也可以自己 Bolt 去，不一定要报团）</td><td>Mtskheta half day</td></tr>
-    <tr><td>9.24 周四</td><td>一整天<br>8–9 小时</td><td>阿扎拉山区瀑布 + 家庭酒庄</td><td>Adjara mountains、Makhuntseti waterfall</td></tr>
-    <tr><td>9.25 周五 傍晚</td><td>2–3 小时</td><td>巴统城内主题游，或做菜</td><td>Batumi food tour、khachapuri class</td></tr>
-    <tr><td>10.3 周六 上午</td><td>4–5 小时</td><td>塔什干老城 + 巴扎美食徒步</td><td>Tashkent food tour、Chorsu bazaar walk</td></tr>
-  </table>
+  <h3>订票与交通</h3>
+  <div class="links">
+    <a class="row" href="https://tre.ge/en" target="_blank" rel="noopener"><b>tre.ge</b><span>格鲁吉亚铁路官方售票，第比利斯 ⇄ 巴统的火车票在这里买。有 App，可存电子票</span></a>
+    <a class="row" href="https://www.railway.ge/en/" target="_blank" rel="noopener"><b>railway.ge</b><span>格鲁吉亚铁路官网，查官方时刻表（改点后以这里和 tre.ge 为准）</span></a>
+    <a class="row" href="https://railway.uz/en/" target="_blank" rel="noopener"><b>railway.uz</b><span>乌兹别克铁路官方售票，塔什干 ⇄ 撒马尔罕 Afrosiyob 高铁。提前一到两个月开售</span></a>
+    <a class="row" href="https://infobus.eu/en/" target="_blank" rel="noopener"><b>INFOBUS</b><span>第比利斯 ⇄ 埃里温的大巴票，可在线订座</span></a>
+    <a class="row" href="https://www.bookaway.com/" target="_blank" rel="noopener"><b>Bookaway</b><span>同上，跨境大巴和拼车的聚合平台</span></a>
+    <a class="row" href="https://bolt.eu/" target="_blank" rel="noopener"><b>Bolt</b><span>格鲁吉亚打车主力，也能包车包天。落地前先装好并绑卡</span></a>
+    <a class="row" href="https://go.yandex/" target="_blank" rel="noopener"><b>Yandex Go</b><span>塔什干打车主力，格鲁吉亚可作备用</span></a>
+    <a class="row" href="https://www.flightradar24.com/" target="_blank" rel="noopener"><b>Flightradar24</b><span>查航班实时状态，接机或延误时用</span></a>
+    <a class="row" href="https://tbilisiairport.com/en/" target="_blank" rel="noopener"><b>第比利斯机场</b><span>航站楼信息、到达出发实时</span></a>
   </div>
 
-  <h3>我的建议：这三类值得花钱，其余自己走就行</h3>
-
-  <div class="opt pick">
-    <h4>一、卡赫季采收季酒庄体验 <span class="tag">最值得</span></h4>
-    <p style="margin-bottom:0">放 9.19 或 9.20（看天气把晴天让给卡兹别吉）。理由很直接：<strong>rtveli 一年只有这三四周</strong>，能下地剪葡萄、踩果、从陶罐里舀新酒，这件事你别的时间来格鲁吉亚都做不到。而且这类体验的核心是"进到一户人家里"，跟着平台上的本地主人走，比自己开车找酒庄靠谱得多。挑的时候看清楚<em>是否包含采收环节</em>——很多常规酒庄游只是参观加品鉴，没有下地。</p>
+  <h3>天气</h3>
+  <div class="links">
+    <a class="row" href="https://www.meteoblue.com/en/weather/week/stepantsminda_georgia" target="_blank" rel="noopener"><b>meteoblue · 卡兹别吉</b><span>山区预报最准的一家。<strong>9.19/9.20 哪天上山就看它</strong>，重点看云底高度和降水概率</span></a>
+    <a class="row" href="https://www.meteoblue.com/en/weather/week/tbilisi_georgia" target="_blank" rel="noopener"><b>meteoblue · 第比利斯</b><span>市区天气</span></a>
+    <a class="row" href="https://www.meteoblue.com/en/weather/week/batumi_georgia" target="_blank" rel="noopener"><b>meteoblue · 巴统</b><span>黑海边多雨，出门前看一眼</span></a>
+    <a class="row" href="https://www.windy.com/" target="_blank" rel="noopener"><b>Windy</b><span>看云图和降水动画，判断山里会不会被云糊住</span></a>
+    <a class="row" href="https://www.yr.no/en" target="_blank" rel="noopener"><b>yr.no</b><span>挪威气象局，高加索地区的另一个可靠源，可交叉验证</span></a>
   </div>
 
-  <div class="opt">
-    <h4>二、khinkali / khachapuri 烹饪课</h4>
-    <p>放 9.21 或 9.25 傍晚，一般 2.5–3 小时。这类课在第比利斯供给很多，价格通常在 25–35 美元，含酒、奶酪、沙拉和你自己包的那顿。好处是能把"格鲁吉亚菜到底是什么"一次搞明白，回国还能复现——比多看一座教堂有用。挑小班（6 人以内）的，人多就变成看老师表演了。</p>
-      <p style="margin-bottom:0">参考：搜索时能看到有课程标着 4.7 分、一千多条评价、2.5 小时约 28 美元这个量级，可以拿来当"合理价格"的锚，具体开课信息以你在 App 里看到的为准。</p>
+  <h3>玩什么</h3>
+  <div class="links">
+    <a class="row" href="https://www.airbnb.cn/s/experiences" target="_blank" rel="noopener"><b>Airbnb 体验</b><span>小众的、进本地人家里的那类最有优势。搜索时按城市 + 日期筛</span></a>
+    <a class="row" href="https://www.getyourguide.com/tbilisi-l1379/" target="_blank" rel="noopener"><b>GetYourGuide · 第比利斯</b><span>卡兹别吉、卡赫季这类大路线供给最多，评价基数大</span></a>
+    <a class="row" href="https://www.viator.com/Tbilisi/d50085" target="_blank" rel="noopener"><b>Viator · 第比利斯</b><span>同上，可以和 GetYourGuide 比价，差价常到三成</span></a>
+    <a class="row" href="https://www.tripadvisor.com/Tourism-g294195-Tbilisi-Vacations.html" target="_blank" rel="noopener"><b>Tripadvisor · 第比利斯</b><span>查餐厅和景点的真实评价，比国内平台全</span></a>
+    <a class="row" href="https://wander-lush.org/" target="_blank" rel="noopener"><b>Wander-Lush</b><span>专写格鲁吉亚和高加索的英文博客，交通和火车信息更新最勤，前面的火车改点就是它先报的</span></a>
   </div>
 
-  <div class="opt">
-    <h4>三、阿扎拉山区一日（9.24）</h4>
-    <p style="margin-bottom:0">这天必须找车，自己坐公交去瀑布不现实。跟团人均 60–100 拉里，包车全天 150–200 拉里一车。<strong>两个人的话包车更划算也更自由</strong>——山里的家庭酒庄和小瀑布，多待半小时少待半小时全看你，跟团做不到。</p>
+  <h3>吃饭与日常</h3>
+  <div class="links">
+    <a class="row" href="https://wolt.com/en/geo" target="_blank" rel="noopener"><b>Wolt</b><span>格鲁吉亚外卖主力，第比利斯和巴统都覆盖。累了不想出门就点它</span></a>
+    <a class="row" href="https://www.google.com/maps" target="_blank" rel="noopener"><b>Google Maps</b><span>出发前下载格鲁吉亚 + 亚美尼亚 + 乌兹别克斯坦离线包。本手册所有地点都能点开直接导航</span></a>
+    <a class="row" href="https://www.xe.com/currencyconverter/" target="_blank" rel="noopener"><b>XE 汇率</b><span>拉里 GEL、德拉姆 AMD、索姆 UZS 的实时汇率，换钱前看一眼免得被坑</span></a>
+    <a class="row" href="https://tkt.ge/en" target="_blank" rel="noopener"><b>TKT.GE</b><span>格鲁吉亚本地活动票务，演出、球赛、音乐会</span></a>
   </div>
 
-  <h3>反过来，这几件别买体验</h3>
-  <ul class="plain">
-    <li><strong>姆茨赫塔</strong> —— Bolt 单程 25–35 拉里，两个景点都在明面上，自己去更自由，省下的钱吃顿好的</li>
-    <li><strong>老城步行团</strong> —— 第比利斯老城本身不大，Narikala 缆车加 Betlemi 街走下来两小时，靠一份地图就够。除非你特别想听历史讲解</li>
-    <li><strong>硫磺浴</strong> —— 直接去店里现场开包间，不用通过平台，也不用预约</li>
-    <li><strong>撒马尔罕一日</strong> —— 高铁票自己买，景点集中在步行范围内，请个现场导游（Registan 门口就有）比买打包团划算</li>
-  </ul>
-
-  <h3>筛体验的四条标准</h3>
-  <ul class="plain">
-    <li><strong>评价数比评分重要。</strong>5.0 分但只有 3 条评价，不如 4.8 分 200 条评价。低于 30 条评价的谨慎</li>
-    <li><strong>看清楚含不含接送。</strong>格鲁吉亚的山区一日游，"不含接送"意味着你要自己想办法到集合点，可能就在城郊</li>
-    <li><strong>时长要对得上你的空档。</strong>标称 8 小时的卡兹别吉团实际都要 11–13 小时，别信页面上的数字，看评价里别人说几点回的</li>
-    <li><strong>采收季周末抢手。</strong>9.19、9.20 是周末又赶上 rtveli，<em>建议提前一周订</em>，别落地再看</li>
-  </ul>
+  <h3>安全与证件</h3>
+  <div class="links">
+    <a class="row" href="http://cs.mfa.gov.cn/" target="_blank" rel="noopener"><b>外交部领事服务网</b><span>行前查一次三国的最新入境口径和安全提醒</span></a>
+    <a class="row" href="http://ge.china-embassy.gov.cn/" target="_blank" rel="noopener"><b>中国驻格鲁吉亚大使馆</b><span>护照丢失、突发情况找它。号码存进手机</span></a>
+    <a class="row" href="http://uz.china-embassy.gov.cn/" target="_blank" rel="noopener"><b>中国驻乌兹别克斯坦大使馆</b><span>同上</span></a>
+    <a class="row" href="http://am.china-embassy.gov.cn/" target="_blank" rel="noopener"><b>中国驻亚美尼亚大使馆</b><span>同上</span></a>
+  </div>
 
   <div class="note">
-    <p>另外提一句：格鲁吉亚的一日游供给在 GetYourGuide、Viator 上比 Airbnb 体验多得多，尤其是卡兹别吉和卡赫季这两条线。<strong>三个平台可以横向比一比</strong>，同一条线路价格能差三成。Airbnb 体验的优势在小众的、进到本地人家里的那种，大路线反而不占优。</p>
+    <p><strong>紧急电话</strong>：格鲁吉亚统一 <strong>112</strong>（警察、消防、急救合一，有英语接线）。亚美尼亚 <strong>911</strong>。乌兹别克斯坦：警察 <strong>102</strong>、急救 <strong>103</strong>。</p>
+    <p style="margin-top:10px"><strong>出发前存进手机的离线文件</strong>：保险单 PDF、护照首页照片、三张火车票／高铁票、住宿地址（存格鲁吉亚文和英文两版，给司机看）、大使馆电话。</p>
   </div>
 </div>
 </section>
@@ -774,14 +1308,14 @@ footer a{color:#CFE0E6}
   <h2>速查</h2>
 
   <h3>钱</h3>
-  <p>格鲁吉亚用拉里 GEL，乌兹别克斯坦用 Som（面额大，1 美元一万多），亚美尼亚用德拉姆 AMD。城市里餐厅、超市、酒店基本都能刷卡，Apple Pay 在格鲁吉亚也普遍。</p>
+  <p>格鲁吉亚用拉里 GEL，亚美尼亚用德拉姆 AMD，乌兹别克斯坦用索姆 UZS（面额大，1 美元一万多）。城市里餐厅、超市、酒店基本都能刷卡，Apple Pay 在格鲁吉亚也普遍。</p>
   <p><strong>必须带现金的场合</strong>：卡赫季村里的家庭酒庄、阿扎拉山区的小摊、巴扎、部分包车司机、硫磺浴的搓背师傅、乌兹别克的巴扎和路边摊。</p>
-  <p>取现走 TBC Bank 或 Bank of Georgia 的 ATM，手续费低，避开街边独立 ATM。换汇在市区找带 Exchange 招牌的独立兑换点，汇率比银行和机场都好，自由广场周边一片都是。<em>每次转场前把当地现金花完或换掉</em>，拉里和 Som 出了本国都很难处理。</p>
+  <p>取现走 TBC Bank 或 Bank of Georgia 的 ATM，手续费低，避开街边独立 ATM。换汇在市区找带 Exchange 招牌的独立兑换点，汇率比银行和机场都好，自由广场周边一片都是。<em>每次转场前把当地现金花完或换掉</em>——拉里和索姆出了本国都很难处理。</p>
 
   <h3>行李</h3>
   <ul class="plain">
     <li>一件真正保暖的冲锋衣或厚外套（卡兹别吉山上 5–10°C，风大），和一件薄的（第比利斯下午二十几度）</li>
-    <li>好走的鞋。第比利斯老城、锡格纳吉、撒马尔罕全是石板和坡道，一天走两万步很正常</li>
+    <li>好走的鞋，最好是徒步鞋。第比利斯老城、锡格纳吉、撒马尔罕全是石板和坡道，一天走两万步很正常；上 Gergeti 更需要</li>
     <li>进修道院和清真寺：女士带头巾或围巾，男士别穿短裤。Bodbe、Jvari、Sameba、Hazrat Imam 都查</li>
     <li>泳衣。巴统还能下水，硫磺浴私人包间可穿可不穿</li>
     <li>转换插头（欧标两圆孔 C/F）、充电宝、保单和护照的离线照片</li>
@@ -799,17 +1333,17 @@ footer a{color:#CFE0E6}
 
   <h3>还有三件事等你拍板</h3>
   <ol class="plain">
-    <li><strong>9.19 和 9.20 谁先谁后。</strong>出发前三天看卡兹别吉的天气预报，晴的那天上山，另一天去卡赫季。这个到当地再定也来得及。</li>
-    <li><strong>9.30 从埃里温怎么回。</strong>建议包车（100–150 美元一车，能顺路看两座 UNESCO 修道院），比大巴省两小时也不折腾。定了就早点订。</li>
-    <li><strong>10.2 撒马尔罕当天往返还是住一晚。</strong>我倾向当天往返——住一晚意味着 10.3 只剩半天，Chorsu、Hazrat Imam、地铁站、抓饭得砍掉一半，而且还要拖着行李赶早班高铁。</li>
+    <li><strong>9.19 和 9.20 谁先谁后。</strong>出发前三天看 meteoblue 的卡兹别吉预报，晴的那天上山，另一天去卡赫季。这个到当地再定也来得及。</li>
+    <li><strong>9.30 从埃里温怎么回。</strong>建议包车（100–150 美元一车，能顺路看 Haghpat、Sanahin 两座 UNESCO 修道院），比大巴省两小时也不折腾。定了就早点订。</li>
+    <li><strong>卡兹别吉那天走不走山路。</strong>Gergeti 徒步上去单程 1.5–2 小时，或者干脆换成 Juta 谷（更野，但要放弃 Gergeti）。看你们的体力和当天天气。</li>
   </ol>
 </div>
 </section>
 
 <footer>
 <div class="wrap">
-  <p>航班信息来自你的航旅纵横截图。火车与高铁时刻会调整：第比利斯–巴统线 2026 年 8 月 6 日新隧道通车后已改点，全程约 4 小时，下单前请在 tre.ge 核对；Afrosiyob 时刻以 railway.uz 为准。保险要求依据格方 2026 年第 602 号政府决议。餐厅营业状态请出发前用 Google Maps 复核一次。</p>
-  <p>图片来自 Wikimedia Commons，均为知识共享（CC BY / CC BY-SA）授权作品：Gergeti Trinity Church 14th century in Georgia、Tbilisi Holy Trinity Cathedral (Sameba) IMG 8956 1920、Abanotubani Tbilisi、Ananuri castle 01、Sighnaghi town in Kakheti Georgia、Mtskheta Svetitskhoveli Cathedral (36092332115)、Seafront Promenade Batumi Georgia、Bazar Chorsu Tashkent、Registan Samarkand Uzbekistan。</p>
+  <p>航班信息来自你的航旅纵横截图。火车与高铁时刻会调整：第比利斯–巴统线 2026 年 8 月 6 日新隧道通车后已改点，全程约 4 小时，下单前请在 tre.ge 核对；Afrosiyob 时刻以 railway.uz 为准。保险要求依据格方 2026 年第 602 号政府决议。餐厅营业状态、体验的评分与档期，请出发前各复核一次——手册里引用的评分来自公开检索，不是实时数据。</p>
+  <p>图片来自 Wikimedia Commons，均为知识共享（CC BY / CC BY-SA）授权作品。地点名可点击，直接跳 Google Maps。</p>
   <a class="totop" href="#flights">回到顶部</a>
 </div>
 </footer>
@@ -822,11 +1356,22 @@ document.querySelectorAll('.check .box').forEach(function(b){
     if(e.key===' '||e.key==='Enter'){ e.preventDefault(); toggle(); }
   });
 });
-// 离线时图片加载不出来就整块隐藏，不让版式塌掉
+
+// 图片加载失败的处理：
+// 相册里挂掉的那张直接从滑动条里移除；整组都挂了就把相册收起来，
+// 剩一张就取消滑动样式当普通配图。独立 figure 里的图挂了就隐藏整块。
 document.querySelectorAll('img').forEach(function(img){
   img.addEventListener('error', function(){
-    var f = img.closest('figure');
-    if(f) f.style.display='none'; else img.style.display='none';
+    var fig = img.closest('figure');
+    var gal = img.closest('.gal');
+    if(gal && fig){
+      fig.remove();
+      var left = gal.querySelectorAll('.strip figure').length;
+      if(left === 0){ gal.style.display = 'none'; }
+      else if(left === 1){ gal.classList.add('single'); }
+      return;
+    }
+    if(fig){ fig.style.display = 'none'; } else { img.style.display = 'none'; }
   });
 });
 </script>
