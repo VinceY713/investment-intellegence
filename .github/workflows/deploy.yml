@@ -584,3 +584,28 @@ jobs:
             sudo nginx -t
             sudo systemctl reload nginx
             echo "✅ 部署完成，已启用密码访问（用户名 admin）"
+
+            # 4) 路由自检：本机直连，确认各入口真的回到对应站点而不是被占位页拦截
+            AUTH="admin:$APP_PASSWORD"
+            fail=0
+
+            code=$(curl -s -m 15 -u "$AUTH" -o /tmp/chk-gorgia.html -w '%{http_code}' http://127.0.0.1/personal/travel/gorgia/)
+            title=$(grep -o '<title>[^<]*' /tmp/chk-gorgia.html | head -1 | cut -c8-)
+            echo "自检 /personal/travel/gorgia/  → HTTP $code  标题：$title"
+            if [ "$code" != "200" ] || ! printf '%s' "$title" | grep -q '格鲁吉亚旅居手册'; then
+              echo "❌ 旅行手册路由异常"; fail=1
+            fi
+
+            rcode=$(curl -s -m 15 -u "$AUTH" -o /dev/null -w '%{http_code} → %{redirect_url}' http://127.0.0.1/personal/travel/gorgia)
+            echo "自检 /personal/travel/gorgia（无尾斜杠） → $rcode"
+
+            icode=$(curl -s -m 15 -u "$AUTH" -o /tmp/chk-inv.html -w '%{http_code}' http://127.0.0.1/personal/investmentmgm/)
+            ititle=$(grep -o '<title>[^<]*' /tmp/chk-inv.html | head -1 | cut -c8-)
+            echo "自检 /personal/investmentmgm/ → HTTP $icode  标题：$ititle"
+            if [ "$icode" != "200" ]; then echo "❌ 投资智能路由异常"; fail=1; fi
+
+            kcode=$(curl -s -m 15 -o /dev/null -w '%{http_code}' http://127.0.0.1/)
+            echo "自检 / （KEHU 占位页，免密） → HTTP $kcode"
+
+            [ "$fail" = "0" ] || exit 1
+            echo "✅ 路由自检通过"
