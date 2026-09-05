@@ -587,14 +587,24 @@ jobs:
             ls -la /var/www/investment-intelligence
             sudo nginx -t
             sudo systemctl reload nginx
+            # reload 是异步的：旧 worker 要处理完在途请求才退出，紧接着发的请求
+            # 可能仍打在旧配置上。等它切换完再自检，否则校验的是上一版配置。
+            sleep 3
             echo "✅ 部署完成，已启用密码访问（用户名 admin）"
 
             # 4) 路由自检：本机直连，确认各入口真的回到对应站点而不是被占位页拦截
             AUTH="admin:$APP_PASSWORD"
             fail=0
 
-            # 手册是公开页：不带任何认证请求，必须直接 200
-            code=$(curl -s -m 15 -o /tmp/chk-gorgia.html -w '%{http_code}' http://127.0.0.1/personal/travel/gorgia/)
+            # 手册是公开页：不带任何认证请求，必须直接 200。
+            # 留几次重试，给 reload 的 worker 切换兜底。
+            code=""
+            for i in 1 2 3 4 5; do
+              code=$(curl -s -m 15 -o /tmp/chk-gorgia.html -w '%{http_code}' http://127.0.0.1/personal/travel/gorgia/)
+              [ "$code" = "200" ] && break
+              echo "  手册自检第 $i 次拿到 HTTP $code，等 2 秒重试"
+              sleep 2
+            done
             title=$(grep -o '<title>[^<]*' /tmp/chk-gorgia.html | head -1 | cut -c8-)
             echo "自检 /personal/travel/gorgia/（免密） → HTTP $code  标题：$title"
             if [ "$code" != "200" ] || ! printf '%s' "$title" | grep -q '格鲁吉亚旅居手册'; then
