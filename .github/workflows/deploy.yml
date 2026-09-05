@@ -181,7 +181,10 @@ jobs:
                 # 子路径入口：/personal/travel/gorgia/ → 格鲁吉亚旅居手册
                 # 两条 rewrite 都落到具体文件路径，不留目录形态的 $uri，
                 # 否则 try_files 的目录测试会内部跳转回 location / 的 KEHU 占位页。
+                # auth_basic off：手册要发给同行的人，不走 server 级的密码门。
+                # 注意这是公开页面，别往里写私密信息（证件号、住址门牌、订单号）。
                 location ^~ /personal/travel/gorgia/ {
+                    auth_basic off;
                     root /var/www;
                     rewrite ^/personal/travel/gorgia/?$ /travel-gorgia/index.html break;
                     rewrite ^/personal/travel/gorgia/(.+)$ /travel-gorgia/$1 break;
@@ -191,6 +194,7 @@ jobs:
                 }
                 # 无尾斜杠访问（/personal/travel/gorgia）→ 301 补斜杠
                 location = /personal/travel/gorgia {
+                    auth_basic off;
                     return 301 /personal/travel/gorgia/;
                 }
 
@@ -589,20 +593,27 @@ jobs:
             AUTH="admin:$APP_PASSWORD"
             fail=0
 
-            code=$(curl -s -m 15 -u "$AUTH" -o /tmp/chk-gorgia.html -w '%{http_code}' http://127.0.0.1/personal/travel/gorgia/)
+            # 手册是公开页：不带任何认证请求，必须直接 200
+            code=$(curl -s -m 15 -o /tmp/chk-gorgia.html -w '%{http_code}' http://127.0.0.1/personal/travel/gorgia/)
             title=$(grep -o '<title>[^<]*' /tmp/chk-gorgia.html | head -1 | cut -c8-)
-            echo "自检 /personal/travel/gorgia/  → HTTP $code  标题：$title"
+            echo "自检 /personal/travel/gorgia/（免密） → HTTP $code  标题：$title"
             if [ "$code" != "200" ] || ! printf '%s' "$title" | grep -q '格鲁吉亚旅居手册'; then
-              echo "❌ 旅行手册路由异常"; fail=1
+              echo "❌ 旅行手册未能免密访问，或返回的不是手册"; fail=1
             fi
 
-            rcode=$(curl -s -m 15 -u "$AUTH" -o /dev/null -w '%{http_code} → %{redirect_url}' http://127.0.0.1/personal/travel/gorgia)
-            echo "自检 /personal/travel/gorgia（无尾斜杠） → $rcode"
+            rcode=$(curl -s -m 15 -o /dev/null -w '%{http_code} → %{redirect_url}' http://127.0.0.1/personal/travel/gorgia)
+            echo "自检 /personal/travel/gorgia（无尾斜杠，免密） → $rcode"
 
+            # 回归：投资智能带密码能进
             icode=$(curl -s -m 15 -u "$AUTH" -o /tmp/chk-inv.html -w '%{http_code}' http://127.0.0.1/personal/investmentmgm/)
             ititle=$(grep -o '<title>[^<]*' /tmp/chk-inv.html | head -1 | cut -c8-)
-            echo "自检 /personal/investmentmgm/ → HTTP $icode  标题：$ititle"
+            echo "自检 /personal/investmentmgm/（带密码） → HTTP $icode  标题：$ititle"
             if [ "$icode" != "200" ]; then echo "❌ 投资智能路由异常"; fail=1; fi
+
+            # 回归：投资智能的密码门必须还在——不带认证要被 401 挡住
+            ncode=$(curl -s -m 15 -o /dev/null -w '%{http_code}' http://127.0.0.1/personal/investmentmgm/)
+            echo "自检 /personal/investmentmgm/（不带密码，应 401） → HTTP $ncode"
+            if [ "$ncode" != "401" ]; then echo "❌ 投资智能的密码门失效了，这是安全问题"; fail=1; fi
 
             kcode=$(curl -s -m 15 -o /dev/null -w '%{http_code}' http://127.0.0.1/)
             echo "自检 / （KEHU 占位页，免密） → HTTP $kcode"
