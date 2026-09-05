@@ -5,11 +5,12 @@ name: Deploy to Aliyun ECS
 # 原先只列 main/master 会导致推送后部署从不触发。
 on:
   push:
-    branches: [main, master, claude/prototype-development-f9gwtq]
+    branches: [main, master, claude/prototype-development-f9gwtq, claude/deploy-to-server-w42fje]
     paths:
       - 'index.html'
       - 'styles.css'
       - 'app.js'
+      - 'travel/**'
       - '.github/workflows/deploy.yml'
   workflow_dispatch: {}
 
@@ -43,7 +44,8 @@ jobs:
 
       # 根路径占位页（KEHU Platform）：/var/www/kehu-platform/index.html，未来 KEHU 在此开发
       # 先确保目录存在（/var/www 归 root 所有，ubuntu 用户无写权限，SCP 无法自建目录）
-      - name: Prepare KEHU platform dir (SSH)
+      # 顺带建好旅行手册目录 /var/www/travel-gorgia（挂在 /personal/travel/gorgia/）
+      - name: Prepare static site dirs (SSH)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.ECS_HOST }}
@@ -51,8 +53,8 @@ jobs:
           key: ${{ secrets.ECS_SSH_KEY }}
           port: ${{ secrets.ECS_PORT || '22' }}
           script: |
-            sudo mkdir -p /var/www/kehu-platform
-            sudo chown $USER:$USER /var/www/kehu-platform
+            sudo mkdir -p /var/www/kehu-platform /var/www/travel-gorgia
+            sudo chown $USER:$USER /var/www/kehu-platform /var/www/travel-gorgia
 
       - name: Copy KEHU platform placeholder (SCP)
         uses: appleboy/scp-action@v0.1.7
@@ -67,6 +69,20 @@ jobs:
           # 剥掉 source 的 kehu-platform/ 层级：否则文件会被传成
           # /var/www/kehu-platform/kehu-platform/index.html，nginx root 找不到 index.html → 403
           strip_components: 1
+
+      # 格鲁吉亚旅居手册（单文件静态页，图片走 Wikimedia 外链，无本地依赖）
+      - name: Copy Georgia travel handbook (SCP)
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.ECS_HOST }}
+          username: ${{ secrets.ECS_USERNAME }}
+          key: ${{ secrets.ECS_SSH_KEY }}
+          port: ${{ secrets.ECS_PORT || '22' }}
+          source: "travel/gorgia/index.html"
+          target: "/var/www/travel-gorgia"
+          overwrite: true
+          # 剥掉 travel/gorgia/ 两层，文件落成 /var/www/travel-gorgia/index.html
+          strip_components: 2
 
       - name: Configure password gate, nginx & reload (SSH)
         uses: appleboy/ssh-action@v1.0.3
@@ -160,6 +176,22 @@ jobs:
                 # 无尾斜杠访问（/personal/investmentmgm）→ 301 补斜杠，避免相对资源路径解析错乱
                 location = /personal/investmentmgm {
                     return 301 /personal/investmentmgm/;
+                }
+
+                # 子路径入口：/personal/travel/gorgia/ → 格鲁吉亚旅居手册
+                # 两条 rewrite 都落到具体文件路径，不留目录形态的 $uri，
+                # 否则 try_files 的目录测试会内部跳转回 location / 的 KEHU 占位页。
+                location ^~ /personal/travel/gorgia/ {
+                    root /var/www;
+                    rewrite ^/personal/travel/gorgia/?$ /travel-gorgia/index.html break;
+                    rewrite ^/personal/travel/gorgia/(.+)$ /travel-gorgia/$1 break;
+                    try_files $uri /travel-gorgia/index.html;
+                    add_header Cache-Control "no-store, must-revalidate";
+                    expires -1;
+                }
+                # 无尾斜杠访问（/personal/travel/gorgia）→ 301 补斜杠
+                location = /personal/travel/gorgia {
+                    return 301 /personal/travel/gorgia/;
                 }
 
                 # 行情代理（主）：浏览器同源 /api/quote?code=sh600000 → 腾讯行情
