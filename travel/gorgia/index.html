@@ -2,1199 +2,969 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0E3A4B">
 <title>格鲁吉亚旅居手册 · 9.18 – 10.4</title>
 <style>
 :root{
-  --paper:#F4F5F2;
+  --paper:#F6F7F4;
   --card:#FFFFFF;
-  --ink:#1C2B2A;
-  --ink-soft:#4A5A58;
-  --lapis:#0F3B4C;
-  --lapis-tint:#E6EDF0;
+  --ink:#16211F;
+  --ink-soft:#5A6866;
+  --ink-faint:#8E9A97;
+  --lapis:#0E3A4B;
+  --lapis-lit:#175A72;
+  --lapis-tint:#E7EEF1;
   --wine:#7A2233;
-  --wine-tint:#F5E9EB;
-  --gold:#B0842B;
-  --gold-tint:#F7F1E2;
-  --rule:#DCDFD8;
-  --serif:"Noto Serif SC","Source Han Serif SC","Songti SC","STSong","SimSun",Georgia,serif;
+  --wine-tint:#F6EAEC;
+  --gold:#A97C22;
+  --gold-tint:#F8F2E4;
+  --sand:#EFE9DC;
+  --rule:#E3E6E0;
+  --rule-soft:#EFF1EC;
+  --shadow-sm:0 1px 2px rgba(20,35,40,.05),0 2px 8px rgba(20,35,40,.04);
+  --shadow-md:0 2px 6px rgba(20,35,40,.06),0 8px 24px rgba(20,35,40,.07);
+  --serif:"Noto Serif SC","Source Han Serif SC","Songti SC","STSong",Georgia,serif;
   --sans:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans SC",sans-serif;
+  --r:10px;
 }
 *{box-sizing:border-box}
-html{scroll-behavior:smooth}
+html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto} *{animation:none!important;transition:none!important}}
 body{
   margin:0;background:var(--paper);color:var(--ink);
-  font-family:var(--sans);font-size:16px;line-height:1.75;
-  -webkit-font-smoothing:antialiased;
+  font-family:var(--sans);font-size:16px;line-height:1.7;
+  -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;
 }
-@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+.wrap{max-width:860px;margin:0 auto;padding:0 18px}
 
-.wrap{max-width:760px;margin:0 auto;padding:0 20px}
-
-/* ---------- nav ---------- */
-nav{
-  position:sticky;top:0;z-index:40;background:rgba(244,245,242,.94);
-  backdrop-filter:saturate(1.4) blur(8px);border-bottom:1px solid var(--rule);
+/* ============ hero ============ */
+.hero{
+  background:linear-gradient(160deg,var(--lapis) 0%,#0B2E3C 55%,#0A2833 100%);
+  color:#EAF1F3;padding:38px 0 30px;position:relative;overflow:hidden;
 }
-nav ul{display:flex;gap:0;list-style:none;margin:0 auto;padding:0;max-width:760px;overflow-x:auto;scrollbar-width:none}
-nav ul::-webkit-scrollbar{display:none}
-nav a{
-  display:block;padding:13px 11px;white-space:nowrap;text-decoration:none;
-  color:var(--ink-soft);font-size:14px;letter-spacing:.02em;
+.hero::after{
+  content:"";position:absolute;right:-90px;top:-90px;width:280px;height:280px;
+  border-radius:50%;background:radial-gradient(circle,rgba(169,124,34,.20),transparent 68%);
 }
-nav a:hover,nav a:focus-visible{color:var(--lapis);background:var(--lapis-tint)}
-
-/* ---------- hero ---------- */
-.hero{background:var(--lapis);color:#EFF3F4;padding:52px 0 0;position:relative}
 .hero h1{
-  font-family:var(--serif);font-weight:600;font-size:38px;line-height:1.25;
-  margin:0 0 14px;letter-spacing:.01em;
+  font-family:var(--serif);font-weight:600;font-size:31px;line-height:1.25;
+  margin:0 0 8px;letter-spacing:.01em;position:relative;
 }
-.hero .dates{font-size:15px;color:#A9C2CB;margin:0 0 26px}
-.spine{display:flex;gap:2px;margin-bottom:0;padding-bottom:30px;overflow-x:auto;scrollbar-width:none}
-.spine::-webkit-scrollbar{display:none}
-.spine div{flex:1;min-width:116px;padding:12px 10px;background:rgba(255,255,255,.07);border-top:2px solid var(--gold)}
-.spine div.soft{border-top-color:#6E8A94;opacity:.65}
-.spine b{display:block;font-size:13px;color:#DCE7EA;font-weight:600}
-.spine span{display:block;font-size:12px;color:#93AEB8;margin-top:3px}
-.herofig{margin:0}
-.herofig img{display:block;width:100%;height:230px;object-fit:cover}
+.hero .sub{font-size:14px;color:#9DBAC4;margin:0 0 22px;position:relative}
+.stats{display:flex;gap:26px;flex-wrap:wrap;position:relative}
+.stats div b{display:block;font-family:var(--serif);font-size:21px;color:#F0E4C8;font-weight:600;line-height:1.2}
+.stats div span{display:block;font-size:12px;color:#8FAEB9;margin-top:2px;letter-spacing:.04em}
 
-/* ---------- structure ---------- */
-section{padding:46px 0 6px}
-section + section{border-top:1px solid var(--rule)}
-h2{
-  font-family:var(--serif);font-size:25px;font-weight:600;line-height:1.4;
-  margin:0 0 6px;color:var(--lapis);
+/* ============ calendar ============ */
+.calwrap{margin:-16px auto 0;position:relative;z-index:5}
+.cal{
+  background:var(--card);border-radius:14px;box-shadow:var(--shadow-md);
+  padding:18px 16px 14px;
 }
-.lede{color:var(--ink-soft);margin:0 0 26px;font-size:15px}
-h3{font-family:var(--serif);font-size:18px;font-weight:600;margin:30px 0 8px}
-h4{font-family:var(--serif);font-size:17px;font-weight:600;margin:26px 0 8px}
-p{margin:0 0 14px}
-a{color:var(--lapis)}
-strong{font-weight:600}
-em{font-style:normal;color:var(--wine);font-weight:600}
-
-ul.plain{margin:0 0 16px;padding-left:20px}
-ul.plain li{margin-bottom:7px}
-
-/* ---------- 地点链接 ---------- */
-a.pin{color:var(--lapis);text-decoration:none;border-bottom:1px dotted #9BB3BC;white-space:nowrap}
-a.pin::before{content:"◈";color:var(--gold);font-size:10px;margin-right:3px;vertical-align:1px}
-a.pin:hover{background:var(--lapis-tint)}
-
-/* ---------- 动线 ---------- */
-.route{
-  background:#fff;border:1px solid var(--rule);border-left:3px solid var(--lapis);
-  border-radius:0 4px 4px 0;padding:13px 15px;margin:0 0 18px;font-size:14px;line-height:2;
+.cal .mon{
+  display:flex;align-items:baseline;gap:10px;margin:0 4px 12px;
 }
-.route b{font-family:var(--serif);display:block;font-size:13px;color:var(--lapis);margin-bottom:2px;letter-spacing:.03em}
-.route .hop{color:var(--gold);font-weight:600;font-size:12px;padding:0 5px;white-space:nowrap}
-
-/* ---------- urgent ---------- */
-.urgent{background:var(--wine-tint);border-left:4px solid var(--wine);padding:20px 22px;margin:0 0 26px;border-radius:0 4px 4px 0}
-.urgent h3,.urgent h4{margin-top:0;color:var(--wine)}
-.urgent p:last-child{margin-bottom:0}
-
-/* ---------- checklist ---------- */
-.check{list-style:none;margin:0;padding:0}
-.check li{display:flex;gap:12px;padding:12px 0;border-bottom:1px solid var(--rule);align-items:flex-start}
-.check li:last-child{border-bottom:none}
-.check .box{
-  flex:0 0 20px;width:20px;height:20px;margin-top:4px;border:1.5px solid #A9B2AF;border-radius:3px;
-  background:#fff;cursor:pointer;position:relative;
+.cal .mon b{font-family:var(--serif);font-size:16px;color:var(--lapis);font-weight:600}
+.cal .mon span{font-size:12px;color:var(--ink-faint)}
+.dow{display:grid;grid-template-columns:repeat(7,1fr);gap:5px;margin-bottom:6px}
+.dow i{
+  font-style:normal;text-align:center;font-size:11px;color:var(--ink-faint);
+  letter-spacing:.08em;padding-bottom:2px;
 }
-.check .box[aria-checked="true"]{background:var(--lapis);border-color:var(--lapis)}
-.check .box[aria-checked="true"]::after{
-  content:"";position:absolute;left:6px;top:2px;width:5px;height:10px;
-  border:solid #fff;border-width:0 2px 2px 0;transform:rotate(42deg);
+.dow i.we{color:var(--wine)}
+.grid{display:grid;grid-template-columns:repeat(7,1fr);gap:5px}
+.cell{
+  border:0;background:var(--rule-soft);border-radius:9px;padding:7px 4px 8px;
+  cursor:pointer;text-align:center;font-family:inherit;color:var(--ink);
+  transition:transform .14s ease,box-shadow .14s ease,background .14s ease;
+  display:flex;flex-direction:column;align-items:center;gap:2px;min-height:66px;
+  position:relative;overflow:hidden;
 }
-.check .box:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
-.check .t{flex:1}
-.check .t b{display:block;font-weight:600}
-.check .t span{display:block;font-size:14px;color:var(--ink-soft);line-height:1.65}
-
-/* ---------- flights ---------- */
-.flight{border:1px solid var(--rule);background:var(--card);border-radius:4px;padding:16px 18px;margin:0 0 12px}
-.flight .no{font-size:13px;color:var(--gold);font-weight:600;font-family:var(--serif);margin-bottom:8px}
-.flight .leg{display:flex;gap:12px;align-items:baseline;flex-wrap:wrap}
-.flight .leg b{font-family:var(--serif);font-size:19px;font-weight:600;letter-spacing:.01em}
-.flight .leg span{color:var(--ink-soft);font-size:15px}
-.flight .arrow{color:var(--gold);font-weight:600}
-.flight .meta{font-size:13px;color:var(--ink-soft);margin-top:8px;line-height:1.6}
-
-/* ---------- day ---------- */
-.day{padding:26px 0;border-bottom:1px solid var(--rule)}
-.day:last-of-type{border-bottom:none}
-.daytag{
-  display:inline-block;font-family:var(--serif);font-size:15px;font-weight:600;
-  color:#fff;background:var(--lapis);padding:2px 11px;border-radius:2px;margin-bottom:10px;
+.cell.void{background:transparent;cursor:default;pointer-events:none}
+.cell:hover{transform:translateY(-2px);box-shadow:var(--shadow-sm);background:#fff}
+.cell:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+.cell .d{font-family:var(--serif);font-size:17px;font-weight:600;line-height:1.1}
+.cell .lab{
+  font-size:10px;line-height:1.25;color:var(--ink-soft);
+  max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 1px;
 }
-.daytag.rest{background:var(--gold)}
-.daytag.move{background:var(--wine)}
-.day h3{margin:0 0 10px;font-size:20px}
-.slot{display:flex;gap:14px;margin-bottom:11px}
-.slot .when{
-  flex:0 0 96px;font-size:13px;color:var(--gold);font-weight:600;padding-top:3px;
-  font-family:var(--serif);letter-spacing:-.01em;
+.cell .bar{position:absolute;left:0;right:0;top:0;height:3px}
+.cell.t-move  .bar{background:var(--wine)}
+.cell.t-play  .bar{background:var(--lapis-lit)}
+.cell.t-work  .bar{background:var(--gold)}
+.cell.t-soft  .bar{background:#A9B6B3}
+.cell.on{background:var(--lapis);color:#fff;box-shadow:var(--shadow-md)}
+.cell.on .lab{color:#B9D2DA}
+.cell.on .bar{height:0}
+.legend{display:flex;gap:14px;flex-wrap:wrap;margin:13px 4px 2px;font-size:11.5px;color:var(--ink-faint)}
+.legend s{text-decoration:none;display:inline-flex;align-items:center;gap:5px}
+.legend em{width:9px;height:9px;border-radius:2px;display:inline-block}
+@media(max-width:560px){
+  .cal{padding:14px 10px 12px;border-radius:12px}
+  .grid,.dow{gap:4px}
+  .cell{min-height:58px;padding:6px 2px 7px}
+  .cell .d{font-size:15px}
+  .cell .lab{font-size:9px}
 }
-.slot .what{flex:1;margin:0}
-@media(max-width:520px){
-  .slot{gap:10px}
-  .slot .when{flex:0 0 76px;font-size:12px}
-  .route{line-height:2.1}
-}
-
-/* ---------- 滑动相册 ---------- */
-.gal{margin:20px 0 6px}
-.gal .strip{
-  display:flex;gap:10px;overflow-x:auto;scroll-snap-type:x mandatory;
-  padding-bottom:10px;-webkit-overflow-scrolling:touch;
-  scrollbar-width:thin;scrollbar-color:#C6CCC5 transparent;
-}
-.gal .strip::-webkit-scrollbar{height:6px}
-.gal .strip::-webkit-scrollbar-thumb{background:#C6CCC5;border-radius:3px}
-.gal .strip figure{flex:0 0 88%;max-width:560px;scroll-snap-align:center;margin:0}
-@media(min-width:620px){.gal .strip figure{flex:0 0 66%}}
-.gal .strip img{display:block;width:100%;height:236px;object-fit:cover;border-radius:3px;background:var(--rule)}
-.gal .strip figcaption{font-size:13px;color:var(--ink-soft);margin-top:7px;line-height:1.6}
-.gal .hint{font-size:12px;color:#8A9793;margin:0}
-.gal.single .strip figure{flex:0 0 100%;max-width:none}
-.gal.single .hint{display:none}
-
-/* ---------- food ---------- */
-.food{background:var(--gold-tint);border-radius:4px;padding:14px 16px;margin:16px 0 4px;font-size:15px}
-.food b.h{display:block;font-family:var(--serif);font-size:15px;color:#7A5B18;margin-bottom:6px}
-.food ul{margin:0;padding-left:18px}
-.food li{margin-bottom:5px;line-height:1.65}
-.food li:last-child{margin-bottom:0}
-.food .price{color:var(--ink-soft);font-size:13px}
-
-/* ---------- 体验卡 ---------- */
-.xp{background:#fff;border:1px solid var(--rule);border-radius:4px;padding:14px 16px;margin:16px 0}
-.xp.pick{border-color:var(--gold);border-width:1.5px}
-.xp .h{font-family:var(--serif);font-size:16px;font-weight:600;margin:0 0 3px;line-height:1.45}
-.xp .star{color:var(--gold);font-weight:600;font-size:13px;white-space:nowrap}
-.xp .why{margin:8px 0 0;font-size:14px;line-height:1.7}
-.xp .why:first-of-type{margin-top:6px}
-.xp .kv{font-size:13px;color:var(--ink-soft);margin:6px 0 0}
-
-/* ---------- figures ---------- */
-figure{margin:22px 0}
-figure img{display:block;width:100%;height:auto;border-radius:3px;background:var(--rule)}
-figcaption{font-size:13px;color:var(--ink-soft);margin-top:8px;line-height:1.6}
-
-/* ---------- misc ---------- */
-.note{background:var(--lapis-tint);padding:16px 18px;border-radius:4px;margin:18px 0;font-size:15px}
-.note p:last-child{margin-bottom:0}
-.opt{border:1px solid var(--rule);background:var(--card);border-radius:4px;padding:18px 20px;margin:16px 0}
-.opt h4{margin:0 0 8px}
-.opt.pick{border-color:var(--gold);border-width:1.5px}
-.tag{display:inline-block;font-size:12px;background:var(--gold);color:#fff;padding:1px 8px;border-radius:2px;margin-left:8px;vertical-align:2px}
-.tag.warn{background:var(--wine)}
-.tag.cool{background:var(--lapis)}
-
-table{width:100%;border-collapse:collapse;margin:18px 0;font-size:15px}
-th,td{text-align:left;padding:11px 10px;border-bottom:1px solid var(--rule);vertical-align:top}
-th{color:var(--lapis);font-weight:600;font-size:14px}
-td:first-child{white-space:nowrap;color:var(--ink-soft)}
-.wide{overflow-x:auto}
-.wide table{min-width:540px}
-
-/* ---------- 手绘地图 ---------- */
-.mapbox{background:#fff;border:1px solid var(--rule);border-radius:4px;padding:14px;margin:20px 0}
-.mapbox svg{display:block;width:100%;height:auto}
-.mapbox .cap{font-size:12px;color:var(--ink-soft);margin:8px 2px 0;line-height:1.6}
-
-/* ---------- 链接库 ---------- */
-.links{margin:8px 0 20px}
-.links a.row{
-  display:flex;gap:12px;padding:12px 2px;border-bottom:1px solid var(--rule);
-  text-decoration:none;color:var(--ink);align-items:baseline;
-}
-.links a.row:hover{background:var(--lapis-tint)}
-.links a.row b{flex:0 0 140px;font-weight:600;font-size:15px;color:var(--lapis)}
-.links a.row span{flex:1;font-size:13px;color:var(--ink-soft);line-height:1.6}
-@media(max-width:520px){
-  .links a.row{flex-direction:column;gap:2px}
-  .links a.row b{flex:none}
-}
-
-footer{background:var(--lapis);color:#9FB8C1;padding:34px 0;margin-top:50px;font-size:13px;line-height:1.7}
-footer a{color:#CFE0E6}
-.totop{display:inline-block;margin-top:14px;color:#CFE0E6;text-decoration:none;font-size:13px}
-
-/* ================= 手机端优化 ================= */
-html{-webkit-text-size-adjust:100%}
-body{overflow-x:hidden}
-a,button,.check .box{-webkit-tap-highlight-color:rgba(15,59,76,.12)}
-
-/* sticky 导航会遮住锚点标题，给所有跳转目标留出让位 */
-section,.day,header{scroll-margin-top:54px}
-
-/* 导航右侧渐变，提示还能往右滑 */
-nav{position:sticky;overflow:hidden}
-nav::after{
-  content:"";position:absolute;right:0;top:0;bottom:0;width:26px;pointer-events:none;
-  background:linear-gradient(90deg,rgba(244,245,242,0),rgba(244,245,242,.96));
-}
-
-/* 手绘地图：窄屏下不缩放，保持最小宽度横向滑动，文字才读得清 */
-.mapbox .svgwrap{overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:thin}
-.mapbox .svgwrap svg{min-width:600px}
-
-/* 触摸设备上把相册滚动条藏起来，靠手势滑 */
-@media (hover:none){
-  .gal .strip{scrollbar-width:none}
-  .gal .strip::-webkit-scrollbar{display:none}
-}
-
-@media(max-width:600px){
-  .wrap{padding:0 16px}
-  section{padding:36px 0 6px}
-  body{font-size:16px;line-height:1.72}
-
-  .hero{padding-top:36px}
-  .hero h1{font-size:29px;line-height:1.3;margin-bottom:10px}
-  .hero .dates{font-size:14px;line-height:1.7;margin-bottom:20px}
-  .hero .spine div{min-width:104px;padding:10px 9px}
-  .herofig img{height:180px}
-
-  h2{font-size:22px}
-  h3{font-size:17px;margin-top:26px}
-  h4{font-size:16px}
-  .lede{font-size:14px;margin-bottom:20px}
-
-  nav a{padding:12px 10px;font-size:13px}
-
-  /* 动线：窄屏下按行断开，别挤成一坨 */
-  .route{padding:12px 13px;font-size:13.5px;line-height:2.05}
-  .route .hop{padding:0 3px;font-size:11.5px}
-
-  .slot{margin-bottom:13px}
-  .day{padding:22px 0}
-  .day h3{font-size:18px}
-
-  .gal .strip figure{flex:0 0 90%}
-  .gal .strip img{height:198px}
-  .gal .strip figcaption{font-size:12.5px}
-
-  .food,.note,.xp{padding:13px 14px;font-size:14.5px}
-  .urgent{padding:16px 17px}
-  .opt{padding:15px 16px}
-  .flight{padding:14px 15px}
-  .flight .leg b{font-size:17px}
-  .flight .leg span{font-size:14px}
-
-  table{font-size:14px}
-  th,td{padding:9px 8px}
-  .wide table{min-width:480px}
-  /* 表格能横滑时给个提示，免得以为内容被截断了 */
-  .wide::after{
-    content:"← 左右滑动看完整表格 →";display:block;
-    font-size:11.5px;color:#8A9793;margin:-10px 0 14px;
-  }
-
-  .mapbox{padding:10px}
-  .mapbox .cap{font-size:11.5px}
-
-  .links a.row b{font-size:14.5px}
-  .links a.row span{font-size:12.5px}
-
-  footer{padding:28px 0;font-size:12.5px}
-}
-
 @media(max-width:380px){
-  .hero h1{font-size:26px}
-  .slot .when{flex:0 0 70px;font-size:11.5px}
-  .gal .strip img{height:176px}
+  .cell .lab{display:none}
+  .cell{min-height:46px}
 }
 
-/* ---------- booking cards ---------- */
-.bk{border:1px solid var(--rule);background:var(--card);border-radius:5px;padding:15px 17px;margin:0 0 11px;border-left:3px solid var(--gold)}
-.bk.todo{border-left-color:#C9CFC8;background:#FAFAF8}
-.bk .hd{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:9px}
-.bk .hd b{font-family:var(--serif);font-size:16px;color:var(--lapis);font-weight:600}
-.bk .hd .when{font-size:12.5px;color:var(--gold);font-weight:600;white-space:nowrap;font-family:var(--serif)}
-.bk .hd .when.todo{color:#8A9793}
-.bk dl{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;margin:0;font-size:14px;line-height:1.6}
-.bk dt{color:var(--ink-soft);white-space:nowrap}
-.bk dd{margin:0}
-.bk .num{font-variant-numeric:tabular-nums;letter-spacing:.01em}
-.bk .note2{font-size:13px;color:var(--ink-soft);margin:9px 0 0;line-height:1.6;padding-top:9px;border-top:1px solid var(--rule)}
+/* ============ day panel ============ */
+.panel{margin:22px 0 0;animation:fade .26s ease}
+@keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.phead{
+  background:var(--card);border-radius:var(--r);padding:16px 18px;margin-bottom:12px;
+  box-shadow:var(--shadow-sm);border-left:4px solid var(--lapis-lit);
+}
+.phead.t-move{border-left-color:var(--wine)}
+.phead.t-work{border-left-color:var(--gold)}
+.phead.t-soft{border-left-color:#A9B6B3}
+.phead .top{display:flex;align-items:baseline;gap:11px;flex-wrap:wrap;margin-bottom:5px}
+.phead .dt{font-family:var(--serif);font-size:25px;font-weight:600;color:var(--lapis);line-height:1.1}
+.phead .dw{font-size:13px;color:var(--ink-faint)}
+.phead .city{
+  font-size:12px;background:var(--lapis-tint);color:var(--lapis);
+  padding:2px 9px;border-radius:20px;font-weight:600;
+}
+.phead h2{font-family:var(--serif);font-size:18px;font-weight:600;margin:0 0 3px;line-height:1.4}
+.phead p{margin:0;font-size:14px;color:var(--ink-soft);line-height:1.6}
+.nav2{display:flex;gap:8px;margin:14px 0 0}
+.nav2 button{
+  flex:1;border:1px solid var(--rule);background:var(--card);border-radius:8px;
+  padding:9px 10px;cursor:pointer;font-family:inherit;font-size:13px;color:var(--ink-soft);
+  transition:background .14s,color .14s;
+}
+.nav2 button:hover:not(:disabled){background:var(--lapis-tint);color:var(--lapis)}
+.nav2 button:disabled{opacity:.35;cursor:default}
+
+.blk{background:var(--card);border-radius:var(--r);padding:15px 17px;margin-bottom:11px;box-shadow:var(--shadow-sm)}
+.blk > h3{
+  font-family:var(--serif);font-size:13px;font-weight:600;color:var(--gold);
+  margin:0 0 11px;letter-spacing:.09em;text-transform:uppercase;
+  display:flex;align-items:center;gap:7px;
+}
+.blk > h3::after{content:"";flex:1;height:1px;background:var(--rule-soft)}
+
+/* transport + stay rows */
+.row{display:flex;gap:12px;padding:9px 0;border-bottom:1px solid var(--rule-soft)}
+.row:last-child{border-bottom:0;padding-bottom:0}
+.row:first-of-type{padding-top:0}
+.row .ic{
+  flex:0 0 30px;height:30px;border-radius:7px;background:var(--lapis-tint);
+  display:flex;align-items:center;justify-content:center;font-size:15px;
+}
+.row .bd{flex:1;min-width:0}
+.row .bd b{display:block;font-size:15px;font-weight:600;line-height:1.45}
+.row .bd span{display:block;font-size:13px;color:var(--ink-soft);line-height:1.6;margin-top:1px}
+.row .bd .meta{font-size:12px;color:var(--ink-faint);margin-top:3px;font-variant-numeric:tabular-nums}
+.tag{
+  display:inline-block;font-size:11px;padding:1px 7px;border-radius:4px;
+  margin-left:6px;vertical-align:1.5px;font-weight:600;
+}
+.tag.ok{background:var(--gold-tint);color:#7A5B18}
+.tag.wait{background:var(--rule-soft);color:var(--ink-faint)}
+.tag.hot{background:var(--wine-tint);color:var(--wine)}
+
+/* timeline */
+.tl{position:relative;padding-left:2px}
+.tl .it{display:flex;gap:13px;padding-bottom:14px;position:relative}
+.tl .it:last-child{padding-bottom:0}
+.tl .it::before{
+  content:"";position:absolute;left:33px;top:20px;bottom:-2px;width:1px;background:var(--rule);
+}
+.tl .it:last-child::before{display:none}
+.tl .tm{
+  flex:0 0 68px;font-family:var(--serif);font-size:12.5px;font-weight:600;
+  color:var(--gold);padding-top:2px;text-align:right;font-variant-numeric:tabular-nums;
+}
+.tl .dot{
+  flex:0 0 9px;height:9px;border-radius:50%;background:var(--card);
+  border:2px solid var(--lapis-lit);margin-top:6px;position:relative;z-index:2;
+}
+.tl .it.key .dot{background:var(--wine);border-color:var(--wine)}
+.tl .tx{flex:1;font-size:14.5px;line-height:1.68;padding-top:0}
+.tl .tx b{font-weight:600}
 @media(max-width:520px){
-  .bk dl{grid-template-columns:1fr;gap:1px}
-  .bk dt{margin-top:6px;font-size:12.5px}
+  .tl .tm{flex:0 0 54px;font-size:11.5px}
+  .tl .it::before{left:25px}
+}
+
+/* food */
+.food li{margin-bottom:9px;font-size:14px;line-height:1.65;list-style:none;padding-left:15px;position:relative}
+.food li:last-child{margin-bottom:0}
+.food li::before{content:"";position:absolute;left:2px;top:9px;width:4px;height:4px;border-radius:50%;background:var(--gold)}
+.food ul{margin:0;padding:0}
+.food b{font-weight:600}
+.food .p{color:var(--ink-faint);font-size:12.5px}
+
+/* note */
+.tip{background:var(--lapis-tint);border-radius:8px;padding:12px 14px;font-size:14px;line-height:1.65;margin-top:10px}
+.tip:first-child{margin-top:0}
+.tip.warn{background:var(--wine-tint)}
+.tip b{font-weight:600}
+.tip + .tip{margin-top:8px}
+
+/* photos */
+.shots{display:flex;gap:9px;overflow-x:auto;scroll-snap-type:x mandatory;padding-bottom:4px;margin:0 -17px;padding-left:17px;padding-right:17px}
+.shots::-webkit-scrollbar{height:5px}
+.shots::-webkit-scrollbar-thumb{background:#CFD5CE;border-radius:3px}
+.shots figure{flex:0 0 78%;max-width:400px;scroll-snap-align:center;margin:0}
+@media(min-width:620px){.shots figure{flex:0 0 47%}}
+.shots img{display:block;width:100%;height:180px;object-fit:cover;border-radius:8px;background:var(--rule)}
+.shots figcaption{font-size:12px;color:var(--ink-faint);margin-top:6px;line-height:1.55}
+
+/* ============ reference (collapsible) ============ */
+.ref{margin:30px 0 0}
+.ref h2{font-family:var(--serif);font-size:19px;color:var(--lapis);margin:0 0 12px;font-weight:600}
+details.acc{
+  background:var(--card);border-radius:var(--r);margin-bottom:9px;
+  box-shadow:var(--shadow-sm);overflow:hidden;
+}
+details.acc > summary{
+  padding:14px 17px;cursor:pointer;font-family:var(--serif);font-size:15.5px;
+  font-weight:600;color:var(--lapis);list-style:none;display:flex;
+  align-items:center;justify-content:space-between;gap:10px;
+}
+details.acc > summary::-webkit-details-marker{display:none}
+details.acc > summary::after{
+  content:"";width:7px;height:7px;border-right:1.5px solid var(--ink-faint);
+  border-bottom:1.5px solid var(--ink-faint);transform:rotate(45deg);
+  transition:transform .2s ease;flex:0 0 auto;margin-right:2px;
+}
+details.acc[open] > summary::after{transform:rotate(-135deg)}
+details.acc > summary:hover{background:var(--rule-soft)}
+.acc .body{padding:2px 17px 16px;font-size:14.5px;line-height:1.7}
+.acc .body h4{font-family:var(--serif);font-size:14px;margin:16px 0 7px;color:var(--lapis)}
+.acc .body h4:first-child{margin-top:4px}
+.acc .body p{margin:0 0 10px}
+.acc .body ul{margin:0 0 10px;padding-left:19px}
+.acc .body li{margin-bottom:6px}
+.acc .body a{color:var(--lapis-lit)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 13px;font-size:13.5px;margin:0 0 10px}
+.kv dt{color:var(--ink-faint);white-space:nowrap}
+.kv dd{margin:0}
+.tbl{width:100%;border-collapse:collapse;font-size:13.5px;margin:0 0 12px}
+.tbl th,.tbl td{text-align:left;padding:8px 9px;border-bottom:1px solid var(--rule-soft);vertical-align:top}
+.tbl th{color:var(--lapis);font-weight:600;font-size:12.5px}
+.tbl td:first-child{white-space:nowrap;color:var(--ink-soft)}
+.lnk{display:block;padding:10px 12px;border-radius:7px;text-decoration:none;border:1px solid var(--rule-soft);margin-bottom:6px;transition:background .14s}
+.lnk:hover{background:var(--lapis-tint)}
+.lnk b{display:block;font-size:14px;color:var(--lapis);font-weight:600}
+.lnk span{display:block;font-size:12.5px;color:var(--ink-soft);line-height:1.55;margin-top:1px}
+mark{background:var(--gold-tint);color:inherit;padding:0 3px;border-radius:2px}
+
+footer{background:var(--lapis);color:#93AEB8;padding:26px 0;margin-top:36px;font-size:12.5px;line-height:1.7}
+footer a{color:#C6DAE1}
+@media(max-width:560px){
+  .hero h1{font-size:25px}
+  .stats{gap:18px}
+  .stats div b{font-size:18px}
+  .phead .dt{font-size:22px}
 }
 </style>
 </head>
 <body>
 
-<nav>
-  <ul class="wrap" style="padding:0 8px">
-    <li><a href="#book">已订</a></li>
-    <li><a href="#flights">航班</a></li>
-    <li><a href="#before">出发前</a></li>
-    <li><a href="#tbilisi">第比利斯</a></li>
-    <li><a href="#batumi">巴统</a></li>
-    <li><a href="#yerevan">埃里温</a></li>
-    <li><a href="#backtb">9.30–10.1</a></li>
-    <li><a href="#tashkent">塔什干</a></li>
-    <li><a href="#hike">徒步</a></li>
-    <li><a href="#urls">网址</a></li>
-    <li><a href="#ref">速查</a></li>
-  </ul>
-</nav>
-
 <header class="hero">
   <div class="wrap">
     <h1>格鲁吉亚旅居手册</h1>
-    <p class="dates">9月18日 周五 出发 &nbsp;→&nbsp; 10月4日 周日 清晨落地浦东 &nbsp;·&nbsp; 第比利斯 / 巴统 / 埃里温 / 塔什干</p>
-    <div class="spine">
-      <div><b>9.18–9.23</b><span>第比利斯旅居</span></div>
-      <div><b>9.23–9.26</b><span>巴统 · 火车去，包车回</span></div>
-      <div class="soft"><b>9.27–9.30</b><span>埃里温（朋友安排）</span></div>
-      <div><b>9.30–10.1</b><span>回第比利斯收尾</span></div>
-      <div><b>10.1–10.3</b><span>塔什干 / 撒马尔罕</span></div>
+    <p class="sub">2026年9月18日 – 10月4日 · 第比利斯 / 巴统 / 埃里温 / 塔什干 · 2 人</p>
+    <div class="stats">
+      <div><b>17</b><span>天</span></div>
+      <div><b>4</b><span>座城市</span></div>
+      <div><b>3</b><span>个国家</span></div>
+      <div><b>3</b><span>段航班</span></div>
     </div>
   </div>
-  <figure class="herofig">
-    <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Gergeti_Trinity_Church_14th_century_in_Georgia.jpg?width=1400" alt="卡兹别吉的格尔盖蒂三一教堂">
-  </figure>
 </header>
 
-<!-- ============ 已订 ============ -->
-<section id="book">
-<div class="wrap">
-  <h2>已经订好的</h2>
-  <p class="lede">出门前把这一节截图存进相册，落地没网也能看。</p>
-
-  <h3>住宿</h3>
-
-  <div class="bk">
-    <div class="hd"><b>巴统希尔顿</b><span class="when">9.23 周三 – 9.24 周四 · 1 晚</span></div>
-    <dl>
-      <dt>地址</dt><dd>40 Rustaveli Avenue, Batumi 6010</dd>
-      <dt>房型</dt><dd>带阳台和海景的特大床房</dd>
-      <dt>入住</dt><dd>15:00 后 &nbsp;·&nbsp; 退房 12:00 前</dd>
-      <dt>确认号</dt><dd class="num">3522841428</dd>
-      <dt>总价</dt><dd>$179.95</dd>
-    </dl>
-    <p class="note2">火车 12:00 前后到，先去酒店寄存行李，15:00 再回来办入住，中间不耽误下午的植物园。</p>
-  </div>
-
-  <div class="bk">
-    <div class="hd"><b>巴统民宿</b><span class="when">9.24 周四 – 9.26 周六 · 2 晚</span></div>
-    <dl>
-      <dt>地址</dt><dd>42 Rustaveli Avenue, Batumi, Adjara 6010</dd>
-      <dt>备注</dt><dd>就在希尔顿隔壁，9.24 中午换过去，拖箱子走两步的事</dd>
-    </dl>
-    <p class="note2">9.25 和 9.26 两天的包车都以这里为上下车点，司机订单里填的就是这个地址。</p>
-  </div>
-
-  <div class="bk">
-    <div class="hd"><b>Monograph Freedom Square</b><span class="when">9.26 周六 – 9.27 周日 · 1 晚</span></div>
-    <dl>
-      <dt>中文名</dt><dd>自由广场专题酒店</dd>
-      <dt>地址</dt><dd>5/7 Aleksandr Pushkin St, Dzveli Tbilisi, Tbilisi 0105</dd>
-      <dt>入住</dt><dd>15:00 后 &nbsp;·&nbsp; 退房 12:00 前</dd>
-      <dt>订单号</dt><dd class="num">1128150691023697</dd>
-      <dt>设施</dt><dd>24 小时前台、行李寄存、健身室</dd>
-    </dl>
-    <p class="note2"><strong>位置变了，比原计划好。</strong>在老城 Pushkin 街、自由广场边上，不是 Avlabari。9.26 那天包车直接开到酒店门口；24 小时前台意味着晚到也不慌。</p>
-  </div>
-
-  <div class="bk todo">
-    <div class="hd"><b>第比利斯 · 前五晚</b><span class="when todo">9.18 – 9.23 · 5 晚 · 待订</span></div>
-    <dl>
-      <dt>建议</dt><dd>Avlabari 一带。地铁 1 号线一站到自由广场，去 Sameba、Metekhi、老城都是步行距离</dd>
-    </dl>
-  </div>
-
-  <div class="bk todo">
-    <div class="hd"><b>第比利斯 · 最后一晚</b><span class="when todo">9.30 – 10.1 · 1 晚 · 待订</span></div>
-    <dl>
-      <dt>建议</dt><dd>还住自由广场或老城一带都行。10.1 中午去机场，位置不敏感</dd>
-    </dl>
-  </div>
-
-  <div class="bk todo">
-    <div class="hd"><b>塔什干</b><span class="when todo">10.1 – 10.3 · 2 晚 · 待订</span></div>
-    <dl>
-      <dt>建议</dt><dd>市中心 Amir Timur 广场一带，10.2 早上去火车站方便</dd>
-    </dl>
-  </div>
-
-  <h3>包车</h3>
-
-  <div class="bk">
-    <div class="hd"><b>阿扎拉山区往返</b><span class="when">9.25 周五 · 09:00</span></div>
-    <dl>
-      <dt>司机</dt><dd>Nodar &nbsp;·&nbsp; ★5.0（98 条评价）&nbsp;·&nbsp; 俄语 / 英语</dd>
-      <dt>电话</dt><dd class="num">+995 574 893 319</dd>
-      <dt>车</dt><dd>Toyota Highlander &nbsp;·&nbsp; 车牌 <span class="num">DD-971-PD</span> &nbsp;·&nbsp; 汽油 &nbsp;·&nbsp; 5 座 5 箱</dd>
-      <dt>路线</dt><dd>42 Rustaveli Ave → Makhuntseti 瀑布 → Keda → 42 Rustaveli Ave</dd>
-    </dl>
-    <p class="note2">车选得好——Highlander 是 SUV，山路比轿车稳，而且烧汽油不是天然气，后备箱不被气罐占。<strong>上车先跟司机把 Keda 那段的停留时长和总价确认一遍。</strong></p>
-  </div>
-
-  <div class="bk">
-    <div class="hd"><b>巴统 → 第比利斯</b><span class="when">9.26 周六 · 08:45</span></div>
-    <dl>
-      <dt>司机</dt><dd>Vladimer &nbsp;·&nbsp; ★5.0（113 条评价）&nbsp;·&nbsp; 俄语 / 英语</dd>
-      <dt>电话</dt><dd class="num">+995 595 117 180</dd>
-      <dt>车</dt><dd>Honda Accord &nbsp;·&nbsp; 车牌 <span class="num">VL-102-AD</span> &nbsp;·&nbsp; LPG/CNG &nbsp;·&nbsp; 3 座 3 箱</dd>
-      <dt>路线</dt><dd>42 Rustaveli Ave → Martvili 峡谷 → Gelati 修道院 → Monograph Freedom Square</dd>
-      <dt>里程</dt><dd class="num">443 km · 车程 7 小时 18 分</dd>
-      <dt>价格</dt><dd>$179（整车）</dd>
-    </dl>
-    <p class="note2">这 7 小时 18 分是<strong>纯车程</strong>，不含停留。加上 Martvili 一个半小时、午饭一小时、Gelati 一小时，全天约 11 小时，<strong>08:45 出发，到第比利斯大概 19:30–20:00</strong>。酒店 24 小时前台，晚到不影响。</p>
-  </div>
-
-  <h3>一日游</h3>
-
-  <div class="bk">
-    <div class="hd"><b>卡兹别吉深度小团</b><span class="when">9.19 周六 · 全天</span></div>
-    <dl>
-      <dt>渠道</dt><dd>携程 · 拼团游（精品小团）</dd>
-      <dt>规模</dt><dd>最多 6 人 &nbsp;·&nbsp; 4×4 越野车</dd>
-      <dt>覆盖</dt><dd>金瓦利水库 → 阿纳努里城堡 → 古道里友谊纪念碑 → <strong>特鲁索峡谷</strong> → 圣三一教堂（含 4×4 上山费）</dd>
-    </dl>
-    <p class="note2"><strong>务必带护照原件。</strong>特鲁索峡谷入口有格鲁吉亚边防警察检查站，要出示护照登记姓名才放行——谷的西端靠近南奥塞梯实控线，谷里有驻军。没带护照这一段就进不去。</p>
-  </div>
-
-  <div class="bk">
-    <div class="hd"><b>卡赫季酒乡一日</b><span class="when">9.20 周日 · 08:45 集合</span></div>
-    <dl>
-      <dt>集合</dt><dd>第比利斯 <strong>欧洲广场</strong>（Europe Square），08:45，15 分钟内发车</dd>
-      <dt>路线</dt><dd>Manavi（churchkhela 品尝）→ Badiauri 面包店 → Bodbe 修道院 → 锡格纳吉 → 特拉维酒庄（品 9 种酒）→ 特拉维餐厅</dd>
-      <dt>餐费</dt><dd>面包店每人 2–3 美元；特拉维午餐按菜单另付</dd>
-    </dl>
-    <p class="note2">欧洲广场在 Rike 公园旁边，<strong>从 Avlabari 走过去十来分钟</strong>，不用打车。这条线是标准酒庄品鉴，<em>不含下地采收（rtveli）</em>——想真正体验采收的话得单独找家庭酒庄，见 9.20 那天的说明。</p>
-  </div>
-
-  <div class="bk todo">
-    <div class="hd"><b>巴统美食漫步</b><span class="when todo">9.24 周四下午 · 可选</span></div>
-    <dl>
-      <dt>参考</dt><dd>Airbnb「巴统葡萄酒和美食之旅」·  5 小时 · ¥195/人 · ★4.88（36 条评价）</dd>
-    </dl>
-    <p class="note2">巴统那批体验里唯一评价基数够看的一条。订之前确认它含不含鱼市——含了就不用另外安排。</p>
-  </div>
-</div>
-</section>
-
-<!-- ============ 航班 ============ -->
-<section id="flights">
-<div class="wrap">
-  <h2>三段航班</h2>
-  <p class="lede">时间均为当地时间。</p>
-
-  <div class="flight">
-    <p class="no">9月18日 周五 · 东方航空 MU285</p>
-    <p class="leg"><b>12:50</b> <span>上海浦东 T1</span> <span class="arrow">→</span> <b>19:00</b> <span>第比利斯 TBS</span></p>
-    <p class="meta">飞行约 10 小时 10 分。落地时天刚黑，当晚还能吃顿正经晚饭。</p>
-  </div>
-
-  <div class="flight">
-    <p class="no">10月1日 周四 · 中亚航空 C6222</p>
-    <p class="leg"><b>15:30</b> <span>第比利斯 TBS</span> <span class="arrow">→</span> <b>19:50</b> <span>塔什干 T2</span></p>
-    <p class="meta">飞行约 3 小时 20 分（塔什干快 1 小时）。<strong>起飞地是第比利斯，不是埃里温。</strong></p>
-  </div>
-
-  <div class="flight">
-    <p class="no">10月3日 周六 · 东方航空 MU6038</p>
-    <p class="leg"><b>20:20</b> <span>塔什干 T2</span> <span class="arrow">→</span> <b>05:50<sup>+1</sup></b> <span>上海浦东 T1</span></p>
-    <p class="meta">红眼，10月4日周日清晨落地。10月3日白天完整可用，17:00 前后去机场。</p>
-  </div>
-
-  <div class="urgent">
-    <h4>由此推出的两条硬约束</h4>
-    <p><strong>一、9月30日必须回到第比利斯。</strong>10月1日的飞机从第比利斯起飞，而埃里温到第比利斯没有稳定的直飞，实际都走陆路 5–7 小时，还要过 Sadakhlo 口岸。别把这段压到 10月1日当天——那天下午 3 点半就登机，没有任何缓冲。</p>
-    <p style="margin-top:10px"><strong>二、塔什干只有一个整天加一个白天。</strong>10月1日 19:50 才落地，当天只剩吃夜宵。所以撒马尔罕放 10月2日整天往返，塔什干城内压进 10月3日。</p>
-  </div>
-
-  <h3>可能和国内工作撞车的两天</h3>
-  <p>格鲁吉亚比北京晚 4 小时，塔什干晚 3 小时。多数日子上午能覆盖国内的下午班，这两天不行：</p>
-  <div class="wide">
-  <table>
-    <tr><th>日期</th><th>情况</th><th>怎么办</th></tr>
-    <tr><td>9.23 周三</td><td>08:00–12:00 在去巴统的火车上（北京 12:00–16:00）</td><td>Stadler 车厢有插座，手机开热点能处理消息和文档，视频会议不保险</td></tr>
-    <tr><td>10.2 周五</td><td>全天撒马尔罕往返，07:15 出门 20:30 回</td><td>高铁上有两个多小时可以补消息，其余时间提前打好招呼</td></tr>
-  </table>
-  </div>
-  <p>9.25 你已经放假，山区那天不用担心信号。9.24 上午照常工作到 14:00，下午才出门。</p>
-</div>
-</section>
-
-<!-- ============ 出发前 ============ -->
-<section id="before">
-<div class="wrap">
-  <h2>出发前必办</h2>
-
-  <div class="urgent">
-    <h3>保险是今年新增的硬性入境条件</h3>
-    <p>依据《格鲁吉亚旅游法》，2026 年 1 月 1 日起所有入境游客必须持有效医疗与意外保险。保额不低于 <strong>30,000 拉里</strong>，须覆盖包含抵达日和离境日在内的全部停留期，英文或格鲁吉亚文，纸质电子均可，边境警察有权当场查验。<em>你们中途要出境去亚美尼亚再回来，保单的覆盖区域必须包含亚美尼亚和乌兹别克斯坦，日期覆盖到 10 月 4 日</em>，别只买格鲁吉亚单国。出单后把 PDF 存进手机相册。</p>
-  </div>
-
-  <ul class="check">
-    <li><span class="box" role="checkbox" aria-checked="false" tabindex="0"></span><span class="t"><b>买保险，存离线 PDF</b><span>两人各一份，覆盖格鲁吉亚 + 亚美尼亚 + 乌兹别克斯坦，9.18 – 10.4。</span></span></li>
-    <li><span class="box" role="checkbox" aria-checked="false" tabindex="0"></span><span class="t"><b>订第比利斯前五晚（9.18–9.23）</b><span>Avlabari 一带。</span></span></li>
-    <li><span class="box" role="checkbox" aria-checked="false" tabindex="0"></span><span class="t"><b>订第比利斯 9.30 那一晚、塔什干两晚</b><span>见「已订」一节的建议位置。</span></span></li>
-    <li><span class="box" role="checkbox" aria-checked="false" tabindex="0"></span><span class="t"><b>买 9.23 第比利斯 → 巴统的火车票</b><span>tre.ge。<strong>坐早班 08:00 那趟，12:00 到</strong>，下午的植物园才排得下。经济舱 $13.75，一等舱 $29.03。</span></span></li>
-    <li><span class="box" role="checkbox" aria-checked="false" tabindex="0"></span><span class="t"><b>买塔什干 ⇄ 撒马尔罕 Afrosiyob 高铁票</b><span>railway.uz，<strong>发车前 60 天开售</strong>，往返都要买。开售即被旅行社扫走一批，落地再买大概率没有。</span></span></li>
-    <li><span class="box" role="checkbox" aria-checked="false" tabindex="0"></span><span class="t"><b>核对护照有效期</b><span>出发当天起算 6 个月以上。<em>9.19 进特鲁索峡谷要查护照原件，随身带。</em></span></span></li>
-    <li><span class="box" role="checkbox" aria-checked="false" tabindex="0"></span><span class="t"><b>取够现金拉里</b><span>家庭酒庄、山区小摊、巴扎、搓背师傅都只收现金。<strong>两趟包车也建议付现金</strong>（见速查里的说明）。</span></span></li>
-    <li><span class="box" role="checkbox" aria-checked="false" tabindex="0"></span><span class="t"><b>下 Google Maps 离线包，装 Bolt 和 Yandex Go</b><span>格鲁吉亚、亚美尼亚、乌兹别克斯坦三国都下。Bolt 在格鲁吉亚是主力，Yandex Go 在塔什干是主力。外卖用 Wolt。</span></span></li>
-    <li><span class="box" role="checkbox" aria-checked="false" tabindex="0"></span><span class="t"><b>欧标转换插头</b><span>两圆孔 C/F 型，220V，格鲁吉亚和乌兹别克斯坦通用。</span></span></li>
-    <li><span class="box" role="checkbox" aria-checked="false" tabindex="0"></span><span class="t"><b>存好两位司机的电话</b><span>Nodar +995 574 893 319（9.25）、Vladimer +995 595 117 180（9.26）。</span></span></li>
-  </ul>
-
-  <h3>签证</h3>
-  <p>中格互免，单次不超过 30 天。亚美尼亚、乌兹别克斯坦同样对华免签。三国都不用办签证，临行前上一次外交部领事服务网确认口径。</p>
-  <p><em>不要尝试进入阿布哈兹和南奥塞梯</em>，那是格方非实际控制区，免签政策不适用。特鲁索峡谷本身是格方控制区，跟着向导走没问题。</p>
-</div>
-</section>
-
-<!-- ============ 第比利斯 ============ -->
-<section id="tbilisi">
-<div class="wrap">
-  <h2>第一段 · 第比利斯旅居</h2>
-  <p class="lede">9.18 周五 – 9.23 周三 &nbsp;·&nbsp; 周末两个整日外出，周一周二上午干活下午玩</p>
-
-  <div class="gal">
-    <div class="strip">
-      <figure>
-        <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Tbilisi_Holy_Trinity_Cathedral_(Sameba)_IMG_8956_1920.jpg?width=1100" alt="圣三一大教堂">
-        <figcaption>圣三一大教堂 Sameba，从 Avlabari 走过去十分钟。</figcaption>
-      </figure>
-      <figure>
-        <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Abanotubani_Tbilisi.jpg?width=1100" alt="硫磺浴区">
-        <figcaption>Abanotubani 硫磺浴区，砖砌圆顶下面就是浴池。</figcaption>
-      </figure>
-      <figure>
-        <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Narikala_Fortress,_Tbilisi,_Georgia.jpg?width=1100" alt="纳里卡拉要塞">
-        <figcaption>Narikala 要塞，缆车上去，走 Betlemi 街下来。</figcaption>
-      </figure>
-      <figure>
-        <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Tbilisi,_Georgia_—_Metekhi_Church.jpg?width=1100" alt="梅捷希教堂">
-        <figcaption>Metekhi 教堂和悬崖平台，第一晚看夜景就在这儿。</figcaption>
-      </figure>
+<div class="wrap calwrap">
+  <div class="cal">
+    <div class="mon"><b>行程日历</b><span>点任意一天看当天安排</span></div>
+    <div class="dow"><i>一</i><i>二</i><i>三</i><i>四</i><i>五</i><i class="we">六</i><i class="we">日</i></div>
+    <div class="grid" id="grid"></div>
+    <div class="legend">
+      <s><em style="background:#7A2233"></em>转场移动</s>
+      <s><em style="background:#175A72"></em>整日出游</s>
+      <s><em style="background:#A97C22"></em>上午干活</s>
+      <s><em style="background:#A9B6B3"></em>朋友安排</s>
     </div>
-    <p class="hint">← 左右滑动 →</p>
   </div>
+</div>
 
-  <h3>落脚点：阿夫拉巴里</h3>
-  <p>姆特克瓦里河左岸，<strong>Avlabari 地铁站步行三四分钟</strong>。1 号线一站到自由广场，两站到 Rustaveli。单程 1 拉里上下，Metromoney 卡在站台窗口办，也能直接刷 Visa 或 Master。</p>
-  <p class="route"><b>步行可达</b>圣三一大教堂 Sameba <span class="hop">10 分</span> Metekhi 平台 <span class="hop">12 分</span> 欧洲广场（9.20 集合点）<span class="hop">12 分</span> 老城硫磺浴区 <span class="hop">15 分</span> Rike 公园缆车下站 <span class="hop">15 分</span></p>
-  <div class="note">
-    <p><strong>9.20 的卡赫季团在欧洲广场集合，从住处走过去十来分钟</strong>，不用打车，8:30 出门就行。</p>
-  </div>
+<main class="wrap">
+  <div class="panel" id="panel"></div>
+</main>
 
-  <h3>时差决定这一周怎么过</h3>
-  <div class="wide">
-  <table>
-    <tr><th>北京</th><th>第比利斯</th><th>塔什干</th><th></th></tr>
-    <tr><td>12:30</td><td>08:30</td><td>09:30</td><td>起来干活</td></tr>
-    <tr><td>18:00</td><td>14:00</td><td>15:00</td><td>国内下班，你自由了</td></tr>
-    <tr><td>22:00</td><td>18:00</td><td>19:00</td><td>国内睡了，你在吃晚饭</td></tr>
-  </table>
-  </div>
-  <p>最合理的作息是<strong>早上八点半起来处理国内事务，做到下午两点收工</strong>，两点之后完全自由。别想着晚上工作，那对应国内凌晨。</p>
+<div class="wrap ref">
+  <h2>随身参考</h2>
 
-  <div class="day">
-    <span class="daytag move">9.18 周五</span>
-    <h3>落地当晚</h3>
-    <div class="slot"><p class="when">19:00</p><p class="what">MU285 落地 TBS。中国护照免签，走 All Passports 通道。</p></div>
-    <div class="slot"><p class="when">19:20–19:50</p><p class="what">到达厅两件事一起办：<strong>电话卡</strong>（Magti 或 Silknet 柜台，短期套餐 20–40 拉里）；<strong>取现金</strong>，用 TBC 或 Bank of Georgia 的 ATM 取 200–300 拉里。机场兑换点汇率差，只换 50–100 应急。</p></div>
-    <div class="slot"><p class="when">19:50</p><p class="what">Bolt 到 Avlabari，约 17 公里，25–35 拉里，半小时。</p></div>
-    <div class="slot"><p class="when">21:00</p><p class="what">出门吃第一顿，走十来分钟进老城。</p></div>
-    <div class="slot"><p class="when">22:30</p><p class="what"><strong>Metekhi 悬崖平台</strong>看夜景，对岸老城和 Narikala 都打了灯。看完回去睡，第一夜别熬。</p></div>
+  <details class="acc">
+    <summary>已订清单 · 住宿 / 包车 / 一日游</summary>
+    <div class="body">
+      <h4>住宿</h4>
+      <dl class="kv">
+        <dt>9.18–9.23</dt><dd>第比利斯 · Avlabari 一带　<span class="tag wait">待订</span></dd>
+        <dt>9.23–9.24</dt><dd><b>巴统希尔顿</b>　40 Rustaveli Avenue　确认号 3522841428　$179.95　<span class="tag ok">已付</span></dd>
+        <dt>9.24–9.26</dt><dd><b>巴统民宿</b>　42 Rustaveli Avenue（希尔顿隔壁）</dd>
+        <dt>9.26–9.27</dt><dd><b>Monograph Freedom Square</b>　5/7 Aleksandr Pushkin St　订单号 1128150691023697　24 小时前台</dd>
+        <dt>9.27–9.30</dt><dd>埃里温 · 朋友安排</dd>
+        <dt>9.30–10.1</dt><dd>第比利斯　<span class="tag wait">待订</span></dd>
+        <dt>10.1–10.3</dt><dd>塔什干 · 建议 Amir Timur 广场一带　<span class="tag wait">待订</span></dd>
+      </dl>
 
-    <div class="food">
-      <b>落地第一顿</b>
+      <h4>包车</h4>
+      <dl class="kv">
+        <dt>9.25 09:00</dt><dd><b>Nodar</b>　★5.0（98 评价）· 俄/英　<a href="tel:+995574893319">+995 574 893 319</a><br>Toyota Highlander · DD-971-PD · 汽油 · 5 座<br>42 Rustaveli → Makhuntseti 瀑布 → Keda → 42 Rustaveli</dd>
+        <dt>9.26 08:45</dt><dd><b>Vladimer</b>　★5.0（113 评价）· 俄/英　<a href="tel:+995595117180">+995 595 117 180</a><br>Honda Accord · VL-102-AD · LPG/CNG · 3 座<br>42 Rustaveli → Martvili 峡谷 → Gelati 修道院 → Monograph 酒店<br>443 km · 纯车程 7h18m · $179 整车</dd>
+      </dl>
+      <div class="tip"><b>两趟都建议付现金。</b>GoTrip 条款 10.6 允许平台存卡并扣款、5.13 允许它凭他人索赔自行判断后划钱且声明不负责。付现金不触发这套机制，行程结束才付。<br><br>另外<b>条款里没有退订政策</b>——只写了"确认前可取消"，确认后如何完全没写。要改期直接在站内聊天问司机，<b>把回复留在站内</b>（条款 10.2 禁止绕开平台沟通，站内记录是唯一证据）。</div>
+    </div>
+  </details>
+
+  <details class="acc">
+    <summary>出发前必办</summary>
+    <div class="body">
+      <div class="tip warn"><b>保险是今年新增的硬性入境条件。</b>2026 年 1 月 1 日起入境格鲁吉亚必须持有效医疗与意外保险，保额不低于 30,000 拉里，覆盖全部停留期，边境警察有权当场查验。<mark>你们中途要出境去亚美尼亚再回来，保单区域必须含亚美尼亚和乌兹别克斯坦，日期覆盖到 10 月 4 日</mark>，别只买格鲁吉亚单国。</div>
       <ul>
-        <li><strong>Salobie Bia</strong> —— Rustaveli 剧院旁台阶下去，家常不宰客。招牌 shkmeruli（蒜香核桃酱烤鸡）、lobiani（豆泥饼），两人 60–90 拉里吃饱。<span class="price">不用订位</span></li>
-        <li><strong>Machakhela</strong> —— 老城多家分店，阿扎尔奶酪船稳定水准，第一次吃格鲁吉亚菜从这家入门不会错</li>
-        <li>喝的：Saperavi 干红、Rkatsiteli 琥珀酒，餐酒一瓶 25–45 拉里；不喝酒点 Borjomi 气泡矿泉水，味道很咸，做好准备</li>
+        <li>买保险，两人各一份，PDF 存进手机相册</li>
+        <li>订第比利斯前五晚、9.30 那晚、塔什干两晚</li>
+        <li><b>买 9.23 火车票</b>（tkt.ge）——坐 08:00 那班，12:00 到，下午植物园才排得下</li>
+        <li><b>买撒马尔罕往返高铁票</b>（railway.uz）——发车前 60 天开售，开售即被扫走一批</li>
+        <li>核对护照有效期（出发日起 6 个月以上）</li>
+        <li><mark>9.19 进特鲁索峡谷要查护照原件</mark>，随身带，别只带复印件</li>
+        <li>取够现金拉里：家庭酒庄、山区、巴扎、两趟包车都要现金</li>
+        <li>下 Google Maps 三国离线包，装 Bolt（格鲁吉亚）和 Yandex Go（塔什干），外卖 Wolt</li>
+        <li>欧标两圆孔 C/F 转换插头，220V，三国通用</li>
+        <li>存两位司机电话：Nodar +995 574 893 319、Vladimer +995 595 117 180</li>
+      </ul>
+      <h4>签证</h4>
+      <p>三国均对华免签，不用办。临行前上一次外交部领事服务网确认口径。<b>不要尝试进入阿布哈兹和南奥塞梯</b>，免签政策不适用；特鲁索峡谷本身是格方控制区，跟着向导走没问题。</p>
+    </div>
+  </details>
+
+  <details class="acc">
+    <summary>时差与工作节奏</summary>
+    <div class="body">
+      <table class="tbl">
+        <tr><th>北京</th><th>第比利斯</th><th>塔什干</th><th></th></tr>
+        <tr><td>12:30</td><td>08:30</td><td>09:30</td><td>起来干活</td></tr>
+        <tr><td>18:00</td><td>14:00</td><td>15:00</td><td>国内下班，你自由了</td></tr>
+        <tr><td>22:00</td><td>18:00</td><td>19:00</td><td>国内睡了，你在吃晚饭</td></tr>
+      </table>
+      <p>格鲁吉亚 UTC+4（比北京晚 4 小时），塔什干 UTC+5（晚 3 小时）。最合理的作息是<b>早上八点半起来处理国内事务，做到下午两点收工</b>，之后完全自由。别想着晚上工作，那对应国内凌晨。</p>
+      <h4>会撞车的两天</h4>
+      <table class="tbl">
+        <tr><td>9.23 周三</td><td>08:00–12:00 在去巴统的火车上。车厢有插座，手机热点能处理消息和文档，视频会议不保险</td></tr>
+        <tr><td>10.2 周五</td><td>全天撒马尔罕往返，07:15 出门 20:30 回。高铁上有两个多小时能补消息，其余提前打招呼</td></tr>
+      </table>
+      <p>9.25 你已放假，山区那天不用担心信号；9.24 上午照常工作到 14:00 再出门。</p>
+    </div>
+  </details>
+
+  <details class="acc">
+    <summary>钱 · 行李 · 常识</summary>
+    <div class="body">
+      <h4>钱</h4>
+      <p>格鲁吉亚用拉里 GEL，亚美尼亚用德拉姆 AMD，乌兹别克斯坦用 Som（面额大，1 美元一万多）。城市里刷卡普遍，Apple Pay 在格鲁吉亚也能用。</p>
+      <p><b>必须现金的场合</b>：卡赫季和阿扎拉的家庭酒庄、山区小摊、巴扎、硫磺浴搓背师傅、乌兹别克巴扎和路边摊，<b>还有两趟包车</b>。</p>
+      <p>取现走 TBC Bank 或 Bank of Georgia 的 ATM，手续费低，避开街边独立 ATM。换汇找市区带 Exchange 招牌的独立兑换点，比银行和机场都好。<mark>每次转场前把当地现金花完或换掉</mark>。</p>
+      <h4>行李</h4>
+      <ul>
+        <li>一件真正保暖的冲锋衣（9.19 山上 5–10°C，风大），一件薄的（第比利斯下午二十几度）</li>
+        <li>好走的防滑鞋。老城、锡格纳吉、撒马尔罕全是石板坡道，特鲁索谷还要走碎石路</li>
+        <li>进修道院和清真寺：女士带头巾或围巾，男士别穿短裤。Bodbe、Jvari、Sameba、Gelati、Hazrat Imam 都查</li>
+        <li>泳衣（巴统能下水，硫磺浴私人包间可穿可不穿）</li>
+        <li>转换插头、充电宝、保单和护照的离线照片</li>
+        <li>肠胃药。格鲁吉亚菜油厚、乌兹别克抓饭更油，连吃两周会有反应</li>
+      </ul>
+      <h4>常识</h4>
+      <ul>
+        <li>第比利斯自来水水质很好，当地人直接喝；乌兹别克斯坦买瓶装</li>
+        <li>治安在欧洲范围内属很好的一档，夜里老城也安全。主要注意山路上的司机开得猛</li>
+        <li>城市里英语够用，年长一代说俄语。农村两样都可能不通，翻译 App 备离线包</li>
+        <li>supra 长桌宴会一直劝酒，tamada（酒司仪）不停敬酒，chacha 度数很高，量力而行</li>
+        <li>教堂里多数不让拍照，看门口标志；巴扎里拍人先问一声</li>
       </ul>
     </div>
+  </details>
 
-    <div class="note"><p><strong>第一晚别去泡硫磺浴。</strong>坐十小时飞机再泡四十度硫磺水，出来只会更虚。放到 9.21 傍晚，那天走了一天山路，泡完正好。</p></div>
-  </div>
-
-  <div class="day">
-    <span class="daytag">9.19 周六</span>
-    <h3>卡兹别吉 · 已订小团</h3>
-    <p class="route"><b>动线</b>第比利斯 <span class="hop">70km / 1.5h</span> 金瓦利水库 + 阿纳努里 <span class="hop">50km / 1h</span> 古道里纪念碑 <span class="hop">10km</span> Jvari 山口 2379m <span class="hop">20km</span> 特鲁索峡谷 <span class="hop">25km</span> 斯捷潘茨明达 <span class="hop">4×4 20分</span> Gergeti 教堂 2170m</p>
-
-    <div class="urgent">
-      <h4>带护照原件上车</h4>
-      <p>特鲁索峡谷入口有格鲁吉亚边防警察检查站，<strong>要出示护照登记姓名才放行</strong>——谷的西端接近南奥塞梯实控线，谷里有驻军。到 Zakagori 要塞以内不需要额外许可，登记即可。<em>没带护照，这一段就进不去</em>，而它恰恰是这个团比普通线路多出来的部分。</p>
+  <details class="acc">
+    <summary>常用网址与紧急电话</summary>
+    <div class="body">
+      <h4>订票与交通</h4>
+      <a class="lnk" href="https://tkt.ge/en" target="_blank" rel="noopener"><b>tkt.ge</b><span>格鲁吉亚铁路官方售票。第比利斯 ⇄ 巴统 08:00 / 16:50 / 18:30，全程 4 小时，经济舱 $13.75</span></a>
+      <a class="lnk" href="https://railway.uz/en/" target="_blank" rel="noopener"><b>railway.uz</b><span>乌兹别克铁路，Afrosiyob 高铁。发车前 60 天开售，塔什干时间早 6 点放票</span></a>
+      <a class="lnk" href="https://gotrip.ge/en/" target="_blank" rel="noopener"><b>gotrip.ge</b><span>两趟包车的平台。改路线、联系司机都在站内聊天里做</span></a>
+      <a class="lnk" href="https://infobus.eu/en" target="_blank" rel="noopener"><b>INFOBUS</b><span>第比利斯 ⇄ 埃里温大巴，可网上订</span></a>
+      <h4>天气</h4>
+      <a class="lnk" href="https://www.meteoblue.com/en/weather/week/stepantsminda_georgia_614508" target="_blank" rel="noopener"><b>meteoblue · 卡兹别吉</b><span>看 low cloud（低云量）那条，不是晴雨图标。9.19 能不能看到雪山全看它</span></a>
+      <a class="lnk" href="https://www.windy.com" target="_blank" rel="noopener"><b>Windy</b><span>云层高度和移动的动态图，判断山区能见度比数字预报直观</span></a>
+      <h4>玩什么 · 吃什么</h4>
+      <a class="lnk" href="https://www.getyourguide.com/tbilisi-l1120/" target="_blank" rel="noopener"><b>GetYourGuide</b><span>格鲁吉亚一日游供给最厚，同条线常比别处便宜三成</span></a>
+      <a class="lnk" href="https://www.tasteatlas.com/georgia" target="_blank" rel="noopener"><b>TasteAtlas</b><span>查某道菜哪家做得最好，巴统奶酪船的世界排名就出自这里</span></a>
+      <a class="lnk" href="https://wolt.com/en/geo" target="_blank" rel="noopener"><b>Wolt</b><span>格鲁吉亚外卖主力</span></a>
+      <h4>紧急</h4>
+      <p><b>格鲁吉亚 112</b>（警察消防急救合一）· <b>亚美尼亚 911</b> · <b>乌兹别克斯坦</b> 101 火警 / 102 警察 / 103 急救</p>
+      <a class="lnk" href="http://ge.china-embassy.gov.cn" target="_blank" rel="noopener"><b>中国驻格鲁吉亚大使馆</b><span>第比利斯</span></a>
+      <a class="lnk" href="http://am.china-embassy.gov.cn" target="_blank" rel="noopener"><b>中国驻亚美尼亚大使馆</b><span>埃里温</span></a>
+      <a class="lnk" href="http://uz.china-embassy.gov.cn" target="_blank" rel="noopener"><b>中国驻乌兹别克斯坦大使馆</b><span>塔什干</span></a>
+      <div class="tip"><b>出发前存进手机相册的离线文件</b>：保单 PDF、护照照片、三张机票、火车票、两张包车订单截图、酒店确认号。</div>
     </div>
+  </details>
 
-    <div class="slot"><p class="when">上午</p><p class="what"><strong>阿纳努里城堡</strong>，金瓦利水库边的教堂加城墙，湖水是奶蓝色。</p></div>
-    <div class="slot"><p class="when">中途</p><p class="what"><strong>古道里友谊纪念碑</strong>，悬崖上的环形壁画平台，正对 Devil's Valley 峡谷。然后翻 <strong>Jvari 山口</strong>，海拔 2379 米。</p></div>
-    <div class="slot"><p class="when">重头</p><p class="what"><strong>特鲁索峡谷</strong>，从军事公路 Kobi 村岔进去。橙色钙华台地、废弃的奥塞梯石塔村、冒二氧化碳气泡的阿巴诺矿泉湖。普通大巴进不来，这是 4×4 小团的价值所在。</p></div>
-    <div class="slot"><p class="when">高潮</p><p class="what">换 4×4 上 <strong>Gergeti 三一教堂</strong>，海拔 2170 米，土路颠簸二十分钟。雪山背景下的孤零零小教堂，是格鲁吉亚最标志性的画面。<strong>上山费已含在团费里</strong>，不用另付。</p></div>
-    <div class="slot"><p class="when">回程</p><p class="what">路上大概率会停一次买蜂蜜和 churchkhela。这个团点多，<strong>晚上八九点甚至更晚才回得来</strong>，跟客服确认准确时间。</p></div>
-
-    <div class="gal">
-      <div class="strip">
-        <figure>
-          <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Ananuri_castle_01.jpg?width=1100" alt="阿纳努里城堡">
-          <figcaption>阿纳努里城堡，军事公路上的第一站。</figcaption>
-        </figure>
-        <figure>
-          <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Truso_Valley,_Georgia.jpg?width=1100" alt="特鲁索峡谷">
-          <figcaption>特鲁索峡谷的钙华沉积，橙红色是矿泉里的铁氧化物。</figcaption>
-        </figure>
-        <figure>
-          <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Russia–Georgia_Friendship_Monument_02.jpg?width=1100" alt="俄格友谊纪念碑">
-          <figcaption>古道里的友谊纪念碑，环形壁画平台。</figcaption>
-        </figure>
-      </div>
-      <p class="hint">← 左右滑动 →</p>
-    </div>
-
-    <div class="note">
-      <p>九月下旬山上白天 15–20°C，夜里 5–10°C，风大。特鲁索谷海拔 1800–2400 米，还要下车走碎石路。<strong>冲锋衣或厚外套是必需品，鞋要防滑</strong>——山下第比利斯二十几度会骗你。</p>
-      <p style="margin-top:10px"><strong>天气这件事</strong>：Gergeti 能不能看到雪山，关键看<em>低云量和云底高度，不是晴雨图标</em>。镇上艳阳高照、教堂泡在云里，是这条线的典型情况。出发前三天看 meteoblue 的分层云图（网址在后面），当天早上瞄一眼 Gudauri 的实时摄像头比任何预报都准。真赶上云低也不用沮丧——特鲁索在谷底，受影响比 Gergeti 小得多。</p>
-    </div>
-  </div>
-
-  <div class="day">
-    <span class="daytag">9.20 周日</span>
-    <h3>卡赫季酒乡 · 已订</h3>
-    <p class="route"><b>动线</b>欧洲广场 08:45 <span class="hop">50km</span> Manavi <span class="hop">30km</span> Badiauri <span class="hop">30km</span> Bodbe 修道院 <span class="hop">2km</span> 锡格纳吉 <span class="hop">55km</span> 特拉维酒庄</p>
-
-    <div class="slot"><p class="when">08:30</p><p class="what">从住处步行去 <strong>欧洲广场</strong>，十来分钟。08:45 集合，15 分钟内发车。</p></div>
-    <div class="slot"><p class="when">路上</p><p class="what"><strong>Manavi</strong> 尝 churchkhela（核桃串蘸葡萄汁凝的"格鲁吉亚士力架"）；<strong>Badiauri</strong> 的面包店，现烤面包配奶酪和 chacha，每人 2–3 美元。</p></div>
-    <div class="slot"><p class="when">上午</p><p class="what"><strong>Bodbe 修道院</strong>，圣尼诺墓，柏树夹道，露台俯瞰整条阿拉扎尼谷和大高加索山脉。<em>进门女士要头巾或围巾</em>。</p></div>
-    <div class="slot"><p class="when">中午</p><p class="what"><strong>锡格纳吉 Sighnaghi</strong>，"爱情之城"，红顶小城，在城墙和塔楼处停留。石板坡道多，穿好走的鞋。</p></div>
-    <div class="slot"><p class="when">下午</p><p class="what"><strong>特拉维 Telavi</strong> 的酒庄，品鉴 9 种葡萄酒，听当地人讲酒的故事。之后在特拉维餐厅吃当地菜，<em>按菜单另付费</em>。</p></div>
-
-    <div class="gal">
-      <div class="strip">
-        <figure>
-          <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Sighnaghi_town_in_Kakheti,_Georgia.jpg?width=1100" alt="锡格纳吉">
-          <figcaption>锡格纳吉，背后是阿拉扎尼谷和大高加索山脉。</figcaption>
-        </figure>
-        <figure>
-          <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Bodbe_Monastery,_Georgia.jpg?width=1100" alt="博德贝修道院">
-          <figcaption>Bodbe 修道院，圣尼诺墓所在。</figcaption>
-        </figure>
-        <figure>
-          <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Qvevri_wine_jars_Georgia.jpg?width=1100" alt="陶罐酿酒">
-          <figcaption>qvevri 陶罐，格鲁吉亚八千年酿酒法，埋在地下发酵。</figcaption>
-        </figure>
-      </div>
-      <p class="hint">← 左右滑动 →</p>
-    </div>
-
-    <div class="note">
-      <p><strong>这条线是标准酒庄品鉴，不含下地采收。</strong>你们的时间点其实很巧——<em>rtveli（葡萄采收节）九月中下旬开始，十月上旬进高峰</em>，整个阿拉扎尼谷都在收葡萄。真想剪葡萄、光脚踩果、从陶罐里舀新酒，得单独找家庭酒庄。<strong>可以在车上问向导</strong>，特拉维一带的家庭 marani 很多，有些团能临时加。不加也不亏，9 种酒的品鉴本身就值。</p>
-      <p style="margin-top:10px">村里的家庭酒庄基本只收现金拉里，<strong>这天每人带 200 拉里现金</strong>。</p>
-    </div>
-  </div>
-
-  <div class="day">
-    <span class="daytag rest">9.21 周一</span>
-    <h3>上午干活 · 下午爬要塞 · 傍晚泡澡</h3>
-    <div class="slot"><p class="when">08:30–14:00</p><p class="what">工作，对应国内 12:30–18:00。</p></div>
-    <div class="slot"><p class="when">14:00</p><p class="what">午饭。</p></div>
-    <div class="slot"><p class="when">15:30</p><p class="what">走到 <strong>Rike 公园</strong>（十五分钟），坐缆车上 <strong>Narikala 要塞</strong>。2.5 拉里，<em>只能刷 Metromoney 卡，不收现金也不收银行卡</em>，前一天先去地铁站办好。</p></div>
-    <div class="slot"><p class="when">16:00–16:45</p><p class="what">要塞上转一圈，看 Mother Georgia 雕像（一手酒碗一手剑，待客与御敌）。这个点光线转金黄，全城最好的机位。</p></div>
-    <div class="slot"><p class="when">16:45–17:45</p><p class="what">不坐缆车下山，沿 <strong>Betlemi 街</strong>走下来——老犹太区，彩色玻璃阳台，木楼梯，第比利斯最好看的一段坡道。</p></div>
-    <div class="slot"><p class="when">18:00–19:30</p><p class="what"><strong>硫磺浴</strong>。私人包间按小时计 60–120 拉里，两三人分摊很划算。搓背（kisa）另加 15–20 拉里，力度很大，值得试一次。</p></div>
-    <div class="slot"><p class="when">20:00</p><p class="what">晚饭，老城。</p></div>
-
-    <div class="food">
-      <b>浴室三选一，晚饭值得订个好的</b>
+  <details class="acc">
+    <summary>徒步：最有名的那条这趟去不了</summary>
+    <div class="body">
+      <p>搜"格鲁吉亚徒步"，头条永远是 <b>Mestia → Ushguli 四天三夜</b>，穿越斯瓦涅季，终点乌树故里是欧洲最高的有人居住村落。但它在西北角，从第比利斯单程 8–9 小时车程，加徒步至少挖走 6 整天。这趟塞不进去，留给下次。</p>
+      <p>这趟能做的都是当天往返的：</p>
       <ul>
-        <li>泡澡：<strong>Chreli Abano</strong>（蓝瓷马赛克那家，最上镜也最贵）、<strong>Bathhouse No.5</strong>（本地人多，性价比高）、<strong>Gulo's Thermal Spa</strong>（干净新，适合第一次）。私人间可穿泳衣也可不穿</li>
-        <li><strong>Shavi Lomi</strong>（黑狮子）—— 藏在院子里，主厨 Meriko Gubeladze 把 chakapuli（龙蒿炖羊肉）、pkhali 做出新样子，churchkhela 甜点是招牌。人均 70–110 拉里 <span class="price">必须订位</span></li>
-        <li><strong>Barbarestan</strong> —— 复原 19 世纪贵族食谱本：李子酱小牛肉、薄荷樱桃汤、核桃酱茄子卷。人均 90–140 拉里 <span class="price">常提前一周满</span></li>
-        <li><strong>Café Littera</strong> —— 作家之家花园里，南瓜 khinkali、榛子酱鳟鱼，九月底还能坐户外 <span class="price">必须订位</span></li>
+        <li><b>Gergeti 徒步</b>——最顺手，从 Stepantsminda 走上去单程 1.5–2 小时，爬升 430 米。9.19 那天可以走上去、坐车下来，跟司机说一声</li>
+        <li><b>特鲁索峡谷轻徒步</b>——9.19 已包含。到 Abano 村往返 12 公里 4–5 小时，你们的团用 4×4 开进去只走一段</li>
+        <li><b>Juta 谷 / Chaukhi 山</b>——格鲁吉亚的多洛米蒂，但要占掉整个卡兹别吉那天，和 Gergeti 二选一</li>
+        <li><b>Gveleti 瀑布</b>——往返一小时，卡兹别吉附近的加餐选项</li>
       </ul>
     </div>
-  </div>
-
-  <div class="day">
-    <span class="daytag rest">9.22 周二</span>
-    <h3>上午干活 · 下午姆茨赫塔 · 晚上 Fabrika</h3>
-    <p class="route"><b>动线</b>Avlabari <span class="hop">Bolt 25分 / 25–35 拉里</span> 姆茨赫塔 <span class="hop">步行</span> Svetitskhoveli <span class="hop">车 15分</span> Jvari 修道院 <span class="hop">回城 30分</span> Fabrika</p>
-    <div class="slot"><p class="when">08:30–13:30</p><p class="what">工作。今天早收一点。</p></div>
-    <div class="slot"><p class="when">14:30</p><p class="what">Bolt 去 <strong>姆茨赫塔</strong>，格鲁吉亚古都和宗教中心，UNESCO 名录。</p></div>
-    <div class="slot"><p class="when">15:00–16:00</p><p class="what"><strong>Svetitskhoveli 大教堂</strong>，"生命之柱"，11 世纪，格鲁吉亚人心里最重要的教堂。</p></div>
-    <div class="slot"><p class="when">16:15–17:00</p><p class="what">上山到 <strong>Jvari 修道院</strong>（6 世纪），站在两河交汇口俯瞰全城，风很大。</p></div>
-    <div class="slot"><p class="when">19:30</p><p class="what"><strong>Fabrika</strong>，河右岸苏联时期缝纫厂改的青旅加院子，一圈酒吧和小店，第比利斯年轻人晚上都在这儿。旁边 Aghmashenebeli 大道步行街顺便逛。</p></div>
-
-    <div class="food">
-      <b>吃</b>
-      <ul>
-        <li><strong>Salobie</strong>（姆茨赫塔老路上那家老店，不是市区的 Salobie Bia）—— 陶罐炖芸豆 lobio 配玉米饼 mchadi，几十年的本地馆子</li>
-        <li><strong>Fabrika 院子里</strong>：Moulin Electrique 的汉堡、Lolita 的意式菜、Kikliko 的早午餐；想喝精酿去门口那排小窗口</li>
-      </ul>
-    </div>
-
-    <div class="gal single">
-      <div class="strip">
-        <figure>
-          <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Mtskheta,_Svetitskhoveli_Cathedral_(36092332115).jpg?width=1100" alt="生命之柱大教堂">
-          <figcaption>Svetitskhoveli 大教堂，建于 11 世纪。进堂女士需头巾，男士别穿短裤。</figcaption>
-        </figure>
-      </div>
-    </div>
-  </div>
-
-  <h3>哪天不想出门就换这些</h3>
-  <ul class="plain">
-    <li><strong>Dry Bridge 跳蚤市场</strong> —— 旧货、苏联徽章、老相机、银器，周末最热闹，能砍价</li>
-    <li><strong>Mtatsminda 山顶公园</strong> —— 坐 funicular 上去，海拔 770 米，全城尽收眼底</li>
-    <li><strong>龟湖 Turtle Lake</strong> —— 缆车上去绕湖走四十分钟，旁边是露天民族博物馆</li>
-    <li><strong>Wine Factory N1</strong> 或 <strong>8000 Vintages</strong> —— 系统喝一遍本土品种，人均 60–120 拉里</li>
-    <li><strong>Chronicle of Georgia</strong> —— 城北山上的巨型青铜柱阵，人少气势足，Bolt 单程 20 拉里</li>
-  </ul>
+  </details>
 </div>
-</section>
-
-<!-- ============ 巴统 ============ -->
-<section id="batumi">
-<div class="wrap">
-  <h2>第二段 · 巴统</h2>
-  <p class="lede">9.23 周三 – 9.26 周六 &nbsp;·&nbsp; 火车去，包车回，回程顺路把内陆补上</p>
-
-  <div class="gal">
-    <div class="strip">
-      <figure>
-        <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Seafront_Promenade,_Batumi,_Georgia_-_panoramio.jpg?width=1100" alt="巴统海滨大道">
-        <figcaption>巴统海滨大道，全长七公里。海滩是鹅卵石不是沙。</figcaption>
-      </figure>
-      <figure>
-        <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Batumi_Botanical_Garden_(Georgia).jpg?width=1100" alt="巴统植物园">
-        <figcaption>巴统植物园，建在临海山坡上，按地理分区种植。</figcaption>
-      </figure>
-      <figure>
-        <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Makhuntseti_waterfall,_Adjara,_Georgia.jpg?width=1100" alt="马洪采季瀑布">
-        <figcaption>Makhuntseti 瀑布，公路边走一百米就到。</figcaption>
-      </figure>
-      <figure>
-        <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Martvili_Canyon,_Georgia._2018_(22).jpg?width=1100" alt="马尔特维利峡谷">
-        <figcaption>Martvili 峡谷，坐橡皮艇进去二十分钟。</figcaption>
-      </figure>
-    </div>
-    <p class="hint">← 左右滑动 →</p>
-  </div>
-
-  <div class="note">
-    <p><strong>火车时刻已经确认（2026 年 8 月新隧道通车后改点，全程 4 小时整）</strong>：巴统 ⇄ 第比利斯每天三班，08:00–12:00、16:50–20:50、18:30–22:30，反向对开。经济舱 $13.75，一等舱 $29.03。<em>去程坐 08:00 那班</em>——12:00 到巴统，下午还完整。</p>
-    <p style="margin-top:10px">回程之所以改成包车，是因为三班车要么太早（08:00 出发等于半天作废）要么太晚（20:50 或 22:30 到，第二天还要去埃里温）。而包车能把库塔伊西一带顺路补上——那一片原先为了迁就火车班次被放弃过。</p>
-  </div>
-
-  <div class="day">
-    <span class="daytag move">9.23 周三</span>
-    <h3>火车去巴统 · 下午植物园</h3>
-    <p class="route"><b>动线</b>Avlabari <span class="hop">Bolt 15分</span> 中央火车站 <span class="hop">火车 4h</span> Batumi Central <span class="hop">车 20分 / 6km</span> 希尔顿 <span class="hop">Bolt 20分 / 9km</span> 植物园 <span class="hop">回城</span> 海滨大道</p>
-
-    <div class="slot"><p class="when">06:45</p><p class="what">起床退房，行李全带走。</p></div>
-    <div class="slot"><p class="when">07:15</p><p class="what">Bolt 去 Station Square 火车站，15 分钟，10–15 拉里。</p></div>
-    <div class="slot"><p class="when">08:00</p><p class="what">发车。Stadler 瑞士双层车，有插座和小桌板。这四小时是国内 12:00–16:00，能处理消息。<strong>上层靠右视野好。</strong></p></div>
-    <div class="slot"><p class="when">12:00</p><p class="what">到 <strong>Batumi Central</strong>。<em>注意这个站实际在城北 Makhinjauri，离市中心还有 6 公里</em>，出站打车 10–15 拉里，二十分钟。</p></div>
-    <div class="slot"><p class="when">12:40</p><p class="what">到希尔顿（40 Rustaveli Ave）。<strong>入住是 15:00 之后，先寄存行李</strong>，别在酒店干等。</p></div>
-    <div class="slot"><p class="when">13:00–14:00</p><p class="what">午饭。到巴统第一顿就该吃阿扎尔奶酪船，这里是它的发源地。</p></div>
-    <div class="slot"><p class="when">14:30–17:30</p><p class="what"><strong>巴统植物园</strong>，城北 9 公里的 Green Cape，Bolt 15–20 拉里。建在临海山坡上，按地理分区种着东亚、澳洲、地中海的植物，一路能从高处俯瞰黑海。<em>园子很大，留足三小时</em>，从上门进、下门出最省力。</p></div>
-    <div class="slot"><p class="when">18:00</p><p class="what">回城，海滨大道散步，看 <strong>Ali &amp; Nino 雕塑</strong>——会转动、每十分钟交错穿过彼此一次的钢制情侣像——和字母塔。</p></div>
-    <div class="slot"><p class="when">18:40</p><p class="what"><strong>Argo 缆车</strong>上山看日落，九月底日落约 19:20，提前上去占位置。</p></div>
-    <div class="slot"><p class="when">20:00</p><p class="what">下山，回酒店办入住，老城 Piazza 一带吃晚饭。</p></div>
-
-    <div class="food">
-      <b>巴统的奶酪船是有世界排名的</b>
-      <ul>
-        <li><strong>Porto Franco</strong> —— TasteAtlas 上排世界第一的阿扎尔奶酪船。船大黄油厚，两人点一个就够</li>
-        <li><strong>Retro</strong> —— 同榜世界第二，本地老店，价格更实在</li>
-        <li><strong>Laguna</strong> —— 巴统本地评价里的第一名，海边位置</li>
-        <li>吃法：先撕船头的面包，把中间的蛋黄、黄油和奶酪搅匀，再撕船边蘸着吃。<span class="price">单个 15–25 拉里，热量惊人，配柠檬水解腻</span></li>
-      </ul>
-    </div>
-  </div>
-
-  <div class="day">
-    <span class="daytag rest">9.24 周四</span>
-    <h3>上午干活 · 换民宿 · 下午吃 · 晚上娱乐场</h3>
-
-    <div class="slot"><p class="when">08:30–13:00</p><p class="what">工作，对应国内 12:30–17:00。</p></div>
-    <div class="slot"><p class="when">12:00 前</p><p class="what">希尔顿退房。<strong>民宿就在隔壁 42 号</strong>，拖箱子走两步，行李先放过去。</p></div>
-    <div class="slot"><p class="when">13:30</p><p class="what"><strong>巴统鱼市</strong>吃午饭。自己在摊上挑鱼，交给楼上的小馆子，选煎、烤或炸，加工费几拉里。<em>这是巴统最地道的一顿</em>。</p></div>
-    <div class="slot"><p class="when">15:00–20:00</p><p class="what">如果订了<strong>美食漫步</strong>（5 小时），从这里接上。没订的话：老城 Piazza 广场和 Europe Square 一带闲逛，看看那些花哨的新建筑，傍晚到海边坐坐——<em>九月底白天 22–25°C，水温还下得去，想游泳带泳衣</em>。</p></div>
-    <div class="slot"><p class="when">21:00</p><p class="what"><strong>娱乐场</strong>。巴统是高加索的博彩中心（俄罗斯和土耳其禁赌），几家五星酒店里都有场子。<strong>带护照</strong>，入场要查证件；筹码用现金买。</p></div>
-
-    <div class="food">
-      <b>如果没订美食漫步，晚饭吃这些</b>
-      <ul>
-        <li><strong>Cafe Adjara</strong>（老城）—— 有个午餐套餐，六道阿扎拉小菜一次上齐：malakhto（豆泥）、dolma、小牛肉炖菜、sinori。第一次系统吃阿扎拉菜就点这个</li>
-        <li><strong>BatuMarani</strong> —— 九成菜品是从巴统周边村子搜集来的阿扎拉家族食谱，人均 50–80 拉里</li>
-        <li><strong>Oval Batumi</strong> —— 主厨 Guram Baghdoshvili，黑海青口和当地小鱼做得好，人均 70–120 拉里</li>
-        <li><strong>Panorama</strong> —— 31 层 360° 观景，主厨 Izo Dzandzava 是格鲁吉亚第一位获米其林指南认可的女主厨 <span class="price">订靠窗位</span></li>
-      </ul>
-    </div>
-
-    <div class="note"><p>这天的安排是<strong>为了把整块的山区行程让给已经放假的 9.25</strong>。原本 9.24 进山会撞上国内工作日，山谷里信号断续，现在这个矛盾消掉了。</p></div>
-  </div>
-
-  <div class="day">
-    <span class="daytag">9.25 周五</span>
-    <h3>阿扎拉山区 · Nodar 的 Highlander</h3>
-    <p class="route"><b>动线</b>42 Rustaveli Ave <span class="hop">28km / 45分</span> Makhuntseti 瀑布 + 女王塔玛尔桥 <span class="hop">10km / 20分</span> Keda <span class="hop">40km / 1h20</span> 回巴统</p>
-
-    <div class="slot"><p class="when">09:00</p><p class="what">Nodar 到民宿楼下接。Toyota Highlander，车牌 DD-971-PD。<strong>上车先把 Keda 那段的停留时长和总价确认一遍</strong>——订单里只写了瀑布，Keda 是备注里加的。</p></div>
-    <div class="slot"><p class="when">09:45–11:00</p><p class="what"><strong>Makhuntseti 瀑布</strong>，从公路边走一百米就到，不用徒步。下面有水潭。顺着走几百米就是 <strong>女王塔玛尔桥</strong>，12–13 世纪的石拱桥，桥头有卖蜂蜜、churchkhela 和自酿 chacha 的摊子。这一站留足一小时。</p></div>
-    <div class="slot"><p class="when">11:20–14:00</p><p class="what">往山里走到 <strong>Keda</strong>。午饭吃阿扎拉山区的招牌：<strong>borano</strong>（黄油煎的阿扎拉奶酪）和 <strong>sinori</strong>（薄面皮卷酸奶油），油厚味重，配 chacha 刚好。</p></div>
-    <div class="slot"><p class="when">14:00–16:00</p><p class="what">家庭酒庄品鉴。这一带做的是 <strong>Chkhaveri、Tsolikouri</strong> 这些西部品种，和卡赫季完全不同，酸度更高更清爽。<em>让 Nodar 推荐</em>——当地司机都有相熟的酒庄，这是包车相对跟团的隐性红利。</p></div>
-    <div class="slot"><p class="when">17:00</p><p class="what">回到巴统。晚上早点睡，明天 08:45 就要出发。</p></div>
-
-    <div class="note">
-      <p><strong>山里只收现金拉里</strong>，酒庄和小馆子都是。出门前取够。</p>
-      <p style="margin-top:10px">顺带纠正一个容易搞混的地理：<em>Makhuntseti 瀑布在 Adjaristsqali（阿扎拉河）谷，Machakhela 国家公园是另一条谷</em>，两者直线只隔 12 公里但山里不通，要绕回下游。你订的这条走的是 Adjaristsqali 谷，女王塔玛尔桥在这条线上。</p>
-    </div>
-  </div>
-
-  <div class="day">
-    <span class="daytag move">9.26 周六</span>
-    <h3>包车回第比利斯 · Vladimer 的 Accord</h3>
-    <p class="route"><b>动线</b>42 Rustaveli Ave <span class="hop">145km / 2.5h</span> Martvili 峡谷 <span class="hop">60km / 1.25h</span> Gelati 修道院 <span class="hop">240km / 3.5h</span> Monograph Freedom Square　<strong>全程 443km · 纯车程 7h18m</strong></p>
-
-    <div class="slot"><p class="when">08:00</p><p class="what">起床，早饭，退房。行李装车。</p></div>
-    <div class="slot"><p class="when">08:45</p><p class="what">Vladimer 到民宿楼下。Honda Accord，车牌 VL-102-AD。</p></div>
-    <div class="slot"><p class="when">11:15–12:45</p><p class="what"><strong>Martvili 峡谷</strong>。坐橡皮艇漂进翡翠绿的石灰岩峡谷，二十分钟，很出片。<em>橡皮艇可能因水位或天气停运</em>——出发前一天让 Vladimer 帮忙问一句，停运的话这站就只剩栈道，可以改去 Prometheus 洞穴。</p></div>
-    <div class="slot"><p class="when">13:00–14:00</p><p class="what">库塔伊西附近午饭。这是格鲁吉亚第二大城，物价明显比第比利斯低。</p></div>
-    <div class="slot"><p class="when">14:15–15:30</p><p class="what"><strong>Gelati 修道院</strong>，UNESCO 名录，12 世纪，格鲁吉亚黄金时代的代表作，穹顶马赛克是重点。<em>比库塔伊西城里的 Bagrati 大教堂更值得看</em>——Bagrati 因为修复方式争议已被移出 UNESCO 名录。</p></div>
-    <div class="slot"><p class="when">15:30</p><p class="what">出发，三个半小时高速。</p></div>
-    <div class="slot"><p class="when">19:30–20:00</p><p class="what">到 <strong>Monograph Freedom Square</strong>（5/7 Pushkin St）。24 小时前台，晚到不影响。放下行李出门吃个夜宵，老城就在楼下。</p></div>
-
-    <div class="gal">
-      <div class="strip">
-        <figure>
-          <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Gelati_Monastery,_Georgia.jpg?width=1100" alt="盖拉特修道院">
-          <figcaption>Gelati 修道院，12 世纪，格鲁吉亚黄金时代的代表。</figcaption>
-        </figure>
-        <figure>
-          <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Kutaisi_Bagrati_Cathedral.jpg?width=1100" alt="库塔伊西">
-          <figcaption>库塔伊西，格鲁吉亚第二大城，物价比第比利斯低不少。</figcaption>
-        </figure>
-      </div>
-      <p class="hint">← 左右滑动 →</p>
-    </div>
-
-    <div class="note">
-      <p><strong>这天是全程最长的一天，11 小时左右。</strong>纯车程 7 小时 18 分是系统算的，不含停留；加上三站的游览和午饭才是全天。中途想在哪儿多待半小时都可以——GoTrip 的条款里写明乘客有权更改路线和时间，而且等待和停留不额外计时收费。</p>
-      <p style="margin-top:10px">这两个点当初因为"离火车站太远、要单独包车"被砍掉过。现在顺路做掉，边际成本几乎为零——同样内容从巴统当天往返的一日游，两人要 ¥2,000 以上。</p>
-    </div>
-  </div>
-</div>
-</section>
-
-<!-- ============ 埃里温 ============ -->
-<section id="yerevan">
-<div class="wrap">
-  <h2>第三段 · 埃里温</h2>
-  <p class="lede">9.27 周日 – 9.30 周三 &nbsp;·&nbsp; 行程由朋友安排，这里只管两头的交通</p>
-
-  <div class="urgent">
-    <h4>9 月 30 日回第比利斯，这是整趟最需要盯的一天</h4>
-    <p>10 月 1 日 15:30 的 C6222 <strong>从第比利斯起飞</strong>。埃里温到第比利斯没有稳定的直飞，实际都走陆路 5–7 小时，中间还有 Sadakhlo–Bagratashen 口岸的排队查验，堵一两小时是常事。</p>
-    <p style="margin-top:10px"><em>不要把这段压到 10 月 1 日当天。</em>9 月 30 日上午出发，下午到第比利斯，晚上住下，10 月 1 日中午从容去机场。</p>
-  </div>
-
-  <h3>两头的交通</h3>
-  <div class="wide">
-  <table>
-    <tr><th>方式</th><th>时间与价格</th><th>说明</th></tr>
-    <tr><td>小巴 marshrutka</td><td>4–6 小时，10 美元起</td><td>埃里温 Kilikia 站 ⇄ 第比利斯 Avlabari 或 Ortachala。坐满发车，走 Alaverdi 那条路要 6 小时</td></tr>
-    <tr><td>大巴</td><td>5–7 小时，8–30 美元</td><td>班次固定，可网上订（INFOBUS、Bookaway），比小巴舒服</td></tr>
-    <tr><td>包车 / 拼车</td><td>4.5–5.5 小时，100–150 美元一车</td><td>最快最省事，能中途停 Haghpat、Sanahin 两座 UNESCO 修道院。<strong>9.30 推荐这个</strong></td></tr>
-    <tr><td>火车</td><td>约 10 小时，35–60 美元</td><td>每周四班的夜车，卧铺过夜省一晚住宿，但时间对不上你们的安排</td></tr>
-  </table>
-  </div>
-
-  <p>亚美尼亚对华免签，陆路口岸出入境各盖一次章。<strong>保险必须覆盖亚美尼亚</strong>，只写格鲁吉亚的保单出境后就是裸奔。</p>
-
-  <div class="note">
-    <p><strong>9.27 出发那天</strong>：你们住在自由广场，去 <strong>Ortachala 长途汽车站</strong>更近（Bolt 十分钟）；Avlabari 的小巴集散点坐地铁一站也能到。朋友如果安排了车，上车点定在这两处都方便。</p>
-  </div>
-</div>
-</section>
-
-<!-- ============ 9.30-10.1 ============ -->
-<section id="backtb">
-<div class="wrap">
-  <h2>9.30 – 10.1 · 回第比利斯，然后走</h2>
-  <p class="lede">这一天半的首要任务是给 10.1 下午的飞机留缓冲，所以不放任何需要提前订、错过就浪费的东西。</p>
-
-  <div class="day">
-    <span class="daytag move">9.30 周三</span>
-    <h3>埃里温 → 第比利斯</h3>
-    <div class="slot"><p class="when">08:00</p><p class="what">从埃里温出发。包车的话顺路停 <strong>Haghpat</strong> 和 <strong>Sanahin</strong> 两座修道院（都在 Alaverdi 附近，10 世纪石构，UNESCO），各 40 分钟，把过境的沉闷冲掉。</p></div>
-    <div class="slot"><p class="when">13:00–15:00</p><p class="what">过 Sadakhlo 口岸，进格鲁吉亚。</p></div>
-    <div class="slot"><p class="when">下午到</p><p class="what">按到达时间三选一——<br><strong>13:00 前到</strong>：加 Dry Bridge 跳蚤市场，苏联徽章、老相机、旧地图，比纪念品店有意思<br><strong>15:00 前后到</strong>：上 <strong>Mtatsminda 山顶公园</strong>，坐 funicular 上去，海拔 770 米，19:00 前后日落<br><strong>18:00 后到</strong>：直接 Metekhi 平台看夜景，老城吃饭</p></div>
-    <div class="slot"><p class="when">晚上</p><p class="what">收拾行李，把剩下的拉里现金清点一下。</p></div>
-  </div>
-
-  <div class="day">
-    <span class="daytag move">10.1 周四</span>
-    <h3>第比利斯 → 塔什干</h3>
-    <div class="slot"><p class="when">上午</p><p class="what">最后半天。慢慢吃个早午饭，补买 churchkhela、Borjomi、红酒当手信。</p></div>
-    <div class="slot"><p class="when">11:30</p><p class="what">退房。</p></div>
-    <div class="slot"><p class="when">12:00</p><p class="what">Bolt 去机场，30 分钟，25–35 拉里。</p></div>
-    <div class="slot"><p class="when">12:30</p><p class="what">到 TBS。国际航班提前 3 小时。<em>剩下的拉里在机场花掉或换掉</em>，出了格鲁吉亚基本没地方换。</p></div>
-    <div class="slot"><p class="when">15:30</p><p class="what">C6222 起飞。</p></div>
-    <div class="slot"><p class="when">19:50</p><p class="what">落地塔什干 T2。免签 30 天。</p></div>
-    <div class="slot"><p class="when">20:00–20:40</p><p class="what">入境取行李。出关办两件事：买 SIM 卡（Ucell、Beeline、Uzmobile 柜台都在到达厅），换钱（<strong>Som 面额很大</strong>，1 美元一万多，第一次换会被一沓钱吓到）。</p></div>
-    <div class="slot"><p class="when">21:00</p><p class="what">Yandex Go 进城，机场离市中心约 10 公里，二十分钟，五六万 Som。</p></div>
-    <div class="slot"><p class="when">21:30</p><p class="what">到酒店。附近吃点 samsa（馕坑烤的酥皮肉包）或 lagman（手拉面）就睡，明天六点半起。</p></div>
-  </div>
-</div>
-</section>
-
-<!-- ============ 塔什干 ============ -->
-<section id="tashkent">
-<div class="wrap">
-  <h2>第四段 · 塔什干与撒马尔罕</h2>
-  <p class="lede">10.2 周五整天撒马尔罕，10.3 周六塔什干半天然后回家</p>
-
-  <div class="note">
-    <p><strong>为什么是撒马尔罕不是布哈拉</strong>：你只有一个整天。撒马尔罕高铁 2 小时 10 分，当天往返能留 7 小时游览；布哈拉单程 3 小时 40 分，往返就是 7 小时 20 分车程，只剩三四个小时。希瓦更远，要飞或坐夜车。<em>撒马尔罕是这个时间约束下唯一的解</em>。</p>
-  </div>
-
-  <div class="day">
-    <span class="daytag">10.2 周五</span>
-    <h3>撒马尔罕一日往返</h3>
-    <p class="route"><b>动线</b>塔什干站 <span class="hop">Afrosiyob 2h10</span> 撒马尔罕 <span class="hop">车 10分</span> Registan <span class="hop">步行 10分</span> Gur-e-Amir <span class="hop">车 10分</span> Shah-i-Zinda <span class="hop">步行</span> Bibi-Khanym + Siyob 巴扎</p>
-
-    <div class="slot"><p class="when">06:30</p><p class="what">起床。酒店早餐或路上买 samsa。</p></div>
-    <div class="slot"><p class="when">07:15</p><p class="what">到塔什干火车站（地铁 Toshkent 站直达）。<strong>安检很严，要求提前 30–45 分钟到</strong>，护照和车票都查。</p></div>
-    <div class="slot"><p class="when">08:00</p><p class="what">Afrosiyob 发车，西班牙 Talgo 车，250 km/h。有餐车，二等座够舒服。这两小时是国内 11:00–13:00。</p></div>
-    <div class="slot"><p class="when">10:30–12:00</p><p class="what"><strong>Registan 广场</strong>，三座经学院围合，中亚建筑的天花板。上午光线从东边打过来，正面最好拍。可以加钱上宣礼塔俯瞰。</p></div>
-    <div class="slot"><p class="when">12:00–12:45</p><p class="what"><strong>Gur-e-Amir</strong>，帖木儿陵墓，步行十分钟。金箔穹顶内壁，比外面看着震撼。</p></div>
-    <div class="slot"><p class="when">13:00–14:15</p><p class="what">午饭。</p></div>
-    <div class="slot"><p class="when">14:30–16:00</p><p class="what"><strong>Shah-i-Zinda</strong>，蓝瓷陵墓群夹成的小巷，几十米坡道两侧全是不同年代的釉面砖。<em>下午光线斜进巷子，是全撒马尔罕最好拍的一小时</em>。</p></div>
-    <div class="slot"><p class="when">16:00–17:00</p><p class="what"><strong>Bibi-Khanym 清真寺</strong>和旁边的 <strong>Siyob 巴扎</strong>。干果、香料、馕比塔什干便宜，买手信最好的地方。</p></div>
-    <div class="slot"><p class="when">18:00 前后</p><p class="what">返程班次（以 railway.uz 为准）。</p></div>
-    <div class="slot"><p class="when">20:30</p><p class="what">回到塔什干。</p></div>
-
-    <div class="gal">
-      <div class="strip">
-        <figure>
-          <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Registan_Samarkand_Uzbekistan.JPG?width=1100" alt="雷吉斯坦广场">
-          <figcaption>雷吉斯坦广场，三座经学院围合。夜里有灯光秀。</figcaption>
-        </figure>
-        <figure>
-          <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Shah-i-Zinda_(Samarkand).jpg?width=1100" alt="沙赫静达陵墓群">
-          <figcaption>Shah-i-Zinda，蓝瓷陵墓群夹成的小巷。</figcaption>
-        </figure>
-        <figure>
-          <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Gur-e-Amir_Mausoleum,_Samarkand.jpg?width=1100" alt="帖木儿陵墓">
-          <figcaption>Gur-e-Amir，帖木儿陵墓。</figcaption>
-        </figure>
-      </div>
-      <p class="hint">← 左右滑动 →</p>
-    </div>
-
-    <div class="food">
-      <b>撒马尔罕的午饭</b>
-      <ul>
-        <li><strong>Bibikhanum Teahouse</strong> —— 就在 Bibi-Khanym 清真寺对面，院子里的传统茶馆，手抓饭和 shashlik 都稳，位置最省脚力</li>
-        <li><strong>Platan</strong> —— 老牌餐厅，中亚菜加欧洲菜，适合坐下来歇一个多小时</li>
-        <li>撒马尔罕的 plov 用亚麻籽油炒，颜色更深更香，和塔什干不是一个路子，值得对比着吃</li>
-        <li>Siyob 巴扎的撒马尔罕馕是全乌兹别克最有名的，硬，能放很久，适合带走</li>
-      </ul>
-    </div>
-  </div>
-
-  <div class="day">
-    <span class="daytag move">10.3 周六</span>
-    <h3>塔什干半天 · 晚上回家</h3>
-    <div class="slot"><p class="when">08:30</p><p class="what">早饭，行李寄存在前台。</p></div>
-    <div class="slot"><p class="when">09:00–10:15</p><p class="what"><strong>Chorsu Bazaar</strong>，蓝色穹顶大巴扎。穹顶下是肉档和奶制品，外圈是干果、香料、馕、腌菜。早上人最多最热闹。</p></div>
-    <div class="slot"><p class="when">10:30–11:20</p><p class="what"><strong>Hazrat Imam 建筑群</strong>，塔什干的宗教中心，图书馆里藏着世界最古老的《古兰经》抄本之一。</p></div>
-    <div class="slot"><p class="when">11:30–12:20</p><p class="what"><strong>地铁艺术站</strong>。中亚第一条地铁，每站装修不同，刷一次卡随便坐。必看三站：<strong>Kosmonavtlar</strong>（宇航员站，深蓝配航天肖像）、<strong>Alisher Navoi</strong>（穹顶蓝瓷）、<strong>Pakhtakor</strong>（棉花图案）。</p></div>
-    <div class="slot"><p class="when">12:30–13:45</p><p class="what">抓饭。<em>塔什干这顿最不能错过</em>，详见下面。</p></div>
-    <div class="slot"><p class="when">14:00–15:30</p><p class="what">买手信 + Tashkent City 新城公园歇脚。干果香料丝绸在 Chorsu 巴扎最划算；手工艺品去 <strong>Human House</strong>（陶器、细密画、刺绣）。</p></div>
-    <div class="slot"><p class="when">16:00</p><p class="what">回酒店取行李，换身干净衣服。</p></div>
-    <div class="slot"><p class="when">17:00</p><p class="what">Yandex Go 去机场 T2，提前 3 小时。<em>剩下的 Som 在机场花掉</em>。</p></div>
-    <div class="slot"><p class="when">20:20</p><p class="what">MU6038 起飞。</p></div>
-    <div class="slot"><p class="when">10.4 05:50</p><p class="what">落地浦东 T1。周日清晨，回家补觉。</p></div>
-
-    <div class="gal single">
-      <div class="strip">
-        <figure>
-          <img src="https://commons.wikimedia.org/wiki/Special:FilePath/Bazar_Chorsu_Tashkent.jpg?width=1100" alt="乔尔苏巴扎">
-          <figcaption>Chorsu 巴扎的蓝色穹顶。</figcaption>
-        </figure>
-      </div>
-    </div>
-
-    <div class="food">
-      <b>抓饭要中午去，卖完就没</b>
-      <ul>
-        <li><strong>Besh Qozon</strong>（中亚抓饭中心）—— 电视塔旁边，号称有世界最大的抓饭锅，全开放式厨房几口巨锅同时开工。每天做几种：羊肉、牛肉、鸡肉甚至马肉，也有撒马尔罕和费尔干纳两个流派。<em>大锅中午前后出锅，12 点前到最稳</em>，一份 20,000–30,000 Som</li>
-        <li><strong>Samarqand Zig'ir Osh</strong> —— 亚麻籽油炒的撒马尔罕抓饭，Olmazor 分店在地铁 Beruni 站附近，本地人多</li>
-        <li><strong>Chorsu 巴扎外的 Oqvat Bozori 摊档</strong> —— 蓝穹顶旁的小巷，塑料棚下做 plov、shashlik、naryn，一盘三四美元，最便宜也最真实</li>
-        <li>喝的：绿茶（ko'k choy）配抓饭解腻，几乎每桌都有</li>
-      </ul>
-    </div>
-
-    <div class="note"><p>乌兹别克现金用得比格鲁吉亚多，巴扎和路边摊只收 Som；市区大店、餐厅、酒店刷卡没问题。水买瓶装。打车全用 Yandex Go，别在路边拦车谈价。</p></div>
-  </div>
-</div>
-</section>
-
-<!-- ============ 徒步 ============ -->
-<section id="hike">
-<div class="wrap">
-  <h2>徒步：最有名的那条这趟去不了</h2>
-  <p class="lede">留个念想，也说清楚为什么。</p>
-  <p>搜"格鲁吉亚徒步"，头条永远是 <strong>Mestia → Ushguli 四天三夜</strong>，穿越斯瓦涅季，终点乌树故里是欧洲最高的有人居住村落，家家有中世纪石塔。但它在西北角，从第比利斯单程 8–9 小时车程，加徒步至少挖走 6 整天。这趟塞不进去，留给下次专门跑一趟。</p>
-  <p>这趟能做的都是当天往返的：</p>
-  <ul class="plain">
-    <li><strong>Gergeti 徒步</strong> —— 最顺手，从 Stepantsminda 走上去单程 1.5–2 小时，爬升 430 米。<em>9.19 那天可以走上去、坐车下来</em>，跟司机说一声就行</li>
-    <li><strong>特鲁索峡谷轻徒步</strong> —— 9.19 已经包含。到 Abano 村往返 12 公里 4–5 小时，你们的团用 4×4 开进去，只走一段</li>
-    <li><strong>Juta 谷 / Chaukhi 山</strong> —— 格鲁吉亚的多洛米蒂，但要占掉整个卡兹别吉那天，和 Gergeti 二选一</li>
-    <li><strong>Gveleti 瀑布</strong> —— 往返一小时，卡兹别吉附近的加餐选项</li>
-  </ul>
-</div>
-</section>
-
-<!-- ============ 网址 ============ -->
-<section id="urls">
-<div class="wrap">
-  <h2>常用网址</h2>
-  <p class="lede">出发前把这一节存成书签，或者截图存相册。</p>
-
-  <h3>订票与交通</h3>
-  <div class="links">
-    <a class="row" href="https://tkt.ge/en" target="_blank" rel="noopener"><b>tkt.ge</b><span>格鲁吉亚铁路官方售票，第比利斯 ⇄ 巴统。也能查实时时刻</span></a>
-    <a class="row" href="https://railway.uz/en/" target="_blank" rel="noopener"><b>railway.uz</b><span>乌兹别克铁路，Afrosiyob 高铁。发车前 60 天开售，塔什干时间早 6 点放票</span></a>
-    <a class="row" href="https://gotrip.ge/en/" target="_blank" rel="noopener"><b>gotrip.ge</b><span>你订两趟包车的平台。行程中改路线、联系司机都在站内聊天里做</span></a>
-    <a class="row" href="https://infobus.eu/en" target="_blank" rel="noopener"><b>INFOBUS</b><span>第比利斯 ⇄ 埃里温大巴，可提前网上订</span></a>
-    <a class="row" href="https://www.rome2rio.com" target="_blank" rel="noopener"><b>Rome2Rio</b><span>任意两点之间所有交通方式的比价与时长，规划陌生路段很好用</span></a>
-  </div>
-
-  <h3>天气</h3>
-  <div class="links">
-    <a class="row" href="https://www.meteoblue.com/en/weather/week/stepantsminda_georgia_614508" target="_blank" rel="noopener"><b>meteoblue · 卡兹别吉</b><span>看 <strong>low cloud（低云量）</strong>那条，不是晴雨图标。9.19 能不能看到雪山全看它</span></a>
-    <a class="row" href="https://www.meteoblue.com/en/weather/week/batumi_georgia_615532" target="_blank" rel="noopener"><b>meteoblue · 巴统</b><span>9.25 山区那天的参考</span></a>
-    <a class="row" href="https://www.windy.com" target="_blank" rel="noopener"><b>Windy</b><span>云层高度和移动的动态图，判断山区能见度比数字预报直观</span></a>
-  </div>
-
-  <h3>玩什么</h3>
-  <div class="links">
-    <a class="row" href="https://www.getyourguide.com/tbilisi-l1120/" target="_blank" rel="noopener"><b>GetYourGuide</b><span>格鲁吉亚一日游供给最厚的平台，同一条线常比别处便宜三成</span></a>
-    <a class="row" href="https://www.viator.com/Tbilisi/d4171" target="_blank" rel="noopener"><b>Viator</b><span>和 GYG 横向比价用</span></a>
-    <a class="row" href="https://wander-lush.org" target="_blank" rel="noopener"><b>Wander-Lush</b><span>高加索地区最靠谱的英文旅行博客，餐厅和线路信息更新勤</span></a>
-  </div>
-
-  <h3>吃饭与日常</h3>
-  <div class="links">
-    <a class="row" href="https://wolt.com/en/geo" target="_blank" rel="noopener"><b>Wolt</b><span>格鲁吉亚外卖主力，民宿懒得出门就用它</span></a>
-    <a class="row" href="https://bolt.eu" target="_blank" rel="noopener"><b>Bolt</b><span>格鲁吉亚打车主力，比 Yandex 车多</span></a>
-    <a class="row" href="https://go.yandex" target="_blank" rel="noopener"><b>Yandex Go</b><span>塔什干打车主力，格鲁吉亚备用</span></a>
-    <a class="row" href="https://www.tasteatlas.com/georgia" target="_blank" rel="noopener"><b>TasteAtlas · 格鲁吉亚</b><span>查某道菜哪家做得最好，巴统的奶酪船世界排名就出自这里</span></a>
-  </div>
-
-  <h3>证件与紧急</h3>
-  <div class="links">
-    <a class="row" href="http://cs.mfa.gov.cn" target="_blank" rel="noopener"><b>外交部领事服务网</b><span>临行前确认三国签证口径，出事找这里</span></a>
-    <a class="row" href="http://ge.china-embassy.gov.cn" target="_blank" rel="noopener"><b>中国驻格鲁吉亚大使馆</b><span>第比利斯</span></a>
-    <a class="row" href="http://am.china-embassy.gov.cn" target="_blank" rel="noopener"><b>中国驻亚美尼亚大使馆</b><span>埃里温</span></a>
-    <a class="row" href="http://uz.china-embassy.gov.cn" target="_blank" rel="noopener"><b>中国驻乌兹别克斯坦大使馆</b><span>塔什干</span></a>
-  </div>
-
-  <div class="note">
-    <p><strong>三国紧急电话</strong>：格鲁吉亚 <strong>112</strong>（警察消防急救合一）；亚美尼亚 <strong>911</strong>；乌兹别克斯坦 <strong>101</strong> 火警 / <strong>102</strong> 警察 / <strong>103</strong> 急救。</p>
-    <p style="margin-top:10px"><strong>出发前存进手机相册的离线文件</strong>：保单 PDF、护照照片、三张机票、火车票、两张包车订单截图、酒店确认号、这一页的截图。</p>
-  </div>
-</div>
-</section>
-
-<!-- ============ 速查 ============ -->
-<section id="ref">
-<div class="wrap">
-  <h2>速查</h2>
-
-  <h3>钱</h3>
-  <p>格鲁吉亚用拉里 GEL，亚美尼亚用德拉姆 AMD，乌兹别克斯坦用 Som（面额大，1 美元一万多）。城市里餐厅、超市、酒店基本都能刷卡，Apple Pay 在格鲁吉亚也普遍。</p>
-  <p><strong>必须带现金的场合</strong>：卡赫季和阿扎拉的家庭酒庄、山区小摊、巴扎、硫磺浴的搓背师傅、乌兹别克的巴扎和路边摊，<strong>还有两趟包车</strong>。</p>
-  <p>取现走 TBC Bank 或 Bank of Georgia 的 ATM，手续费低，避开街边独立 ATM。换汇在市区找带 Exchange 招牌的独立兑换点，汇率比银行和机场都好。<em>每次转场前把当地现金花完或换掉</em>。</p>
-
-  <div class="urgent">
-    <h4>包车为什么建议付现金</h4>
-    <p>GoTrip 的用户条款里有几条值得留意：平台<strong>保留存储你的银行卡信息并从账户扣款的权利，即使你注销账号或删除信息</strong>（10.6）；当有其他用户提出索赔时，<strong>平台可以自行判断后直接扣款，且声明对此不负责</strong>（5.13、5.14）。条款里甚至专门定义了「未经同意的扣款」这个词（1.9）。</p>
-    <p style="margin-top:10px">付现金完全不触发这套机制，而且行程结束才付，钱货两讫。附带还免掉跨境卡 1.5–3% 的手续费和汇率损失。</p>
-    <p style="margin-top:10px"><strong>另外：这份条款里没有任何退订政策。</strong>全文只有一条说"订单确认前可以取消"（3.8），确认之后怎么办完全没写——因为平台把自己定位成撮合方，真实的退改规则在司机手里。<em>如果需要改期，直接在站内聊天问司机，并且把回复留在站内</em>（条款 10.2 禁止绕开平台沟通，站内记录是唯一能拿出来的证据）。</p>
-  </div>
-
-  <h3>行李</h3>
-  <ul class="plain">
-    <li>一件真正保暖的冲锋衣或厚外套（9.19 卡兹别吉山上 5–10°C，风大），和一件薄的（第比利斯下午二十几度）</li>
-    <li>好走的防滑鞋。老城、锡格纳吉、撒马尔罕全是石板坡道，特鲁索谷还要走碎石路，一天两万步很正常</li>
-    <li>进修道院和清真寺：女士带头巾或围巾，男士别穿短裤。Bodbe、Jvari、Sameba、Gelati、Hazrat Imam 都查</li>
-    <li>泳衣。巴统还能下水，硫磺浴私人包间可穿可不穿</li>
-    <li>转换插头（欧标两圆孔 C/F）、充电宝、保单和护照的离线照片</li>
-    <li>肠胃药。格鲁吉亚菜油厚、乌兹别克抓饭更油，连吃两周会有反应</li>
-  </ul>
-
-  <h3>几条常识</h3>
-  <ul class="plain">
-    <li>第比利斯自来水水质很好，当地人直接喝。乌兹别克斯坦买瓶装</li>
-    <li>治安在欧洲范围内属于很好的一档，夜里老城也安全。主要注意山路上的司机开得猛</li>
-    <li>城市里英语够用，年长一代说俄语。农村两样都可能不通，翻译 App 备着离线包</li>
-    <li>格鲁吉亚人的 supra 长桌宴会一直劝酒，tamada（酒司仪）会不停敬酒，chacha 度数很高，量力而行</li>
-    <li>教堂里多数不让拍照，看门口标志；巴扎里拍人先问一声</li>
-  </ul>
-
-  <h3>还没定的几件事</h3>
-  <ol class="plain">
-    <li><strong>第比利斯前五晚、9.30 那晚、塔什干两晚的住宿。</strong>见「已订」一节的位置建议。</li>
-    <li><strong>9.23 的火车票。</strong>坐 08:00 那班，tkt.ge 上买。</li>
-    <li><strong>撒马尔罕往返高铁票。</strong>发车前 60 天开售，越早越好。</li>
-    <li><strong>9.30 从埃里温怎么回。</strong>建议包车，100–150 美元一车，顺路看两座 UNESCO 修道院。</li>
-    <li><strong>9.24 下午的美食漫步订不订。</strong>订之前确认含不含鱼市。</li>
-  </ol>
-</div>
-</section>
 
 <footer>
-<div class="wrap">
-  <p>航班取自航旅纵横截图；住宿与包车信息取自你的订单页；火车时刻取自 2026 年 8 月新隧道通车后的实际班次（08:00 / 16:50 / 18:30，全程 4 小时）。Afrosiyob 时刻以 railway.uz 为准。保险要求依据格方 2026 年第 602 号政府决议。餐厅营业状态出发前用 Google Maps 复核一次。</p>
-  <p>图片来自 Wikimedia Commons，均为知识共享（CC BY / CC BY-SA）授权作品。加载不出来的会自动隐藏，不影响阅读。</p>
-  <a class="totop" href="#book">回到顶部</a>
-</div>
+  <div class="wrap">
+    <p>航班取自航旅纵横截图，住宿与包车取自订单页，火车时刻为 2026 年 8 月新隧道通车后的实际班次。Afrosiyob 时刻以 railway.uz 为准，保险要求依据格方 2026 年第 602 号政府决议。餐厅营业状态出发前用 Google Maps 复核。</p>
+    <p>图片来自 Wikimedia Commons（CC BY / CC BY-SA）。加载不出来的会自动隐藏，不影响阅读。</p>
+  </div>
 </footer>
+
 <script>
-document.querySelectorAll('.check .box').forEach(function(b){
-  function toggle(){ b.setAttribute('aria-checked', b.getAttribute('aria-checked')==='true' ? 'false':'true'); }
-  b.addEventListener('click', toggle);
-  b.addEventListener('keydown', function(e){
-    if(e.key===' '||e.key==='Enter'){ e.preventDefault(); toggle(); }
-  });
+const W = "https://commons.wikimedia.org/wiki/Special:FilePath/";
+const P = (f,c) => ({s: W + f + "?width=900", c: c});
+
+const DAYS = [
+{
+  d:"9.18", dow:"周五", type:"move", lab:"落地", city:"第比利斯",
+  title:"落地当晚", sum:"19:00 落地 TBS，机场办卡取现，夜里去 Metekhi 平台看对岸老城亮灯。",
+  move:[{ic:"✈",t:"MU285　上海浦东 T1 → 第比利斯 TBS",s:"12:50 – 19:00 · 飞行约 10 小时 10 分",m:"落地时天刚黑，当晚还能吃顿正经晚饭"}],
+  stay:{t:"第比利斯 · Avlabari 一带",s:"地铁 1 号线一站到自由广场，步行可达 Sameba、Metekhi、老城",tag:"待订"},
+  tl:[
+    {t:"19:00",x:"落地 TBS。中国护照免签，走 <b>All Passports</b> 通道。",key:true},
+    {t:"19:20",x:"到达厅两件事一起办：<b>电话卡</b>（Magti 或 Silknet 柜台，短期套餐 20–40 拉里）；<b>取现金</b>，用 TBC 或 Bank of Georgia 的 ATM 取 200–300 拉里。机场兑换点汇率差，只换 50–100 应急。"},
+    {t:"19:50",x:"Bolt 到 Avlabari。约 17 公里，25–35 拉里，半小时。"},
+    {t:"21:00",x:"出门吃第一顿，走十来分钟进老城。"},
+    {t:"22:30",x:"<b>Metekhi 悬崖平台</b>看夜景，对岸老城和 Narikala 要塞都打了灯。看完回去睡，第一夜别熬。",key:true}
+  ],
+  food:[
+    {n:"Salobie Bia",d:"Rustaveli 剧院旁台阶下去，家常不宰客。招牌 shkmeruli（蒜香核桃酱烤鸡）、lobiani（豆泥饼）",p:"两人 60–90 拉里 · 不用订位"},
+    {n:"Machakhela",d:"老城多家分店，阿扎尔奶酪船稳定水准，第一次吃格鲁吉亚菜从这家入门不会错"},
+    {n:"喝的",d:"Saperavi 干红、Rkatsiteli 琥珀酒，餐酒一瓶 25–45 拉里；不喝酒点 Borjomi 气泡矿泉水，味道很咸，做好准备"}
+  ],
+  tips:[{w:true,x:"<b>第一晚别去泡硫磺浴。</b>坐十小时飞机再泡四十度硫磺水，出来只会更虚。放到 9.21 傍晚，那天走了一天山路，泡完正好。"}],
+  pics:[P("Tbilisi,_Georgia_—_Metekhi_Church.jpg","Metekhi 教堂和悬崖平台，第一晚看夜景就在这儿")]
+},
+{
+  d:"9.19", dow:"周六", type:"play", lab:"卡兹别吉", city:"大高加索",
+  title:"卡兹别吉深度小团", sum:"军事公路一路向北，翻 Jvari 山口，钻进特鲁索峡谷，4×4 上格尔盖蒂三一教堂。",
+  move:[{ic:"🚙",t:"携程拼团 · 精品小团",s:"最多 6 人 · 4×4 越野车 · 全天约 13 小时",m:"第比利斯 →70km→ 阿纳努里 →50km→ 古道里 →20km→ 特鲁索 →25km→ Gergeti"}],
+  stay:{t:"第比利斯 · Avlabari 一带",s:"当晚回城，住处不变",tag:""},
+  tl:[
+    {t:"上午",x:"<b>阿纳努里城堡</b>，金瓦利水库边的教堂加城墙，湖水是奶蓝色。"},
+    {t:"中途",x:"<b>古道里友谊纪念碑</b>，悬崖上的环形壁画平台，正对 Devil's Valley 峡谷。然后翻 <b>Jvari 山口</b>，海拔 2379 米。"},
+    {t:"重头",x:"<b>特鲁索峡谷</b>，从军事公路 Kobi 村岔进去。橙色钙华台地、废弃的奥塞梯石塔村、冒二氧化碳气泡的阿巴诺矿泉湖。普通大巴进不来，这是 4×4 小团的价值所在。",key:true},
+    {t:"高潮",x:"换 4×4 上 <b>Gergeti 三一教堂</b>，海拔 2170 米，土路颠簸二十分钟。雪山背景下的孤零零小教堂，是格鲁吉亚最标志性的画面。<b>上山费已含在团费里</b>。",key:true},
+    {t:"回程",x:"路上大概率会停一次买蜂蜜和 churchkhela。这个团点多，晚上八九点甚至更晚才回得来，跟客服确认准确时间。"}
+  ],
+  food:[
+    {n:"山里的 khinkali",d:"Stepantsminda 镇上的 khinkali 个头大、汁多，配一碗 kharcho 牛肉汤。捏着褶子头咬开先喝汤，别用叉子"},
+    {n:"路边摊",d:"蜂蜜、churchkhela（核桃串蘸葡萄汁凝的“格鲁吉亚士力架”）、自酿 chacha，都收现金"}
+  ],
+  tips:[
+    {w:true,x:"<b>带护照原件上车。</b>特鲁索峡谷入口有格鲁吉亚边防警察检查站，要出示护照登记姓名才放行——谷的西端接近南奥塞梯实控线，谷里有驻军。<b>没带护照这一段就进不去</b>，而它恰恰是这个团比普通线路多出来的部分。"},
+    {w:false,x:"九月下旬山上白天 15–20°C，夜里 5–10°C，风大。特鲁索谷海拔 1800–2400 米，还要下车走碎石路。<b>冲锋衣和防滑鞋是必需品</b>——山下第比利斯二十几度会骗你。"},
+    {w:false,x:"<b>天气怎么看</b>：Gergeti 能不能看到雪山，关键是<b>低云量和云底高度，不是晴雨图标</b>。镇上艳阳高照、教堂泡在云里，是这条线的典型情况。出发前三天看 meteoblue 的分层云图，当天早上瞄一眼 Gudauri 的实时摄像头比任何预报都准。真赶上云低也不用沮丧——特鲁索在谷底，受影响比 Gergeti 小得多。"}
+  ],
+  pics:[
+    P("Gergeti_Trinity_Church_14th_century_in_Georgia.jpg","格尔盖蒂三一教堂，海拔 2170 米，背后是卡兹别吉峰"),
+    P("Ananuri_castle_01.jpg","阿纳努里城堡，军事公路上的第一站"),
+    P("Truso_Valley,_Georgia.jpg","特鲁索峡谷的钙华沉积，橙红色是矿泉里的铁氧化物")
+  ]
+},
+{
+  d:"9.20", dow:"周日", type:"play", lab:"卡赫季", city:"阿拉扎尼谷",
+  title:"卡赫季酒乡一日", sum:"欧洲广场 08:45 集合。修道院、红顶小城锡格纳吉，特拉维酒庄品 9 种酒。",
+  move:[{ic:"🚐",t:"一日游 · 欧洲广场集合",s:"08:45 集合，15 分钟内发车",m:"从 Avlabari 步行十来分钟到集合点，不用打车"}],
+  stay:{t:"第比利斯 · Avlabari 一带",s:"当晚回城，住处不变",tag:""},
+  tl:[
+    {t:"08:30",x:"从住处步行去 <b>欧洲广场</b>（Rike 公园旁），十来分钟。"},
+    {t:"路上",x:"<b>Manavi</b> 尝 churchkhela；<b>Badiauri</b> 的面包店，现烤面包配奶酪和 chacha，每人 2–3 美元。"},
+    {t:"上午",x:"<b>Bodbe 修道院</b>，圣尼诺墓，柏树夹道，露台俯瞰整条阿拉扎尼谷和大高加索山脉。进门女士要头巾或围巾。",key:true},
+    {t:"中午",x:"<b>锡格纳吉 Sighnaghi</b>，“爱情之城”，红顶小城，在城墙和塔楼处停留。石板坡道多，穿好走的鞋。",key:true},
+    {t:"下午",x:"<b>特拉维 Telavi</b> 的酒庄，品鉴 9 种葡萄酒，听当地人讲酒的故事。之后在特拉维餐厅吃当地菜，<b>按菜单另付费</b>。"}
+  ],
+  food:[
+    {n:"酒庄配菜",d:"pkhali（核桃菠菜泥团）、mtsvadi（炭烤猪肉串）、churchkhela，主人会一直劝酒"},
+    {n:"要喝什么",d:"Saperavi 红、Rkatsiteli 琥珀酒，还有 chacha 葡萄渣烈酒。琥珀酒是 qvevri 陶罐带皮发酵的，单宁重，和一般白葡萄酒完全两回事"}
+  ],
+  tips:[
+    {w:false,x:"<b>这条线是标准酒庄品鉴，不含下地采收。</b>你们的时间点其实很巧——<b>rtveli（葡萄采收节）九月中下旬开始，十月上旬进高峰</b>，整个阿拉扎尼谷都在收葡萄。真想剪葡萄、光脚踩果、从陶罐里舀新酒，得单独找家庭酒庄。<b>可以在车上问向导</b>，特拉维一带的家庭 marani 很多，有些团能临时加。不加也不亏，9 种酒的品鉴本身就值。"},
+    {w:true,x:"村里的家庭酒庄基本只收现金拉里，<b>这天每人带 200 拉里现金</b>。"}
+  ],
+  pics:[
+    P("Sighnaghi_town_in_Kakheti,_Georgia.jpg","锡格纳吉，背后是阿拉扎尼谷和大高加索山脉"),
+    P("Bodbe_Monastery,_Georgia.jpg","Bodbe 修道院，圣尼诺墓所在"),
+    P("Qvevri_wine_jars_Georgia.jpg","qvevri 陶罐，八千年的酿酒法，埋在地下发酵")
+  ]
+},
+{
+  d:"9.21", dow:"周一", type:"work", lab:"要塞+泡澡", city:"第比利斯",
+  title:"上午干活 · 下午爬要塞 · 傍晚泡澡", sum:"缆车上 Narikala，沿 Betlemi 街走下来，落到硫磺浴区。",
+  move:[],
+  stay:{t:"第比利斯 · Avlabari 一带",s:"",tag:""},
+  tl:[
+    {t:"08:30–14:00",x:"工作，对应国内 12:30–18:00。"},
+    {t:"14:00",x:"午饭。"},
+    {t:"15:30",x:"走到 <b>Rike 公园</b>（十五分钟），坐缆车上 <b>Narikala 要塞</b>。2.5 拉里，<b>只能刷 Metromoney 卡，不收现金也不收银行卡</b>，前一天先去地铁站办好。",key:true},
+    {t:"16:00",x:"要塞上转一圈，看 Mother Georgia 雕像（一手酒碗一手剑，待客与御敌）。这个点光线转金黄，全城最好的机位。"},
+    {t:"16:45",x:"不坐缆车下山，沿 <b>Betlemi 街</b>走下来——老犹太区，彩色玻璃阳台，木楼梯，第比利斯最好看的一段坡道。"},
+    {t:"18:00",x:"<b>硫磺浴</b>。私人包间按小时计 60–120 拉里，两三人分摊很划算。搓背（kisa）另加 15–20 拉里，力度很大，值得试一次。",key:true},
+    {t:"20:00",x:"晚饭，老城。"}
+  ],
+  food:[
+    {n:"浴室三选一",d:"<b>Chreli Abano</b>（蓝瓷马赛克那家，最上镜也最贵）、<b>Bathhouse No.5</b>（本地人多，性价比高）、<b>Gulo's Thermal Spa</b>（干净新，适合第一次）"},
+    {n:"Shavi Lomi",d:"藏在院子里的波西米亚小馆，主厨把 chakapuli（龙蒿炖羊肉）、pkhali 做出新样子，churchkhela 甜点是招牌",p:"人均 70–110 拉里 · 必须订位"},
+    {n:"Barbarestan",d:"复原 19 世纪贵族食谱本：李子酱小牛肉、薄荷樱桃汤、核桃酱茄子卷。一家人开的",p:"人均 90–140 拉里 · 常提前一周满"},
+    {n:"Café Littera",d:"作家之家花园里，南瓜 khinkali、榛子酱鳟鱼，九月底还能坐户外",p:"必须订位"}
+  ],
+  tips:[],
+  pics:[
+    P("Narikala_Fortress,_Tbilisi,_Georgia.jpg","Narikala 要塞，缆车上去，走 Betlemi 街下来"),
+    P("Abanotubani_Tbilisi.jpg","Abanotubani 硫磺浴区，砖砌圆顶下面就是浴池")
+  ]
+},
+{
+  d:"9.22", dow:"周二", type:"work", lab:"姆茨赫塔", city:"第比利斯",
+  title:"上午干活 · 下午姆茨赫塔 · 晚上 Fabrika", sum:"古都和宗教中心，两河交汇口俯瞰全城；晚上去缝纫厂改的院子。",
+  move:[{ic:"🚕",t:"Bolt 往返姆茨赫塔",s:"单程 25 分钟 · 25–35 拉里",m:"这个点你们后面去埃里温的路线完全不经过，值得单独跑"}],
+  stay:{t:"第比利斯 · Avlabari 一带",s:"",tag:""},
+  tl:[
+    {t:"08:30–13:30",x:"工作。今天早收一点。"},
+    {t:"14:30",x:"Bolt 去 <b>姆茨赫塔</b>，格鲁吉亚古都和宗教中心，UNESCO 名录。"},
+    {t:"15:00",x:"<b>Svetitskhoveli 大教堂</b>，“生命之柱”，11 世纪，格鲁吉亚人心里最重要的教堂。",key:true},
+    {t:"16:15",x:"上山到 <b>Jvari 修道院</b>（6 世纪），站在两河交汇口俯瞰全城，风很大。",key:true},
+    {t:"19:30",x:"<b>Fabrika</b>，河右岸苏联时期缝纫厂改的青旅加院子，一圈酒吧和小店，第比利斯年轻人晚上都在这儿。旁边 Aghmashenebeli 大道步行街顺便逛。"}
+  ],
+  food:[
+    {n:"Salobie",d:"姆茨赫塔老路上那家老店（不是市区的 Salobie Bia）。陶罐炖芸豆 lobio 配玉米饼 mchadi，几十年的本地馆子，路过必停"},
+    {n:"Fabrika 院子里",d:"Moulin Electrique 的汉堡、Lolita 的意式菜、Kikliko 的早午餐；想喝精酿去门口那排小窗口"}
+  ],
+  tips:[{w:false,x:"进堂女士需头巾或围巾，男士别穿短裤。Svetitskhoveli 和 Jvari 都查。"}],
+  pics:[P("Mtskheta,_Svetitskhoveli_Cathedral_(36092332115).jpg","Svetitskhoveli 大教堂，建于 11 世纪")]
+},
+{
+  d:"9.23", dow:"周三", type:"move", lab:"去巴统", city:"巴统",
+  title:"火车去巴统 · 下午植物园", sum:"08:00 早班车，12:00 到。下午上 Green Cape 的百年植物园，傍晚 Argo 缆车看日落。",
+  move:[
+    {ic:"🚄",t:"火车　第比利斯 → 巴统",s:"08:00 – 12:00 · 全程 4 小时 · Stadler 双层车",m:"经济舱 $13.75，一等舱 $29.03 · 上层靠右视野好"},
+    {ic:"🚕",t:"Batumi Central → 市区",s:"20 分钟 · 10–15 拉里",m:"车站实际在城北 Makhinjauri，离市中心还有 6 公里"}
+  ],
+  stay:{t:"巴统希尔顿",s:"40 Rustaveli Avenue · 带阳台和海景的特大床房 · 确认号 3522841428",tag:"已付"},
+  tl:[
+    {t:"06:45",x:"起床退房，行李全带走。"},
+    {t:"07:15",x:"Bolt 去 Station Square 火车站，15 分钟，10–15 拉里。"},
+    {t:"08:00",x:"发车。车厢有插座和小桌板，这四小时是国内 12:00–16:00，能处理消息。",key:true},
+    {t:"12:00",x:"到 Batumi Central。出站打车进城。"},
+    {t:"12:40",x:"到希尔顿。<b>入住是 15:00 之后，先寄存行李</b>，别在酒店干等。"},
+    {t:"13:00",x:"午饭。到巴统第一顿就该吃阿扎尔奶酪船，这里是它的发源地。"},
+    {t:"14:30",x:"<b>巴统植物园</b>，城北 9 公里的 Green Cape，Bolt 15–20 拉里。建在临海山坡上，按地理分区种着东亚、澳洲、地中海的植物，一路能从高处俯瞰黑海。<b>园子很大，留足三小时</b>，从上门进、下门出最省力。",key:true},
+    {t:"18:00",x:"回城，海滨大道散步，看 <b>Ali & Nino 雕塑</b>——会转动、每十分钟交错穿过彼此一次的钢制情侣像——和字母塔。"},
+    {t:"18:40",x:"<b>Argo 缆车</b>上山看日落，九月底日落约 19:20，提前上去占位置。",key:true},
+    {t:"20:00",x:"下山，回酒店办入住，老城 Piazza 一带吃晚饭。"}
+  ],
+  food:[
+    {n:"Porto Franco",d:"TasteAtlas 上排世界第一的阿扎尔奶酪船。船大黄油厚，两人点一个就够",p:"单个 15–25 拉里"},
+    {n:"Retro",d:"同榜世界第二，本地老店，价格更实在"},
+    {n:"Laguna",d:"巴统本地评价里的第一名，海边位置"},
+    {n:"怎么吃",d:"先撕船头的面包，把中间的蛋黄、黄油和奶酪搅匀，再撕船边蘸着吃。热量惊人，配柠檬水解腻"}
+  ],
+  tips:[],
+  pics:[
+    P("Batumi_Botanical_Garden_(Georgia).jpg","巴统植物园，建在临海山坡上"),
+    P("Seafront_Promenade,_Batumi,_Georgia_-_panoramio.jpg","巴统海滨大道，全长七公里。海滩是鹅卵石不是沙")
+  ]
+},
+{
+  d:"9.24", dow:"周四", type:"work", lab:"鱼市+市区", city:"巴统",
+  title:"上午干活 · 换民宿 · 下午吃 · 晚上娱乐场", sum:"希尔顿退房搬去隔壁民宿，中午鱼市自己挑鱼，晚上去牌桌。",
+  move:[{ic:"🧳",t:"希尔顿 → 民宿",s:"40 号 → 42 号，拖箱子走两步",m:"12:00 前退房，行李先放过去"}],
+  stay:{t:"巴统民宿",s:"42 Rustaveli Avenue · 住 9.24 和 9.25 两晚 · 两趟包车都以这里为上下车点",tag:""},
+  tl:[
+    {t:"08:30–13:00",x:"工作，对应国内 12:30–17:00。"},
+    {t:"12:00 前",x:"希尔顿退房。民宿就在隔壁 42 号。"},
+    {t:"13:30",x:"<b>巴统鱼市</b>吃午饭。自己在摊上挑鱼，交给楼上的小馆子，选煎、烤或炸，加工费几拉里。<b>这是巴统最地道的一顿</b>。",key:true},
+    {t:"15:00",x:"如果订了 <b>美食漫步</b>（5 小时）从这里接上。没订的话：老城 Piazza 广场和 Europe Square 一带闲逛，傍晚到海边坐坐——九月底白天 22–25°C，水温还下得去，想游泳带泳衣。"},
+    {t:"21:00",x:"<b>娱乐场</b>。巴统是高加索的博彩中心（俄罗斯和土耳其禁赌），几家五星酒店里都有场子。<b>带护照</b>，入场要查证件；筹码用现金买。",key:true}
+  ],
+  food:[
+    {n:"Cafe Adjara",d:"老城，有个午餐套餐，六道阿扎拉小菜一次上齐：malakhto（豆泥）、dolma、小牛肉炖菜、sinori。第一次系统吃阿扎拉菜就点这个"},
+    {n:"BatuMarani",d:"九成菜品是从巴统周边村子搜集来的阿扎拉家族食谱",p:"人均 50–80 拉里"},
+    {n:"Oval Batumi",d:"主厨 Guram Baghdoshvili，黑海青口和当地小鱼做得好",p:"人均 70–120 拉里"},
+    {n:"Panorama",d:"31 层 360° 观景，主厨 Izo Dzandzava 是格鲁吉亚第一位获米其林指南认可的女主厨",p:"订靠窗位"}
+  ],
+  tips:[{w:false,x:"这天的安排是<b>为了把整块的山区行程让给已经放假的 9.25</b>。原本 9.24 进山会撞上国内工作日，山谷里信号断续，现在这个矛盾消掉了。"}],
+  pics:[]
+},
+{
+  d:"9.25", dow:"周五", type:"play", lab:"阿扎拉山区", city:"阿扎拉",
+  title:"阿扎拉山区 · Nodar 的 Highlander", sum:"36 米瀑布、12 世纪石拱桥、山里的家庭酒庄。纯车程只有 2 小时，节奏很松。",
+  move:[{ic:"🚙",t:"包车往返 · Nodar",s:"09:00 出发 · Toyota Highlander · DD-971-PD",m:"+995 574 893 319 · 42 Rustaveli → Makhuntseti 瀑布 → Keda → 42 Rustaveli"}],
+  stay:{t:"巴统民宿",s:"42 Rustaveli Avenue · 第二晚",tag:""},
+  tl:[
+    {t:"09:00",x:"Nodar 到民宿楼下接。<b>上车先把 Keda 那段的停留时长和总价确认一遍</b>——订单里只写了瀑布，Keda 是备注里加的。",key:true},
+    {t:"09:45",x:"<b>Makhuntseti 瀑布</b>，从公路边走一百米就到，不用徒步。下面有水潭。顺着走几百米就是 <b>女王塔玛尔桥</b>，12–13 世纪的石拱桥，桥头有卖蜂蜜、churchkhela 和自酿 chacha 的摊子。这一站留足一小时。",key:true},
+    {t:"11:20",x:"往山里走到 <b>Keda</b>。"},
+    {t:"12:00",x:"午饭。阿扎拉山区的招牌是 <b>borano</b>（黄油煎的阿扎拉奶酪）和 <b>sinori</b>（薄面皮卷酸奶油），油厚味重，配 chacha 刚好。"},
+    {t:"14:00",x:"家庭酒庄品鉴。这一带做的是 <b>Chkhaveri、Tsolikouri</b> 这些西部品种，和卡赫季完全不同，酸度更高更清爽。<b>让 Nodar 推荐</b>——当地司机都有相熟的酒庄，这是包车相对跟团的隐性红利。",key:true},
+    {t:"17:00",x:"回到巴统。晚上早点睡，明天 08:45 就要出发。"}
+  ],
+  food:[
+    {n:"borano",d:"黄油里煎化的阿扎拉奶酪，配玉米饼吃，是这一带的镇山菜"},
+    {n:"sinori",d:"薄面皮层层卷酸奶油和奶酪，样子朴素，味道很重"},
+    {n:"山里的鳟鱼",d:"溪水养的，现杀现烤，配核桃酱"}
+  ],
+  tips:[
+    {w:true,x:"<b>山里只收现金拉里</b>，酒庄和小馆子都是。出门前取够。"},
+    {w:false,x:"顺带纠正一个容易搞混的地理：<b>Makhuntseti 瀑布在 Adjaristsqali（阿扎拉河）谷，Machakhela 国家公园是另一条谷</b>，两者直线只隔 12 公里但山里不通，要绕回下游。你订的这条走的是 Adjaristsqali 谷，女王塔玛尔桥在这条线上。"}
+  ],
+  pics:[P("Makhuntseti_waterfall,_Adjara,_Georgia.jpg","Makhuntseti 瀑布，公路边走一百米就到")]
+},
+{
+  d:"9.26", dow:"周六", type:"move", lab:"回第比利斯", city:"途中",
+  title:"包车回第比利斯 · Vladimer 的 Accord", sum:"443 公里，顺路补上当初为迁就火车放弃的两个点：Martvili 峡谷和 Gelati 修道院。",
+  move:[{ic:"🚗",t:"包车　巴统 → 第比利斯 · Vladimer",s:"08:45 出发 · Honda Accord · VL-102-AD · $179 整车",m:"+995 595 117 180 · 443 km · 纯车程 7h18m（不含停留）· 全天约 11 小时"}],
+  stay:{t:"Monograph Freedom Square",s:"5/7 Aleksandr Pushkin St · 老城自由广场边 · 24 小时前台，晚到不影响 · 订单号 1128150691023697",tag:"已订"},
+  tl:[
+    {t:"08:00",x:"起床，早饭，退房。行李装车。"},
+    {t:"08:45",x:"Vladimer 到民宿楼下。",key:true},
+    {t:"11:15",x:"<b>Martvili 峡谷</b>。坐橡皮艇漂进翡翠绿的石灰岩峡谷，二十分钟，很出片。<b>橡皮艇可能因水位或天气停运</b>——出发前一天让 Vladimer 帮忙问一句，停运的话这站就只剩栈道，可以改去 Prometheus 洞穴。",key:true},
+    {t:"13:00",x:"库塔伊西附近午饭。格鲁吉亚第二大城，物价明显比第比利斯低。"},
+    {t:"14:15",x:"<b>Gelati 修道院</b>，UNESCO 名录，12 世纪，格鲁吉亚黄金时代的代表作，穹顶马赛克是重点。<b>比库塔伊西城里的 Bagrati 大教堂更值得看</b>——Bagrati 因为修复方式争议已被移出 UNESCO 名录。",key:true},
+    {t:"15:30",x:"出发，三个半小时高速。"},
+    {t:"19:30",x:"到 Monograph Freedom Square。放下行李出门吃个夜宵，老城就在楼下。",key:true}
+  ],
+  food:[
+    {n:"库塔伊西的午饭",d:"这里是 lobio（陶罐炖芸豆）和 kubdari（肉馅饼）的地盘，物价比第比利斯低三成"},
+    {n:"到第比利斯的夜宵",d:"酒店在自由广场边上，老城的馆子走几步就到，多数开到午夜"}
+  ],
+  tips:[
+    {w:false,x:"<b>这天是全程最长的一天，11 小时左右。</b>纯车程 7 小时 18 分是系统算的，不含停留；加上三站的游览和午饭才是全天。中途想在哪儿多待半小时都可以——GoTrip 条款写明乘客有权更改路线和时间，而且等待和停留不额外计时收费。"},
+    {w:false,x:"这两个点当初因为“离火车站太远、要单独包车”被砍掉过。现在顺路做掉，边际成本几乎为零——同样内容从巴统当天往返的一日游，两人要 ¥2,000 以上。"}
+  ],
+  pics:[
+    P("Martvili_Canyon,_Georgia._2018_(22).jpg","Martvili 峡谷，坐橡皮艇进去二十分钟"),
+    P("Gelati_Monastery,_Georgia.jpg","Gelati 修道院，12 世纪，格鲁吉亚黄金时代的代表")
+  ]
+},
+{
+  d:"9.27", dow:"周日", type:"move", lab:"去埃里温", city:"埃里温",
+  title:"第比利斯 → 埃里温", sum:"陆路南下，过 Sadakhlo 口岸。行程由朋友安排。",
+  move:[{ic:"🚐",t:"第比利斯 → 埃里温",s:"小巴 4–6 小时 / 大巴 5–7 小时 / 包车 4.5–5.5 小时",m:"住自由广场，去 Ortachala 长途站更近（Bolt 十分钟）；Avlabari 小巴点坐地铁一站也能到"}],
+  stay:{t:"埃里温",s:"朋友安排",tag:""},
+  tl:[
+    {t:"出发",x:"上车点定在 Ortachala 或 Avlabari 都方便。"},
+    {t:"途中",x:"过 <b>Sadakhlo–Bagratashen</b> 口岸，出入境各盖一次章。堵一两小时是常事。",key:true},
+    {t:"到达",x:"埃里温。之后三天由朋友安排。"}
+  ],
+  food:[],
+  tips:[{w:true,x:"<b>保险必须覆盖亚美尼亚。</b>只写格鲁吉亚的保单，出境后就是裸奔。"}],
+  pics:[]
+},
+{
+  d:"9.28", dow:"周一", type:"soft", lab:"埃里温", city:"埃里温",
+  title:"埃里温 · 朋友安排", sum:"这三天不占用你的规划精力，手册里只留两头的交通。",
+  move:[], stay:{t:"埃里温",s:"朋友安排",tag:""},
+  tl:[{t:"全天",x:"由朋友安排。"}],
+  food:[],
+  tips:[{w:false,x:"如果有半天空档，<b>Cascade 阶梯</b>（现代艺术露台，顶上看阿拉拉特山）和 <b>GUM 市场</b>（干果、香料、腌菜）是最省事的两个去处。"}],
+  pics:[]
+},
+{
+  d:"9.29", dow:"周二", type:"soft", lab:"埃里温", city:"埃里温",
+  title:"埃里温 · 朋友安排", sum:"明天要走陆路回第比利斯，今晚把行李收一收。",
+  move:[], stay:{t:"埃里温",s:"朋友安排 · 最后一晚",tag:""},
+  tl:[
+    {t:"全天",x:"由朋友安排。"},
+    {t:"晚上",x:"<b>确认明天回第比利斯的车</b>。包车的话跟司机敲定几点出发、走不走 Alaverdi 那条路。",key:true}
+  ],
+  food:[],
+  tips:[{w:true,x:"<b>明天是整趟最需要盯的一天。</b>10.1 的飞机从第比利斯起飞，今晚一定要把明天的车落实。"}],
+  pics:[]
+},
+{
+  d:"9.30", dow:"周三", type:"move", lab:"回第比利斯", city:"第比利斯",
+  title:"埃里温 → 第比利斯", sum:"整趟最需要留缓冲的一天。上午走，下午到，晚上住下。",
+  move:[{ic:"🚗",t:"埃里温 → 第比利斯",s:"建议包车 · 4.5–5.5 小时 · 100–150 美元一车",m:"能顺路停 Haghpat、Sanahin 两座 UNESCO 修道院，比大巴省两小时也不折腾"}],
+  stay:{t:"第比利斯",s:"住自由广场或老城一带都行，10.1 中午去机场，位置不敏感",tag:"待订"},
+  tl:[
+    {t:"08:00",x:"从埃里温出发。包车的话顺路停 <b>Haghpat</b> 和 <b>Sanahin</b> 两座修道院（Alaverdi 附近，10 世纪石构，UNESCO），各 40 分钟，把过境的沉闷冲掉。",key:true},
+    {t:"13:00",x:"过 Sadakhlo 口岸，进格鲁吉亚。"},
+    {t:"下午",x:"按到达时间三选一——<br><b>13:00 前到</b>：加 Dry Bridge 跳蚤市场，苏联徽章、老相机、旧地图<br><b>15:00 前后到</b>：上 <b>Mtatsminda 山顶公园</b>，坐 funicular 上去，海拔 770 米，19:00 前后日落<br><b>18:00 后到</b>：直接 Metekhi 平台看夜景，老城吃饭"},
+    {t:"晚上",x:"收拾行李，把剩下的拉里现金清点一下。"}
+  ],
+  food:[{n:"最后一顿格鲁吉亚菜",d:"前面几家没订上的（Barbarestan、Café Littera、Shavi Lomi）今晚补一家，明天就吃不到了"}],
+  tips:[{w:true,x:"<b>不要把这段压到 10.1 当天。</b>埃里温到第比利斯没有稳定直飞，实际都走陆路 5–7 小时，加上口岸排队查验。10.1 下午 3 点半就登机，一点缓冲都没有。"}],
+  pics:[]
+},
+{
+  d:"10.1", dow:"周四", type:"move", lab:"飞塔什干", city:"塔什干",
+  title:"第比利斯 → 塔什干", sum:"上午最后半天，中午去机场，19:50 落地塔什干，当天只剩夜宵。",
+  move:[{ic:"✈",t:"C6222　第比利斯 TBS → 塔什干 T2",s:"15:30 – 19:50 · 飞行约 3 小时 20 分",m:"塔什干比第比利斯快 1 小时 · 起飞地是第比利斯，不是埃里温"}],
+  stay:{t:"塔什干",s:"建议 Amir Timur 广场一带，10.2 早上去火车站方便",tag:"待订"},
+  tl:[
+    {t:"上午",x:"最后半天。慢慢吃个早午饭，补买 churchkhela、Borjomi、红酒当手信。"},
+    {t:"11:30",x:"退房。"},
+    {t:"12:00",x:"Bolt 去机场，30 分钟，25–35 拉里。"},
+    {t:"12:30",x:"到 TBS。国际航班提前 3 小时。<b>剩下的拉里在机场花掉或换掉</b>，出了格鲁吉亚基本没地方换。",key:true},
+    {t:"15:30",x:"C6222 起飞。"},
+    {t:"19:50",x:"落地塔什干 T2。免签 30 天。",key:true},
+    {t:"20:00",x:"入境取行李。出关办两件事：买 SIM 卡（Ucell、Beeline、Uzmobile 柜台都在到达厅），换钱（<b>Som 面额很大</b>，1 美元一万多，第一次换会被一沓钱吓到）。"},
+    {t:"21:00",x:"Yandex Go 进城，机场离市中心约 10 公里，二十分钟，五六万 Som。"},
+    {t:"21:30",x:"到酒店。附近吃点东西就睡，明天六点半起。"}
+  ],
+  food:[
+    {n:"落地夜宵",d:"塔什干餐厅普遍开到很晚，找 <b>samsa</b>（馕坑烤的酥皮肉包）和 <b>lagman</b>（手拉面）就够，一顿三五万 Som"},
+    {n:"Sim Sim",d:"Sayilgoh 步行街上，samsa 和现出炉的 non 馕",p:"25,000–35,000 Som"}
+  ],
+  tips:[],
+  pics:[]
+},
+{
+  d:"10.2", dow:"周五", type:"play", lab:"撒马尔罕", city:"撒马尔罕",
+  title:"撒马尔罕一日往返", sum:"高铁 2 小时 10 分。Registan、帖木儿陵、蓝瓷陵墓群，下午光线最好。",
+  move:[{ic:"🚄",t:"Afrosiyob 高铁　塔什干 ⇄ 撒马尔罕",s:"去程 08:00 – 10:10 · 返程约 18:00",m:"西班牙 Talgo 车，250 km/h · 票必须提前买，发车前 60 天开售"}],
+  stay:{t:"塔什干",s:"当晚回塔什干，住处不变",tag:""},
+  tl:[
+    {t:"06:30",x:"起床。酒店早餐或路上买 samsa。"},
+    {t:"07:15",x:"到塔什干火车站（地铁 Toshkent 站直达）。<b>安检很严，要求提前 30–45 分钟到</b>，护照和车票都查。",key:true},
+    {t:"08:00",x:"发车。有餐车，二等座够舒服。这两小时是国内 11:00–13:00，可以补消息。"},
+    {t:"10:30",x:"<b>Registan 广场</b>，三座经学院围合，中亚建筑的天花板。上午光线从东边打过来，正面最好拍。可以加钱上宣礼塔俯瞰。",key:true},
+    {t:"12:00",x:"<b>Gur-e-Amir</b>，帖木儿陵墓，步行十分钟。金箔穹顶内壁，比外面看着震撼。"},
+    {t:"13:00",x:"午饭。"},
+    {t:"14:30",x:"<b>Shah-i-Zinda</b>，蓝瓷陵墓群夹成的小巷，几十米坡道两侧全是不同年代的釉面砖。<b>下午光线斜进巷子，是全撒马尔罕最好拍的一小时</b>。",key:true},
+    {t:"16:00",x:"<b>Bibi-Khanym 清真寺</b>和旁边的 <b>Siyob 巴扎</b>。干果、香料、馕比塔什干便宜，买手信最好的地方。"},
+    {t:"18:00",x:"返程班次（以 railway.uz 为准）。"},
+    {t:"20:30",x:"回到塔什干。"}
+  ],
+  food:[
+    {n:"Bibikhanum Teahouse",d:"就在 Bibi-Khanym 清真寺对面，院子里的传统茶馆，手抓饭和 shashlik 都稳，位置最省脚力"},
+    {n:"Platan",d:"老牌餐厅，中亚菜加欧洲菜，适合坐下来歇一个多小时"},
+    {n:"撒马尔罕的 plov",d:"用亚麻籽油炒，颜色更深更香，和塔什干不是一个路子，值得对比着吃"},
+    {n:"撒马尔罕馕",d:"Siyob 巴扎里的，全乌兹别克最有名，硬，能放很久，适合带走"}
+  ],
+  tips:[{w:false,x:"<b>为什么是撒马尔罕不是布哈拉</b>：你只有一个整天。撒马尔罕高铁 2 小时 10 分，当天往返能留 7 小时游览；布哈拉单程 3 小时 40 分，往返就是 7 小时 20 分车程，只剩三四个小时。希瓦更远，要飞或坐夜车。撒马尔罕是这个时间约束下唯一的解。"}],
+  pics:[
+    P("Registan_Samarkand_Uzbekistan.JPG","雷吉斯坦广场，三座经学院围合。夜里有灯光秀"),
+    P("Shah-i-Zinda_(Samarkand).jpg","Shah-i-Zinda，蓝瓷陵墓群夹成的小巷"),
+    P("Gur-e-Amir_Mausoleum,_Samarkand.jpg","Gur-e-Amir，帖木儿陵墓")
+  ]
+},
+{
+  d:"10.3", dow:"周六", type:"move", lab:"塔什干+回程", city:"塔什干",
+  title:"塔什干半天 · 晚上回家", sum:"巴扎、清真寺、地铁艺术站、中午的大锅抓饭，17:00 去机场。",
+  move:[{ic:"✈",t:"MU6038　塔什干 T2 → 上海浦东 T1",s:"20:20 – 05:50<sup>+1</sup> · 红眼",m:"17:00 从市区出发，提前 3 小时到机场"}],
+  stay:{t:"飞机上",s:"10.4 清晨落地浦东",tag:""},
+  tl:[
+    {t:"08:30",x:"早饭，行李寄存在前台。"},
+    {t:"09:00",x:"<b>Chorsu Bazaar</b>，蓝色穹顶大巴扎。穹顶下是肉档和奶制品，外圈是干果、香料、馕、腌菜。早上人最多最热闹。",key:true},
+    {t:"10:30",x:"<b>Hazrat Imam 建筑群</b>，塔什干的宗教中心，图书馆里藏着世界最古老的《古兰经》抄本之一。"},
+    {t:"11:30",x:"<b>地铁艺术站</b>。中亚第一条地铁，每站装修不同，刷一次卡随便坐。必看三站：<b>Kosmonavtlar</b>（宇航员站，深蓝配航天肖像）、<b>Alisher Navoi</b>（穹顶蓝瓷）、<b>Pakhtakor</b>（棉花图案）。",key:true},
+    {t:"12:30",x:"抓饭。<b>大锅中午前后出锅，卖完就没，12 点前到最稳</b>。",key:true},
+    {t:"14:00",x:"买手信 + Tashkent City 新城公园歇脚。干果香料丝绸在 Chorsu 巴扎最划算；手工艺品去 <b>Human House</b>（陶器、细密画、刺绣）。"},
+    {t:"16:00",x:"回酒店取行李，换身干净衣服。"},
+    {t:"17:00",x:"Yandex Go 去机场 T2。<b>剩下的 Som 在机场花掉</b>。"},
+    {t:"20:20",x:"MU6038 起飞。",key:true}
+  ],
+  food:[
+    {n:"Besh Qozon（中亚抓饭中心）",d:"电视塔旁边，号称有世界最大的抓饭锅，全开放式厨房几口巨锅同时开工。每天做几种：羊肉、牛肉、鸡肉甚至马肉，也有撒马尔罕和费尔干纳两个流派",p:"一份 20,000–30,000 Som · 12 点前到"},
+    {n:"Samarqand Zig'ir Osh",d:"亚麻籽油炒的撒马尔罕抓饭，Olmazor 分店在地铁 Beruni 站附近，本地人多"},
+    {n:"Oqvat Bozori 摊档",d:"Chorsu 蓝穹顶旁的小巷，塑料棚下做 plov、shashlik、naryn，一盘三四美元，最便宜也最真实"},
+    {n:"喝的",d:"绿茶（ko'k choy）配抓饭解腻，几乎每桌都有"}
+  ],
+  tips:[{w:false,x:"乌兹别克现金用得比格鲁吉亚多，巴扎和路边摊只收 Som；市区大店、餐厅、酒店刷卡没问题。水买瓶装。打车全用 Yandex Go，别在路边拦车谈价。"}],
+  pics:[P("Bazar_Chorsu_Tashkent.jpg","Chorsu 巴扎的蓝色穹顶")]
+},
+{
+  d:"10.4", dow:"周日", type:"move", lab:"到家", city:"上海",
+  title:"清晨落地浦东", sum:"05:50 到，周日一整天可以补觉。",
+  move:[{ic:"🛬",t:"落地上海浦东 T1",s:"05:50 · 周日清晨",m:""}],
+  stay:{t:"到家",s:"",tag:""},
+  tl:[{t:"05:50",x:"落地浦东 T1。回家补觉。",key:true}],
+  food:[],
+  tips:[{w:false,x:"红眼航班落地后别急着排事情，时差加上熬夜，这天基本报废。"}],
+  pics:[]
+}
+];
+
+const TYPE_CN = {move:"转场移动", play:"整日出游", work:"上午干活", soft:"朋友安排"};
+const grid  = document.getElementById("grid");
+const panel = document.getElementById("panel");
+let cur = 0;
+
+/* ---------- 日历：9.18 是周五，前面补 4 个空格 ---------- */
+for (let i = 0; i < 4; i++) {
+  const v = document.createElement("div");
+  v.className = "cell void";
+  grid.appendChild(v);
+}
+DAYS.forEach((day, i) => {
+  const b = document.createElement("button");
+  b.className = "cell t-" + day.type;
+  b.type = "button";
+  b.dataset.i = i;
+  b.setAttribute("aria-label", day.d + " " + day.dow + "：" + day.title);
+  b.innerHTML =
+    '<span class="bar"></span>' +
+    '<span class="d">' + day.d.split(".")[1] + "</span>" +
+    '<span class="lab">' + day.lab + "</span>";
+  b.addEventListener("click", () => select(i));
+  grid.appendChild(b);
 });
 
-// 图片加载失败的处理：
-// 相册里挂掉的那张直接从滑动条里移除；整组都挂了就把相册收起来，
-// 剩一张就取消滑动样式当普通配图。独立 figure 里的图挂了就隐藏整块。
-document.querySelectorAll('img').forEach(function(img){
-  img.addEventListener('error', function(){
-    var fig = img.closest('figure');
-    var gal = img.closest('.gal');
-    if(gal && fig){
-      fig.remove();
-      var left = gal.querySelectorAll('.strip figure').length;
-      if(left === 0){ gal.style.display = 'none'; }
-      else if(left === 1){ gal.classList.add('single'); }
-      return;
-    }
-    if(fig){ fig.style.display = 'none'; } else { img.style.display = 'none'; }
+/* ---------- 渲染当天 ---------- */
+function esc(s){ return String(s); }
+
+function render(day, i) {
+  let h = "";
+
+  h += '<div class="phead t-' + day.type + '">'
+     +   '<div class="top">'
+     +     '<span class="dt">' + day.d + "</span>"
+     +     '<span class="dw">' + day.dow + "</span>"
+     +     '<span class="city">' + day.city + "</span>"
+     +     '<span class="dw">' + TYPE_CN[day.type] + "</span>"
+     +   "</div>"
+     +   "<h2>" + day.title + "</h2>"
+     +   "<p>" + day.sum + "</p>"
+     + "</div>";
+
+  if (day.move && day.move.length) {
+    h += '<div class="blk"><h3>交通</h3>';
+    day.move.forEach(m => {
+      h += '<div class="row"><div class="ic">' + m.ic + '</div><div class="bd">'
+         +   "<b>" + m.t + "</b><span>" + m.s + "</span>"
+         +   (m.m ? '<span class="meta">' + m.m + "</span>" : "")
+         + "</div></div>";
+    });
+    h += "</div>";
+  }
+
+  if (day.stay) {
+    const tagCls = day.stay.tag === "已付" || day.stay.tag === "已订" ? "ok"
+                 : day.stay.tag === "待订" ? "wait" : "";
+    h += '<div class="blk"><h3>当晚住</h3>'
+       +   '<div class="row"><div class="ic">🛏</div><div class="bd">'
+       +     "<b>" + day.stay.t
+       +       (day.stay.tag ? '<span class="tag ' + tagCls + '">' + day.stay.tag + "</span>" : "")
+       +     "</b>"
+       +     (day.stay.s ? "<span>" + day.stay.s + "</span>" : "")
+       +   "</div></div>"
+       + "</div>";
+  }
+
+  if (day.tl && day.tl.length) {
+    h += '<div class="blk"><h3>这一天</h3><div class="tl">';
+    day.tl.forEach(it => {
+      h += '<div class="it' + (it.key ? " key" : "") + '">'
+         +   '<div class="tm">' + it.t + "</div>"
+         +   '<div class="dot"></div>'
+         +   '<div class="tx">' + it.x + "</div>"
+         + "</div>";
+    });
+    h += "</div></div>";
+  }
+
+  if (day.food && day.food.length) {
+    h += '<div class="blk food"><h3>吃什么</h3><ul>';
+    day.food.forEach(f => {
+      h += "<li><b>" + f.n + "</b>　" + f.d
+         + (f.p ? ' <span class="p">· ' + f.p + "</span>" : "")
+         + "</li>";
+    });
+    h += "</ul></div>";
+  }
+
+  if (day.tips && day.tips.length) {
+    h += '<div class="blk"><h3>提醒</h3>';
+    day.tips.forEach(t => { h += '<div class="tip' + (t.w ? " warn" : "") + '">' + t.x + "</div>"; });
+    h += "</div>";
+  }
+
+  if (day.pics && day.pics.length) {
+    h += '<div class="blk"><h3>看看</h3><div class="shots">';
+    day.pics.forEach(p => {
+      h += "<figure><img loading=\"lazy\" src=\"" + p.s + "\" alt=\"" + p.c + "\">"
+         + "<figcaption>" + p.c + "</figcaption></figure>";
+    });
+    h += "</div></div>";
+  }
+
+  h += '<div class="nav2">'
+     +   '<button type="button" id="prev"' + (i === 0 ? " disabled" : "") + ">← 前一天</button>"
+     +   '<button type="button" id="next"' + (i === DAYS.length - 1 ? " disabled" : "") + ">后一天 →</button>"
+     + "</div>";
+
+  panel.innerHTML = h;
+
+  const pv = document.getElementById("prev");
+  const nx = document.getElementById("next");
+  if (pv) pv.addEventListener("click", () => select(i - 1, true));
+  if (nx) nx.addEventListener("click", () => select(i + 1, true));
+
+  // 图片挂了就把那张从相册里摘掉；整组都挂就收起这一块
+  panel.querySelectorAll(".shots img").forEach(img => {
+    img.addEventListener("error", () => {
+      const fig = img.closest("figure");
+      const box = img.closest(".blk");
+      if (fig) fig.remove();
+      if (box && box.querySelectorAll(".shots figure").length === 0) box.remove();
+    });
   });
+}
+
+function select(i, scroll) {
+  if (i < 0 || i >= DAYS.length) return;
+  cur = i;
+  grid.querySelectorAll(".cell").forEach(c => c.classList.remove("on"));
+  const btn = grid.querySelector('.cell[data-i="' + i + '"]');
+  if (btn) {
+    btn.classList.add("on");
+    btn.setAttribute("aria-current", "true");
+  }
+  grid.querySelectorAll('.cell:not([data-i="' + i + '"])').forEach(c => c.removeAttribute("aria-current"));
+  render(DAYS[i], i);
+  history.replaceState(null, "", "#d" + i);
+  if (scroll) panel.scrollIntoView({behavior: "smooth", block: "start"});
+}
+
+/* ---------- 初始：URL 记住的那天 → 今天 → 第一天 ---------- */
+function initIndex() {
+  const m = location.hash.match(/^#d(\d+)$/);
+  if (m) {
+    const i = parseInt(m[1], 10);
+    if (i >= 0 && i < DAYS.length) return i;
+  }
+  const now = new Date();
+  const key = (now.getMonth() + 1) + "." + now.getDate();
+  const hit = DAYS.findIndex(x => x.d === key);
+  return hit >= 0 ? hit : 0;
+}
+select(initIndex());
+
+/* 左右方向键翻天 */
+document.addEventListener("keydown", e => {
+  if (e.target.matches("input,textarea,summary")) return;
+  if (e.key === "ArrowLeft")  { select(cur - 1); }
+  if (e.key === "ArrowRight") { select(cur + 1); }
 });
 </script>
 </body>
