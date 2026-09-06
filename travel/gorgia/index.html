@@ -28,6 +28,7 @@
   --sans:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans SC",sans-serif;
   --r:10px;
 }
+:root{color-scheme:light}
 *{box-sizing:border-box}
 html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
 @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto} *{animation:none!important;transition:none!important}}
@@ -87,7 +88,8 @@ body{
 .cell .d{font-family:var(--serif);font-size:17px;font-weight:600;line-height:1.1}
 .cell .lab{
   font-size:10px;line-height:1.25;color:var(--ink-soft);
-  max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 1px;
+  max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0;
+  letter-spacing:-.02em;
 }
 .cell .bar{position:absolute;left:0;right:0;top:0;height:3px}
 .cell.t-move  .bar{background:var(--wine)}
@@ -95,6 +97,11 @@ body{
 .cell.t-work  .bar{background:var(--gold)}
 .cell.t-soft  .bar{background:#A9B6B3}
 .cell.on{background:var(--lapis);color:#fff;box-shadow:var(--shadow-md)}
+.cell.today::after{
+  content:"";position:absolute;right:5px;top:5px;width:5px;height:5px;
+  border-radius:50%;background:var(--gold);
+}
+.cell.today.on::after{background:#F0E4C8}
 .cell.on .lab{color:#B9D2DA}
 .cell.on .bar{height:0}
 .legend{display:flex;gap:14px;flex-wrap:wrap;margin:13px 4px 2px;font-size:11.5px;color:var(--ink-faint)}
@@ -107,7 +114,13 @@ body{
   .cell .d{font-size:15px}
   .cell .lab{font-size:9px}
 }
-@media(max-width:380px){
+@media(max-width:400px){
+  .wrap{padding:0 13px}
+  .cal{padding:12px 8px 11px}
+  .grid,.dow{gap:3px}
+  .cell .lab{font-size:9px;letter-spacing:-.04em}
+}
+@media(max-width:344px){
   .cell .lab{display:none}
   .cell{min-height:46px}
 }
@@ -134,8 +147,8 @@ body{
 .nav2{display:flex;gap:8px;margin:14px 0 0}
 .nav2 button{
   flex:1;border:1px solid var(--rule);background:var(--card);border-radius:8px;
-  padding:9px 10px;cursor:pointer;font-family:inherit;font-size:13px;color:var(--ink-soft);
-  transition:background .14s,color .14s;
+  padding:13px 10px;min-height:46px;cursor:pointer;font-family:inherit;font-size:13.5px;
+  color:var(--ink-soft);transition:background .14s,color .14s,border-color .14s;
 }
 .nav2 button:hover:not(:disabled){background:var(--lapis-tint);color:var(--lapis)}
 .nav2 button:disabled{opacity:.35;cursor:default}
@@ -217,7 +230,7 @@ body{
 .shots figcaption{font-size:12px;color:var(--ink-faint);margin-top:6px;line-height:1.55}
 
 /* ============ reference (collapsible) ============ */
-.ref{margin:30px 0 0}
+.ref{margin-top:30px}
 .ref h2{font-family:var(--serif);font-size:19px;color:var(--lapis);margin:0 0 12px;font-weight:600}
 details.acc{
   background:var(--card);border-radius:var(--r);margin-bottom:9px;
@@ -243,6 +256,11 @@ details.acc > summary:hover{background:var(--rule-soft)}
 .acc .body ul{margin:0 0 10px;padding-left:19px}
 .acc .body li{margin-bottom:6px}
 .acc .body a{color:var(--lapis-lit)}
+.acc .body a[href^="tel:"]{
+  display:inline-block;padding:9px 12px;margin:4px 0;border-radius:7px;
+  background:var(--lapis-tint);text-decoration:none;font-weight:600;
+  font-variant-numeric:tabular-nums;min-height:42px;line-height:24px;
+}
 .kv{display:grid;grid-template-columns:auto 1fr;gap:4px 13px;font-size:13.5px;margin:0 0 10px}
 .kv dt{color:var(--ink-faint);white-space:nowrap}
 .kv dd{margin:0}
@@ -256,6 +274,19 @@ details.acc > summary:hover{background:var(--rule-soft)}
 .lnk span{display:block;font-size:12.5px;color:var(--ink-soft);line-height:1.55;margin-top:1px}
 mark{background:var(--gold-tint);color:inherit;padding:0 3px;border-radius:2px}
 
+.totop{
+  position:fixed;right:16px;bottom:16px;z-index:50;
+  width:46px;height:46px;border-radius:50%;border:0;cursor:pointer;
+  background:var(--lapis);color:#fff;font-size:17px;line-height:1;
+  box-shadow:0 3px 12px rgba(14,58,75,.3);
+  opacity:0;pointer-events:none;transform:translateY(8px);
+  transition:opacity .22s ease,transform .22s ease;
+}
+.totop.show{opacity:1;pointer-events:auto;transform:none}
+.totop:active{transform:scale(.94)}
+@supports(padding:max(0px)){
+  .totop{bottom:max(16px,env(safe-area-inset-bottom))}
+}
 footer{background:var(--lapis);color:#93AEB8;padding:26px 0;margin-top:36px;font-size:12.5px;line-height:1.7}
 footer a{color:#C6DAE1}
 @media(max-width:560px){
@@ -298,6 +329,8 @@ footer a{color:#C6DAE1}
 <main class="wrap">
   <div class="panel" id="panel"></div>
 </main>
+
+<button class="totop" id="totop" type="button" aria-label="回到日历">↑</button>
 
 <div class="wrap ref">
   <h2>随身参考</h2>
@@ -517,7 +550,7 @@ const DAYS = [
   ]
 },
 {
-  d:"9.21", dow:"周一", type:"work", lab:"要塞+泡澡", city:"第比利斯",
+  d:"9.21", dow:"周一", type:"work", lab:"泡澡", city:"第比利斯",
   title:"上午干活 · 下午爬要塞 · 傍晚泡澡", sum:"缆车上 Narikala，沿 Betlemi 街走下来，落到硫磺浴区。",
   move:[],
   stay:{t:"第比利斯 · Avlabari 一带",s:"",tag:""},
@@ -594,7 +627,7 @@ const DAYS = [
   ]
 },
 {
-  d:"9.24", dow:"周四", type:"work", lab:"鱼市+市区", city:"巴统",
+  d:"9.24", dow:"周四", type:"work", lab:"鱼市", city:"巴统",
   title:"上午干活 · 换民宿 · 下午吃 · 晚上娱乐场", sum:"希尔顿退房搬去隔壁民宿，中午鱼市自己挑鱼，晚上去牌桌。",
   move:[{ic:"🧳",t:"希尔顿 → 民宿",s:"40 号 → 42 号，拖箱子走两步",m:"12:00 前退房，行李先放过去"}],
   stay:{t:"巴统民宿",s:"42 Rustaveli Avenue · 住 9.24 和 9.25 两晚 · 两趟包车都以这里为上下车点",tag:""},
@@ -615,7 +648,7 @@ const DAYS = [
   pics:[]
 },
 {
-  d:"9.25", dow:"周五", type:"play", lab:"阿扎拉山区", city:"阿扎拉",
+  d:"9.25", dow:"周五", type:"play", lab:"阿扎拉", city:"阿扎拉",
   title:"阿扎拉山区 · Nodar 的 Highlander", sum:"36 米瀑布、12 世纪石拱桥、山里的家庭酒庄。纯车程只有 2 小时，节奏很松。",
   move:[{ic:"🚙",t:"包车往返 · Nodar",s:"09:00 出发 · Toyota Highlander · DD-971-PD",m:"+995 574 893 319 · 42 Rustaveli → Makhuntseti 瀑布 → Keda → 42 Rustaveli"}],
   stay:{t:"巴统民宿",s:"42 Rustaveli Avenue · 第二晚",tag:""},
@@ -639,7 +672,7 @@ const DAYS = [
   pics:[P("Makhuntseti_waterfall,_Adjara,_Georgia.jpg","Makhuntseti 瀑布，公路边走一百米就到")]
 },
 {
-  d:"9.26", dow:"周六", type:"move", lab:"回第比利斯", city:"途中",
+  d:"9.26", dow:"周六", type:"move", lab:"回城", city:"途中",
   title:"包车回第比利斯 · Vladimer 的 Accord", sum:"443 公里，顺路补上当初为迁就火车放弃的两个点：Martvili 峡谷和 Gelati 修道院。",
   move:[{ic:"🚗",t:"包车　巴统 → 第比利斯 · Vladimer",s:"08:45 出发 · Honda Accord · VL-102-AD · $179 整车",m:"+995 595 117 180 · 443 km · 纯车程 7h18m（不含停留）· 全天约 11 小时"}],
   stay:{t:"Monograph Freedom Square",s:"5/7 Aleksandr Pushkin St · 老城自由广场边 · 24 小时前台，晚到不影响 · 订单号 1128150691023697",tag:"已订"},
@@ -701,7 +734,7 @@ const DAYS = [
   pics:[]
 },
 {
-  d:"9.30", dow:"周三", type:"move", lab:"回第比利斯", city:"第比利斯",
+  d:"9.30", dow:"周三", type:"move", lab:"回城", city:"第比利斯",
   title:"埃里温 → 第比利斯", sum:"整趟最需要留缓冲的一天。上午走，下午到，晚上住下。",
   move:[{ic:"🚗",t:"埃里温 → 第比利斯",s:"建议包车 · 4.5–5.5 小时 · 100–150 美元一车",m:"能顺路停 Haghpat、Sanahin 两座 UNESCO 修道院，比大巴省两小时也不折腾"}],
   stay:{t:"第比利斯",s:"住自由广场或老城一带都行，10.1 中午去机场，位置不敏感",tag:"待订"},
@@ -769,7 +802,7 @@ const DAYS = [
   ]
 },
 {
-  d:"10.3", dow:"周六", type:"move", lab:"塔什干+回程", city:"塔什干",
+  d:"10.3", dow:"周六", type:"move", lab:"回上海", city:"塔什干",
   title:"塔什干半天 · 晚上回家", sum:"巴扎、清真寺、地铁艺术站、中午的大锅抓饭，17:00 去机场。",
   move:[{ic:"✈",t:"MU6038　塔什干 T2 → 上海浦东 T1",s:"20:20 – 05:50<sup>+1</sup> · 红眼",m:"17:00 从市区出发，提前 3 小时到机场"}],
   stay:{t:"飞机上",s:"10.4 清晨落地浦东",tag:""},
@@ -934,6 +967,7 @@ function render(day, i) {
 function select(i, scroll) {
   if (i < 0 || i >= DAYS.length) return;
   cur = i;
+  markToday();
   grid.querySelectorAll(".cell").forEach(c => c.classList.remove("on"));
   const btn = grid.querySelector('.cell[data-i="' + i + '"]');
   if (btn) {
@@ -945,6 +979,33 @@ function select(i, scroll) {
   history.replaceState(null, "", "#d" + i);
   if (scroll) panel.scrollIntoView({behavior: "smooth", block: "start"});
 }
+
+/* 今天落在行程里就在日历上点个金点 */
+function markToday() {
+  const now = new Date();
+  const key = (now.getMonth() + 1) + "." + now.getDate();
+  const i = DAYS.findIndex(x => x.d === key);
+  if (i < 0) return;
+  const c = grid.querySelector('.cell[data-i="' + i + '"]');
+  if (c) { c.classList.add("today"); c.title = "今天"; }
+}
+
+/* 滚过日历就浮出「回日历」按钮 */
+const toTop = document.getElementById("totop");
+const calBox = document.querySelector(".calwrap");
+toTop.addEventListener("click", () => {
+  calBox.scrollIntoView({behavior: "smooth", block: "start"});
+});
+let ticking = false;
+window.addEventListener("scroll", () => {
+  if (ticking) return;
+  ticking = true;
+  requestAnimationFrame(() => {
+    const past = calBox.getBoundingClientRect().bottom < -40;
+    toTop.classList.toggle("show", past);
+    ticking = false;
+  });
+}, {passive: true});
 
 /* ---------- 初始：URL 记住的那天 → 今天 → 第一天 ---------- */
 function initIndex() {
@@ -959,6 +1020,14 @@ function initIndex() {
   return hit >= 0 ? hit : 0;
 }
 select(initIndex());
+
+/* 手动改地址栏 hash 时跟着切换（replaceState 不触发本事件，不会打环） */
+window.addEventListener("hashchange", () => {
+  const m = location.hash.match(/^#d(\d+)$/);
+  if (!m) return;
+  const i = parseInt(m[1], 10);
+  if (i >= 0 && i < DAYS.length && i !== cur) select(i);
+});
 
 /* 左右方向键翻天 */
 document.addEventListener("keydown", e => {
